@@ -1,0 +1,13 @@
+{
+  "name": "wuzhen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "舞阵 WuZhen · 舞蹈队形编排与音乐对齐 · 纯 Web 双端（移动/桌面）",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test 'tests/*.test.js'",
+    "gen:wav": "node scripts/gen-wav.js",
+    "build:single": "node scripts/build-single.mjs"
+  }
+}

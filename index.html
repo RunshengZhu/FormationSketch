@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>舞阵 · 队形编排</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== 项目库视图 ===== -->
+  <section id="library-view" class="view" hidden>
+    <header class="lib-header">
+      <div class="lib-brand">舞阵 <span class="lib-sub">WuZhen · 队形编排</span></div>
+      <button id="btn-new-project" class="btn primary">＋ 新建项目</button>
+    </header>
+    <div id="library-grid" class="lib-grid"></div>
+    <div id="library-empty" class="lib-empty" hidden>
+      <div class="lib-empty-icon">💃</div>
+      <p>还没有项目，点击右上角「新建项目」开始编排队形</p>
+    </div>
+  </section>
+
+  <!-- ===== 编辑器视图 ===== -->
+  <section id="editor-view" class="view" hidden>
+    <header id="topbar">
+      <button id="btn-back" class="btn ghost" title="返回项目库">‹ 项目库</button>
+      <input id="proj-title" class="title-input" spellcheck="false" title="项目名称">
+      <span class="spacer"></span>
+      <button id="btn-theme" class="btn ghost" title="切换深色/浅色主题">🌙</button>
+      <button id="btn-roster" class="btn ghost" title="舞者与舞伴名单">名册</button>
+      <button id="btn-undo" class="btn ghost" title="撤销 (Ctrl+Z)">↺</button>
+      <button id="btn-redo" class="btn ghost" title="重做 (Ctrl+Shift+Z)">↻</button>
+      <div class="dropdown" id="export-dd">
+        <button id="btn-export" class="btn ghost">导出 ▾</button>
+        <div class="dd-menu" hidden>
+          <button id="exp-png">当前队形 PNG</button>
+          <button id="exp-print">打印 / PDF（全部队形）</button>
+          <button id="exp-json-audio">项目文件 · 含音乐 (.formation.json)</button>
+          <button id="exp-json">项目文件 · 不含音乐 (.formation.json)</button>
+          <button id="imp-json">导入项目文件…</button>
+        </div>
+      </div>
+    </header>
+
+    <div id="editor-main">
+      <!-- 左：队形列表 -->
+      <aside id="left-panel">
+        <div class="panel-head">队形 <span id="formation-count" class="dim"></span></div>
+        <div id="formation-list"></div>
+        <div class="panel-foot">
+          <button id="btn-add-formation" class="btn primary small">＋ 新队形</button>
+          <button id="btn-del-formation" class="btn small">删除</button>
+        </div>
+      </aside>
+
+      <!-- 中：舞台 -->
+      <div id="stage-col">
+        <div id="stage-tools">
+          <button id="btn-edit-mode" class="btn small toggled-on" title="开启：舞台可拖动编辑；关闭：查看模式（舞台随时间轴播放头联动）">✏ 编辑</button>
+          <button id="btn-combined" class="btn small toggled-on" title="当前队形的舞对呈示：组队=菱形单元；拆开=两人独立圆点。帧间切换时自动产生拆队/组队过渡动画">⛓ 组队</button>
+          <span class="vsep"></span>
+          <select id="gen-kind" title="队形生成器">
+            <option value="">生成队形…</option>
+            <option value="rows">多横排</option>
+            <option value="line">一字横排</option>
+            <option value="columns">纵列</option>
+            <option value="circle">圆形</option>
+            <option value="arc">弧形</option>
+            <option value="v">V 形</option>
+            <option value="diagonal">斜线</option>
+            <option value="diamond">菱形</option>
+          </select>
+          <select id="gen-unit" title="编队粒度">
+            <option value="pair">以舞对为单位</option>
+            <option value="dancer">以单人（拆对）</option>
+            <option value="men">仅男士</option>
+            <option value="women">仅女士</option>
+          </select>
+          <span class="vsep"></span>
+          <button id="btn-mirror-h" class="btn small ghost" title="水平镜像">⇋</button>
+          <button id="btn-mirror-v" class="btn small ghost" title="垂直镜像">⇅</button>
+          <label class="rot-ctl" title="整体旋转">⟳<input id="rot-slider" type="range" min="-180" max="180" value="0"><span id="rot-val">0°</span></label>
+          <button id="btn-distribute" class="btn small ghost" title="所选舞者等间距(竖排间距)">均布</button>
+          <button id="btn-swap" class="btn small ghost" title="两人换位（需选中2人）">换位</button>
+          <span class="vsep"></span>
+          <button id="btn-pair-create" class="btn small ghost" title="将所选两名舞者组成舞伴（需选中2人）">⛓ 组对</button>
+          <button id="btn-pair-split" class="btn small ghost" title="拆开所选舞者的舞伴绑定">✂ 拆对</button>
+          <span class="vsep"></span>
+          <select id="face-target" title="统一朝向">
+            <option value="">朝向…</option>
+            <option value="audience">面向观众</option>
+            <option value="center">面向圆心</option>
+            <option value="partner">面向舞伴</option>
+          </select>
+          <span class="spacer"></span>
+          <button id="btn-ghost" class="btn small ghost toggled-on" title="显示前后队形 Ghost">幽灵</button>
+          <button id="btn-paths" class="btn small ghost toggled-on" title="显示移动路径">路径</button>
+          <button id="btn-switch-anim" class="btn small ghost toggled-on" title="切换队形帧时播放约0.7秒的快速过渡动画（纯界面效果，与时间轴时长无关）">切帧预览</button>
+          <button id="btn-fit" class="btn small ghost" title="视图复位">⤢</button>
+        </div>
+        <div id="formation-index"></div>
+        <div id="stage-wrap">
+          <canvas id="stage-canvas"></canvas>
+          <div id="countin-overlay" hidden></div>
+        </div>
+      </div>
+
+      <!-- 右：属性 -->
+      <aside id="right-panel">
+        <div class="panel-tabs">
+          <button class="ptab active" data-tab="formation">队形</button>
+          <button class="ptab" data-tab="stage">舞台</button>
+        </div>
+        <div id="props-formation" class="props-page"></div>
+        <div id="props-stage" class="props-page" hidden></div>
+      </aside>
+    </div>
+
+    <!-- 底部：播放条 + 时间线 -->
+    <div id="bottom-area">
+      <div id="playbar">
+        <button id="pb-prev" class="btn ghost" title="上一队形">⏮</button>
+        <button id="pb-play" class="btn primary round" title="播放/暂停（空格）">▶</button>
+        <button id="pb-stop" class="btn ghost round" title="停止">⏹</button>
+        <button id="pb-next" class="btn ghost" title="下一队形">⏭</button>
+        <span id="pb-pos" class="mono">1.1</span>
+        <span id="pb-formation" class="dim"></span>
+        <span class="spacer"></span>
+        <label class="ctl" title="播放速度">速度
+          <select id="pb-speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+        </label>
+        <label class="ctl" title="循环当前队形段"><input type="checkbox" id="pb-loop">循环</label>
+        <label class="ctl" title="节拍器"><input type="checkbox" id="pb-metro">节拍器</label>
+      </div>
+      <div id="timeline-area">
+        <div id="block-ctl">
+          <span class="bc-label">块时长</span>
+          <span id="bc-name" class="bc-name dim">—</span>
+          <span class="vsep"></span>
+          <span class="ctl">保持
+            <button id="bc-hold-minus" class="btn small step" title="−1拍">−</button>
+            <span id="bc-hold" class="mono bc-val">16拍</span>
+            <button id="bc-hold-plus" class="btn small step" title="＋1拍">＋</button>
+          </span>
+          <span class="ctl" id="bc-travel-wrap">过渡
+            <button id="bc-travel-minus" class="btn small step" title="−1拍">−</button>
+            <span id="bc-travel" class="mono bc-val">8拍</span>
+            <button id="bc-travel-plus" class="btn small step" title="＋1拍">＋</button>
+          </span>
+          <span id="bc-sec" class="dim hide-mobile"></span>
+          <span class="spacer"></span>
+          <span class="dim hide-mobile">拖动块边缘可连续调节（自动吸附节拍）</span>
+        </div>
+        <div id="music-strip">
+          <details id="audio-disc" open>
+            <summary title="展开/收起音乐设置">🎵 音乐与节拍</summary>
+            <div id="audio-panel">
+              <button id="btn-load-audio" class="btn small">载入音乐…</button>
+              <input type="file" id="audio-file" accept="audio/*" hidden>
+              <span id="audio-name" class="dim">未载入音乐</span>
+              <span class="vsep"></span>
+              <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" style="width:56px"></label>
+              <button id="btn-tap" class="btn small">点拍</button>
+              <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" style="width:64px">s</label>
+              <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
+              <span class="vsep"></span>
+              <label class="ctl">小节 <select id="bpb-select"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
+              <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
+              <label class="ctl"><input type="checkbox" id="ripple-check" checked>连续时长</label>
+              <button id="btn-align-playhead" class="btn small" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">⇤ 对齐到播放头</button>
+              <span class="spacer"></span>
+              <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>
+              <button id="tl-zoom-in" class="btn small" title="放大时间线">＋</button>
+              <button id="tl-zoom-fit" class="btn small" title="适应宽度">⤢</button>
+            </div>
+          </details>
+          <div id="tl-scroll"><div id="tl-inner">
+            <canvas id="tl-canvas"></canvas>
+            <canvas id="tl-overlay"></canvas>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 移动端底部 Tab -->
+    <nav id="mobile-tabs">
+      <button data-mtab="formations">队形</button>
+      <button data-mtab="stage" class="active">舞台</button>
+      <button data-mtab="more">更多</button>
+    </nav>
+  </section>
+
+  <!-- 弹窗与提示 -->
+  <div id="modal-root" hidden></div>
+  <div id="toasts"></div>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

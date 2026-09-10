@@ -1,0 +1,3735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Formation Studio · 队形工坊</title>
+<style>
+/* Formation Studio · 移动优先 + 桌面断点 · 深浅双主题 */
+:root{ /* 浅色（默认） */
+  --bg:#f1f5f9; --bg2:#ffffff; --bg3:#e2e8f0; --line:#cbd5e1;
+  --fg:#1e293b; --dim:#64748b; --acc:#0284c7; --acc2:#0284c7;
+  --m:#3b82f6; --f:#ec4899; --x:#10b981; --danger:#dc2626;
+  --toast-bg:#ffffffd9; --stage-chrome:#dfe6ee;
+  --rad:8px; --tb-h:48px; --pb-h:44px;
+}
+[data-theme="dark"]{
+  --bg:#0f172a; --bg2:#1e293b; --bg3:#273449; --line:#334155;
+  --fg:#e2e8f0; --dim:#94a3b8; --acc:#38bdf8; --acc2:#0ea5e9;
+  --danger:#ef4444;
+  --toast-bg:#0b1220ee; --stage-chrome:#0b1220;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;overflow:hidden}
+#app,.view{height:100%}
+button{font:inherit;color:inherit;cursor:pointer}
+input,select{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:3px 6px}
+input:focus,select:focus{outline:1px solid var(--acc)}
+.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,Consolas,monospace}
+.dim{color:var(--dim);font-size:12px}
+.spacer{flex:1}
+.vsep{width:1px;height:20px;background:var(--line);margin:0 4px;flex:none}
+[hidden]{display:none !important}
+
+/* ---- 通用控件 ---- */
+.btn{background:var(--bg3);border:1px solid var(--line);border-radius:var(--rad);padding:6px 12px;white-space:nowrap}
+.btn:hover{border-color:var(--acc)}
+.btn.primary{background:var(--acc2);border-color:var(--acc2);color:#fff}
+.btn.ghost{background:transparent;border-color:transparent}
+.btn.ghost:hover{background:var(--bg3)}
+.btn.small{padding:3px 9px;font-size:13px}
+.btn.round{border-radius:50%;width:34px;height:34px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.btn.toggled-on{background:var(--bg3);border-color:var(--acc);color:var(--acc);font-weight:600}
+.btn.danger{border-color:var(--danger);color:var(--danger)}
+.ctl{display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:13px;white-space:nowrap}
+.rot-ctl{display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:13px}
+.rot-ctl input[type=range]{width:90px;padding:0}
+.dropdown{position:relative}
+.dd-menu{position:absolute;right:0;top:calc(100% + 4px);background:var(--bg2);border:1px solid var(--line);border-radius:var(--rad);min-width:200px;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.45);padding:4px}
+.dd-menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 10px;border-radius:6px}
+.dd-menu button:hover{background:var(--bg3)}
+
+/* ---- 项目库 ---- */
+#library-view{display:flex;flex-direction:column;overflow:auto}
+.lib-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;position:sticky;top:0;background:var(--bg);z-index:5}
+.lib-brand{font-size:20px;font-weight:700}
+.lib-sub{font-size:13px;color:var(--dim);font-weight:400;margin-left:6px}
+.lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:6px 20px 30px}
+.lib-card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:border-color .15s}
+.lib-card:hover{border-color:var(--acc)}
+.lib-card canvas{display:block;width:100%;background:#f8fafc}
+.lib-card .lc-body{padding:10px 12px}
+.lib-card .lc-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lib-card .lc-meta{display:flex;justify-content:space-between;color:var(--dim);font-size:12px;margin-top:4px}
+.lib-card .lc-del{background:none;border:0;color:var(--dim);padding:2px 4px}
+.lib-card .lc-del:hover{color:var(--danger)}
+.lib-empty{padding:80px 20px;text-align:center;color:var(--dim)}
+.lib-empty-icon{font-size:44px;margin-bottom:8px}
+
+/* ---- 编辑器布局（移动优先） ---- */
+#editor-view{display:flex;flex-direction:column}
+#topbar{height:var(--tb-h);display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line);background:var(--bg2);flex:none}
+.title-input{background:transparent;border:1px solid transparent;font-weight:600;max-width:280px;min-width:60px}
+.title-input:hover,.title-input:focus{background:var(--bg3);border-color:var(--line)}
+#editor-main{flex:1;display:flex;min-height:0;position:relative}
+#left-panel{display:none;flex-direction:column;width:180px;border-right:1px solid var(--line);background:var(--bg2);flex:none;min-height:0}
+.panel-head{padding:10px 12px 6px;font-weight:600;font-size:13px}
+.panel-foot{padding:8px;border-top:1px solid var(--line);display:flex;gap:6px}
+#formation-list{flex:1;overflow-y:auto;padding:4px 8px;display:flex;flex-direction:column;gap:6px}
+.f-chip{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:5px;cursor:pointer;position:relative}
+.f-chip.active{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.f-chip canvas{display:block;width:100%;border-radius:4px;background:#f8fafc}
+.f-chip .fc-name{display:flex;justify-content:space-between;align-items:center;margin-top:3px;font-size:12px}
+.f-chip .fc-name .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.f-chip .fc-bar{color:var(--dim);font-size:11px}
+.f-chip .fc-drag{cursor:grab;color:var(--dim)}
+
+#stage-col{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+#stage-tools{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line);background:var(--bg2);flex-wrap:wrap;flex:none}
+#stage-wrap{flex:1;position:relative;min-height:0;overflow:hidden;background:#0b1220}
+#stage-canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#countin-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:120px;font-weight:800;color:var(--acc);text-shadow:0 4px 30px rgba(0,0,0,.6);pointer-events:none}
+
+#right-panel{display:none;flex-direction:column;width:250px;border-left:1px solid var(--line);background:var(--bg2);flex:none;min-height:0}
+.panel-tabs{display:flex;border-bottom:1px solid var(--line)}
+.ptab{flex:1;background:none;border:0;padding:9px;color:var(--dim);border-bottom:2px solid transparent}
+.ptab.active{color:var(--fg);border-bottom-color:var(--acc)}
+.props-page{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.prop-group{border:1px solid var(--line);border-radius:var(--rad);padding:10px;display:flex;flex-direction:column;gap:8px}
+.prop-group>.pg-title{font-size:12px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.prop-row{display:flex;align-items:center;gap:6px;justify-content:space-between}
+.prop-row label{color:var(--dim);font-size:13px;flex:none}
+.prop-row input[type=number]{width:70px}
+.prop-row input[type=text]{width:100%}
+.prop-row input[type=color]{padding:0;width:34px;height:26px}
+textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px}
+
+/* ---- 底部播放条/时间线 ---- */
+#bottom-area{border-top:1px solid var(--line);background:var(--bg2);flex:none}
+#playbar{height:var(--pb-h);display:flex;align-items:center;gap:8px;padding:0 10px}
+#pb-pos{min-width:52px;text-align:center}
+#timeline-area{border-top:1px solid var(--line)}
+.es-chip{flex:none;width:86px;border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:4px;cursor:pointer;position:relative}
+.es-chip.active{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.es-chip canvas{display:block;width:100%;border-radius:4px;background:#f8fafc}
+.es-chip .es-name{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+#block-ctl{display:flex;align-items:center;gap:10px;padding:4px 10px;border-bottom:1px dashed var(--bg3);flex-wrap:wrap}
+#block-ctl .bc-label{font-size:12px;color:var(--acc);font-weight:600}
+#block-ctl .bc-name{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#block-ctl .bc-val{min-width:70px;text-align:center;display:inline-block;background:var(--bg3);border-radius:6px;padding:2px 6px}
+#block-ctl .btn.step{padding:0 9px;line-height:20px;font-size:14px}
+#music-strip{display:flex;flex-direction:column}
+#audio-disc{border-bottom:1px solid var(--line)}
+#audio-disc summary{cursor:pointer;list-style:none;padding:6px 10px;color:var(--dim);font-size:12px;user-select:none}
+#audio-disc summary::-webkit-details-marker{display:none}
+#audio-disc summary::before{content:'▸ ';}
+#audio-disc[open] summary::before{content:'▾ ';}
+#audio-panel{display:flex;align-items:center;gap:8px;padding:7px 10px;flex-wrap:wrap}
+#tl-scroll{overflow-x:auto;height:150px;position:relative}
+#tl-inner{position:relative;height:100%}
+#tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
+#tl-overlay{pointer-events:none}
+
+/* ---- 移动端队形索引条 ---- */
+#formation-index{display:none}
+@media (max-width:1023.5px){
+  #formation-index{display:flex;gap:4px;overflow-x:auto;padding:4px 6px;border-bottom:1px dashed var(--bg3);scrollbar-width:none}
+  #formation-index::-webkit-scrollbar{display:none}
+  .fi-chip{flex:none;width:66px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:3px;display:flex;flex-direction:column}
+  .fi-chip canvas{display:block;width:100%;border-radius:4px;background:#f8fafc}
+  .fi-label{font-size:10px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+  .fi-chip.active{border-color:var(--acc);background:var(--bg3)}
+  .fi-chip.active .fi-label{color:var(--acc)}
+}
+body[data-mtab="formations"] #formation-index{display:none}
+/* 移动端工具收纳：次级工具默认隐藏，点 ⋯ 展开 */
+@media (max-width:1023.5px){
+  #stage-tools{flex-wrap:nowrap;overflow-x:auto}
+}
+
+/* ---- 移动端 Tab ---- */
+#mobile-tabs{display:flex;border-top:1px solid var(--line);background:var(--bg2);flex:none}
+#mobile-tabs button{flex:1;background:none;border:0;padding:11px 0;color:var(--dim);font-size:13px}
+#mobile-tabs button.active{color:var(--acc);font-weight:600}
+body[data-mtab="formations"] #left-panel,
+body[data-mtab="more"] #right-panel{display:flex;position:absolute;inset:var(--tb-h) 0 0 0;z-index:40;background:var(--bg);width:auto}
+body[data-mtab="formations"] #tl-scroll{display:none}
+
+/* ---- 桌面 ---- */
+@media (min-width:1024px){
+  #mobile-tabs{display:none}
+  #left-panel,#right-panel{display:flex !important;position:static;width:180px}
+  #right-panel{width:250px}
+  #left-panel{width:180px}
+  #stage-tools{flex-wrap:nowrap;overflow-x:auto}
+}
+
+/* ---- 名册弹窗 ---- */
+.modal-back{position:fixed;inset:0;background:rgba(2,6,23,.66);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
+.modal{background:var(--bg2);border:1px solid var(--line);border-radius:14px;max-width:640px;width:100%;max-height:86vh;overflow:auto;padding:18px}
+.modal h3{margin:0 0 12px}
+.modal .m-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.roster-table{width:100%;border-collapse:collapse;font-size:13px}
+.roster-table th{color:var(--dim);text-align:left;font-weight:500;padding:4px 6px;border-bottom:1px solid var(--line)}
+.roster-table td{padding:3px 6px;border-bottom:1px solid var(--bg3)}
+.roster-table input[type=text]{width:100%}
+.roster-table select{padding:2px 4px}
+.pair-row{display:flex;align-items:center;gap:6px;padding:4px 0}
+.pair-row select{max-width:130px}
+
+/* ---- Toast ---- */
+#toasts{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:200;align-items:center;pointer-events:none}
+.toast{background:var(--toast-bg);border:1px solid var(--line);border-radius:10px;padding:9px 16px;box-shadow:0 6px 24px rgba(0,0,0,.5);animation:toast-in .18s ease-out}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ---- 移动端紧凑化 ---- */
+@media (max-width:1023.5px){
+  .hide-mobile{display:none !important}
+}
+@media (max-width:1023.5px){
+  #topbar{gap:4px;padding:0 6px}
+  .title-input{flex:1 1 40px;min-width:0;width:0;text-align:center;font-size:13px}
+  .btn.small{padding:6px 10px} /* 触摸目标 */
+  #playbar{gap:5px;padding:0 6px}
+  #pb-formation{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #stage-tools{gap:4px;padding:4px 6px;flex-wrap:nowrap;overflow-x:auto}
+  .rot-ctl input[type=range]{width:64px}
+  .lc-del{padding:8px}
+  #tl-scroll{height:120px}
+}
+
+/* ---- 打印页 ---- */
+@media print{
+  body>*{display:none !important}
+}
+.print-page{page-break-after:always;text-align:center}
+.print-page img{max-width:100%}
+.print-page h2{margin:6px 0}
+.print-page .p-meta{color:#334155;font-size:13px;margin-bottom:8px;white-space:pre-line}
+
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== 项目库视图 ===== -->
+  <section id="library-view" class="view" hidden>
+    <header class="lib-header">
+      <div class="lib-brand">Formation&nbsp;Studio <span class="lib-sub">队形工坊</span></div>
+      <button id="btn-new-project" class="btn primary">＋ 新建项目</button>
+    </header>
+    <div id="library-grid" class="lib-grid"></div>
+    <div id="library-empty" class="lib-empty" hidden>
+      <div class="lib-empty-icon">💃</div>
+      <p>还没有项目，点击右上角「新建项目」开始编排队形</p>
+    </div>
+  </section>
+
+  <!-- ===== 编辑器视图 ===== -->
+  <section id="editor-view" class="view" hidden>
+    <header id="topbar">
+      <button id="btn-back" class="btn ghost" title="返回项目库">‹ 项目库</button>
+      <input id="proj-title" class="title-input" spellcheck="false" title="项目名称">
+      <span class="spacer"></span>
+      <button id="btn-theme" class="btn ghost" title="切换深色/浅色主题">🌙</button>
+      <button id="btn-roster" class="btn ghost" title="舞者与舞伴名单">名册</button>
+      <button id="btn-undo" class="btn ghost" title="撤销 (Ctrl+Z)">↺</button>
+      <button id="btn-redo" class="btn ghost" title="重做 (Ctrl+Shift+Z)">↻</button>
+      <div class="dropdown" id="export-dd">
+        <button id="btn-export" class="btn ghost">导出 ▾</button>
+        <div class="dd-menu" hidden>
+          <button id="exp-png">当前队形 PNG</button>
+          <button id="exp-print">打印 / PDF（全部队形）</button>
+          <button id="exp-json-audio">项目文件 · 含音乐 (.formation.json)</button>
+          <button id="exp-json">项目文件 · 不含音乐 (.formation.json)</button>
+          <button id="imp-json">导入项目文件…</button>
+        </div>
+      </div>
+    </header>
+
+    <div id="editor-main">
+      <!-- 左：队形列表 -->
+      <aside id="left-panel">
+        <div class="panel-head">队形 <span id="formation-count" class="dim"></span></div>
+        <div id="formation-list"></div>
+        <div class="panel-foot">
+          <button id="btn-add-formation" class="btn primary small">＋ 新队形</button>
+          <button id="btn-del-formation" class="btn small">删除</button>
+        </div>
+      </aside>
+
+      <!-- 中：舞台 -->
+      <div id="stage-col">
+        <div id="stage-tools">
+          <button id="btn-edit-mode" class="btn small toggled-on" title="开启：舞台可拖动编辑；关闭：查看模式（舞台随时间轴播放头联动）">✏ 编辑</button>
+          <button id="btn-combined" class="btn small toggled-on" title="当前队形的舞对呈示：组队=菱形单元；拆开=两人独立圆点。帧间切换时自动产生拆队/组队过渡动画">⛓ 组队</button>
+          <span class="vsep"></span>
+          <select id="gen-kind" title="队形生成器">
+            <option value="">生成队形…</option>
+            <option value="rows">多横排</option>
+            <option value="line">一字横排</option>
+            <option value="columns">纵列</option>
+            <option value="circle">圆形</option>
+            <option value="arc">弧形</option>
+            <option value="v">V 形</option>
+            <option value="diagonal">斜线</option>
+            <option value="diamond">菱形</option>
+          </select>
+          <select id="gen-unit" title="编队粒度">
+            <option value="pair">以舞对为单位</option>
+            <option value="dancer">以单人（拆对）</option>
+            <option value="men">仅男士</option>
+            <option value="women">仅女士</option>
+          </select>
+          <span class="vsep"></span>
+          <button id="btn-mirror-h" class="btn small ghost" title="水平镜像">⇋</button>
+          <button id="btn-mirror-v" class="btn small ghost" title="垂直镜像">⇅</button>
+          <label class="rot-ctl" title="整体旋转">⟳<input id="rot-slider" type="range" min="-180" max="180" value="0"><span id="rot-val">0°</span></label>
+          <button id="btn-distribute" class="btn small ghost" title="所选舞者等间距(竖排间距)">均布</button>
+          <button id="btn-swap" class="btn small ghost" title="两人换位（需选中2人）">换位</button>
+          <span class="vsep"></span>
+          <button id="btn-pair-create" class="btn small ghost" title="将所选两名舞者组成舞伴（需选中2人）">⛓ 组对</button>
+          <button id="btn-pair-split" class="btn small ghost" title="拆开所选舞者的舞伴绑定">✂ 拆对</button>
+          <span class="vsep"></span>
+          <select id="face-target" title="统一朝向">
+            <option value="">朝向…</option>
+            <option value="audience">面向观众</option>
+            <option value="center">面向圆心</option>
+            <option value="partner">面向舞伴</option>
+          </select>
+          <span class="spacer"></span>
+          <button id="btn-ghost" class="btn small ghost toggled-on" title="显示前后队形 Ghost">幽灵</button>
+          <button id="btn-paths" class="btn small ghost toggled-on" title="显示移动路径">路径</button>
+          <button id="btn-switch-anim" class="btn small ghost toggled-on" title="切换队形帧时播放约0.7秒的快速过渡动画（纯界面效果，与时间轴时长无关）">切帧预览</button>
+          <button id="btn-fit" class="btn small ghost" title="视图复位">⤢</button>
+        </div>
+        <div id="formation-index"></div>
+        <div id="stage-wrap">
+          <canvas id="stage-canvas"></canvas>
+          <div id="countin-overlay" hidden></div>
+        </div>
+      </div>
+
+      <!-- 右：属性 -->
+      <aside id="right-panel">
+        <div class="panel-tabs">
+          <button class="ptab active" data-tab="formation">队形</button>
+          <button class="ptab" data-tab="stage">舞台</button>
+        </div>
+        <div id="props-formation" class="props-page"></div>
+        <div id="props-stage" class="props-page" hidden></div>
+      </aside>
+    </div>
+
+    <!-- 底部：播放条 + 时间线 -->
+    <div id="bottom-area">
+      <div id="playbar">
+        <button id="pb-prev" class="btn ghost" title="上一队形">⏮</button>
+        <button id="pb-play" class="btn primary round" title="播放/暂停（空格）">▶</button>
+        <button id="pb-stop" class="btn ghost round" title="停止">⏹</button>
+        <button id="pb-next" class="btn ghost" title="下一队形">⏭</button>
+        <span id="pb-pos" class="mono">1.1</span>
+        <span id="pb-formation" class="dim"></span>
+        <span class="spacer"></span>
+        <label class="ctl" title="播放速度">速度
+          <select id="pb-speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+        </label>
+        <label class="ctl" title="循环当前队形段"><input type="checkbox" id="pb-loop">循环</label>
+        <label class="ctl" title="节拍器"><input type="checkbox" id="pb-metro">节拍器</label>
+      </div>
+      <div id="timeline-area">
+        <div id="block-ctl">
+          <span class="bc-label">块时长</span>
+          <span id="bc-name" class="bc-name dim">—</span>
+          <span class="vsep"></span>
+          <span class="ctl">保持
+            <button id="bc-hold-minus" class="btn small step" title="−1拍">−</button>
+            <span id="bc-hold" class="mono bc-val">16拍</span>
+            <button id="bc-hold-plus" class="btn small step" title="＋1拍">＋</button>
+          </span>
+          <span class="ctl" id="bc-travel-wrap">过渡
+            <button id="bc-travel-minus" class="btn small step" title="−1拍">−</button>
+            <span id="bc-travel" class="mono bc-val">8拍</span>
+            <button id="bc-travel-plus" class="btn small step" title="＋1拍">＋</button>
+          </span>
+          <span id="bc-sec" class="dim hide-mobile"></span>
+          <span class="spacer"></span>
+          <span class="dim hide-mobile">拖动块边缘可连续调节（自动吸附节拍）</span>
+        </div>
+        <div id="music-strip">
+          <details id="audio-disc" open>
+            <summary title="展开/收起音乐设置">🎵 音乐与节拍</summary>
+            <div id="audio-panel">
+              <button id="btn-load-audio" class="btn small">载入音乐…</button>
+              <input type="file" id="audio-file" accept="audio/*" hidden>
+              <span id="audio-name" class="dim">未载入音乐</span>
+              <span class="vsep"></span>
+              <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" style="width:56px"></label>
+              <button id="btn-tap" class="btn small">点拍</button>
+              <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" style="width:64px">s</label>
+              <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
+              <span class="vsep"></span>
+              <label class="ctl">小节 <select id="bpb-select"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
+              <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
+              <label class="ctl"><input type="checkbox" id="ripple-check" checked>连续时长</label>
+              <button id="btn-align-playhead" class="btn small" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">⇤ 对齐到播放头</button>
+              <span class="spacer"></span>
+              <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>
+              <button id="tl-zoom-in" class="btn small" title="放大时间线">＋</button>
+              <button id="tl-zoom-fit" class="btn small" title="适应宽度">⤢</button>
+            </div>
+          </details>
+          <div id="tl-scroll"><div id="tl-inner">
+            <canvas id="tl-canvas"></canvas>
+            <canvas id="tl-overlay"></canvas>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 移动端底部 Tab -->
+    <nav id="mobile-tabs">
+      <button data-mtab="formations">队形</button>
+      <button data-mtab="stage" class="active">舞台</button>
+      <button data-mtab="more">更多</button>
+    </nav>
+  </section>
+
+  <!-- 弹窗与提示 -->
+  <div id="modal-root" hidden></div>
+  <div id="toasts"></div>
+</div>
+<script>
+/* Formation Studio 单文件版 —— 由 scripts/build-single.mjs 生成，勿手改 */
+window.FS = window.FS || {};
+
+/* ===== module: model ===== */
+FS.model = FS.model || {};
+FS.model = FS.model || {};
+(function(){
+'use strict';
+
+// 数据模型与时间轴计算 —— 纯逻辑，无 DOM 依赖（可在 Node 中单测）
+// 约定：坐标单位米，原点舞台左上，+x 右 +y 下；角度 0=上(−y)、顺时针、0..359
+
+const DEFAULT_BPM = 120;
+const ROLE_COLOR = { M: '#3b82f6', F: '#ec4899', X: '#10b981' };
+const ROLE_NAME = { M: '男', F: '女', X: '其他' };
+
+let _uidCounter = 0;
+function uid(prefix = 'id') {
+  _uidCounter = (_uidCounter + 1) % 1e6;
+  return `${prefix}_${Date.now().toString(36)}${_uidCounter.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function easeInOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+
+// ---------- 创建 ----------
+function addDancer(project, name, role = 'X', short = '') {
+  const d = { id: uid('d'), name, short: short || nextShort(project, role), role, color: ROLE_COLOR[role] || ROLE_COLOR.X };
+  project.dancers.push(d);
+  for (const f of project.formations) ensureDancerInFormation(project, f, d.id);
+  return d;
+}
+function nextShort(project, role) {
+  const used = new Set(project.dancers.map(d => d.short));
+  let n = 1;
+  while (used.has(String(n))) n++;
+  return String(n);
+}
+function addPair(project, leaderName, followerName) {
+  const n = project.pairs.length + 1 + project.dancers.length; // 保证 short 唯一的简单策略
+  // 舞对编号 = 现有舞对数 + 1，但需避免与已有 short 冲突
+  let num = project.pairs.length + 1;
+  const used = new Set(project.dancers.map(d => d.short));
+  while (used.has(String(num))) num++;
+  const leader = addDancer(project, leaderName, 'M', String(num));
+  const follower = addDancer(project, followerName, 'F', String(num));
+  const pair = { id: uid('p'), leader: leader.id, follower: follower.id };
+  project.pairs.push(pair);
+  return pair;
+}
+function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, extraF = 0 } = {}) {
+  const project = {
+    version: 1,
+    meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    stage: { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null },
+    audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
+    dancers: [], pairs: [], formations: [],
+    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1 },
+  };
+  for (let i = 1; i <= pairs; i++) addPair(project, `M${i}`, `F${i}`);
+  for (let i = 1; i <= extraM; i++) addDancer(project, `M${pairs + i}`, 'M');
+  for (let i = 1; i <= extraF; i++) addDancer(project, `F${pairs + i}`, 'F');
+  // 初始队形：双横排（以舞对为单位）
+  const f = { id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {} };
+  project.formations.push(f);
+  genDefaultRows(project, f);
+  syncTimeline(project);
+  return project;
+}
+function genDefaultRows(project, f) {
+  const ids = orderedDancers(project, 'pair');
+  const { widthM: W, depthM: H } = project.stage;
+  const n = ids.length, rows = n <= 4 ? 1 : 2, m = 1.5;
+  const per = Math.ceil(n / rows);
+  const spacing = per > 1 ? (W - 2 * m) / (per - 1) : 0;
+  const face = faceAudience(project.stage);
+  ids.forEach((id, i) => {
+    const r = Math.floor(i / per), c = i % per;
+    const rowCount = Math.min(per, n - r * per);
+    const off = (per - rowCount) * spacing / 2;
+    f.positions[id] = { x: m + off + c * spacing, y: H / 2 + (r - (rows - 1) / 2) * 1.6, facing: face };
+  });
+}
+
+// ---------- 舞者/舞对 ----------
+function dancerById(project, id) { return project.dancers.find(d => d.id === id) || null; }
+function pairOf(project, dancerId) { return project.pairs.find(p => p.leader === dancerId || p.follower === dancerId) || null; }
+function partnerOf(project, dancerId) {
+  const p = pairOf(project, dancerId);
+  if (!p) return null;
+  return p.leader === dancerId ? p.follower : p.leader;
+}
+function orderedDancers(project, unit = 'pair') {
+  if (unit !== 'pair') return project.dancers.map(d => d.id);
+  const inPair = new Set();
+  const ids = [];
+  for (const p of project.pairs) {
+    if (project.dancers.some(d => d.id === p.leader) && project.dancers.some(d => d.id === p.follower)) {
+      ids.push(p.leader, p.follower); inPair.add(p.leader); inPair.add(p.follower);
+    }
+  }
+  for (const d of project.dancers) if (!inPair.has(d.id)) ids.push(d.id);
+  return ids;
+}
+function removeDancer(project, dancerId) {
+  project.dancers = project.dancers.filter(d => d.id !== dancerId);
+  project.pairs = project.pairs.filter(p => p.leader !== dancerId && p.follower !== dancerId);
+  for (const f of project.formations) delete f.positions[dancerId];
+}
+function removePair(project, pairId) { project.pairs = project.pairs.filter(p => p.id !== pairId); }
+// 从更早的队形顺延缺失舞者的位置（查不到则放舞台中心附近）
+function carryPositionsForward(project, index) {
+  const f = project.formations[index];
+  if (!f) return;
+  const { widthM, depthM } = project.stage;
+  for (const d of project.dancers) {
+    if (f.positions[d.id]) continue;
+    let found = null;
+    for (let i = index - 1; i >= 0 && !found; i--) {
+      const prev = project.formations[i].positions[d.id];
+      if (prev) found = { x: prev.x, y: prev.y, facing: prev.facing };
+    }
+    f.positions[d.id] = found || { x: widthM / 2, y: depthM / 2, facing: faceAudience(project.stage) };
+  }
+}
+// 切换队形帧的组队呈示状态：
+// combined=true（组队）：每对收拢到同一位置（渲染为菱形单元）
+// combined=false（拆队）：每对左右偏移分开（渲染为两个独立圆点），并补齐缺席舞者位置
+function setCombined(project, index, combined) {
+  const f = project.formations[index];
+  if (!f) return;
+  f.combined = !!combined;
+  carryPositionsForward(project, index); // 两个方向都先补齐缺席舞者（从上一队形顺延）
+  for (const pair of project.pairs) {
+    const a = f.positions[pair.leader], b = f.positions[pair.follower];
+    if (!a || !b) continue;
+    const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
+    const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
+    if (combined) {
+      a.x = b.x = mx; a.y = b.y = my; // 收拢到同一点（菱形单元）
+    } else {
+      a.x = Math.round((mx - 0.3) * 100) / 100; b.x = Math.round((mx + 0.3) * 100) / 100; // 标准间距拆开（幂等）
+      a.y = b.y = my;
+    }
+  }
+}
+// 帧的组队呈示状态（缺省视为组队）
+function isCombined(formation) { return formation ? formation.combined !== false : true; }
+// 将两名已有舞者组成舞伴（两人都必须未配对）；对内编号取不冲突的最小号
+function addPairByIds(project, leaderId, followerId) {
+  if (!dancerById(project, leaderId) || !dancerById(project, followerId)) return null;
+  if (pairOf(project, leaderId) || pairOf(project, followerId)) return null;
+  const used = new Set(project.dancers.map(d => d.short));
+  let num = 1;
+  while (used.has(String(num))) num++;
+  const pair = { id: uid('p'), leader: leaderId, follower: followerId };
+  dancerById(project, leaderId).short = String(num);
+  dancerById(project, followerId).short = String(num);
+  project.pairs.push(pair);
+  return pair;
+}
+function renameShortsByPair(project) {
+  // 按舞对顺序重编 short：对内同号（第 n 对 = n），未配对舞者往后编
+  let n = 1;
+  for (const p of project.pairs) {
+    const l = dancerById(project, p.leader), fo = dancerById(project, p.follower);
+    if (l) l.short = String(n);
+    if (fo) fo.short = String(n);
+    n++;
+  }
+  for (const d of project.dancers) {
+    if (!pairOf(project, d.id)) { d.short = String(n); n++; }
+  }
+}
+
+// ---------- 队形 ----------
+function faceAudience(stage) { return { bottom: 180, top: 0, left: 270, right: 90 }[stage.audience] ?? 180; }
+function ensureDancerInFormation(project, formation, dancerId) {
+  if (formation.positions[dancerId]) return;
+  const n = Object.keys(formation.positions).length;
+  formation.positions[dancerId] = {
+    x: project.stage.widthM / 2 + (n % 5 - 2) * 0.6,
+    y: project.stage.depthM / 2 + (Math.floor(n / 5) - 1) * 0.6,
+    facing: faceAudience(project.stage),
+  };
+}
+function ensureFormationComplete(project, formation) {
+  for (const d of project.dancers) ensureDancerInFormation(project, formation, d.id);
+}
+function createFormationFrom(project, srcIndex, { name } = {}) {
+  const src = project.formations[srcIndex];
+  const f = {
+    id: uid('f'), name: name || `队形 ${project.formations.length + 1}`,
+    color: ['#0ea5e9', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'][project.formations.length % 6],
+    note: src?.note || '', 
+    positions: src ? clone(src.positions) : {},
+  };
+  if (srcIndex >= 0 && srcIndex < project.formations.length - 1) project.formations.splice(srcIndex + 1, 0, f);
+  else project.formations.push(f);
+  ensureFormationComplete(project, f);
+  syncTimeline(project);
+  return f;
+}
+function deleteFormation(project, index) {
+  if (project.formations.length <= 1) return null;
+  const [rm] = project.formations.splice(index, 1);
+  syncTimeline(project);
+  return rm;
+}
+function moveFormation(project, from, to) {
+  if (from === to || from < 0 || from >= project.formations.length) return;
+  const [f] = project.formations.splice(from, 1);
+  project.formations.splice(clamp(to, 0, project.formations.length), 0, f);
+  syncTimeline(project);
+}
+function formationIndexById(project, fid) { return project.formations.findIndex(f => f.id === fid); }
+
+// ---------- 时间轴 ----------
+function syncTimeline(project) {
+  const old = new Map(project.timeline.blocks.map(b => [b.formationId, b]));
+  project.timeline.blocks = project.formations.map(f => {
+    const o = old.get(f.id);
+    return { formationId: f.id, holdBeats: o?.holdBeats ?? 16, travelBeats: o?.travelBeats ?? 8 };
+  });
+}
+function spb(project) { return 60 / (project.audio.bpm || DEFAULT_BPM); }
+function beatToSec(project, beat) { return (project.audio.firstBeatSec || 0) + beat * spb(project); }
+function secToBeat(project, sec) { return (sec - (project.audio.firstBeatSec || 0)) / spb(project); }
+
+function computeSegments(project) {
+  const blocks = project.timeline.blocks, formations = project.formations;
+  const segs = [];
+  let b = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const blk = blocks[i];
+    const hasTravel = i < blocks.length - 1;
+    const holdStart = b, holdEnd = b + Math.max(0, blk.holdBeats);
+    const travelEnd = hasTravel ? holdEnd + Math.max(0, blk.travelBeats) : holdEnd;
+    segs.push({ i, formationId: blk.formationId, holdStart, holdEnd, travelEnd, hasTravel });
+    b = travelEnd;
+  }
+  return { segments: segs, totalBeats: b };
+}
+function totalDurationSec(project) {
+  const { totalBeats } = computeSegments(project);
+  return beatToSec(project, totalBeats);
+}
+function segmentAt(segments, beat) {
+  if (!segments.length) return null;
+  if (beat <= 0) return segments[0];
+  for (const s of segments) if (beat < s.travelEnd) return s;
+  return segments[segments.length - 1];
+}
+
+// ---------- 位置插值 ----------
+function lerpAngle(a, b, t) {
+  let d = ((b - a) % 360 + 540) % 360 - 180;
+  return (a + d * t + 360) % 360;
+}
+function lerpFormations(A, B, t) {
+  const out = {};
+  const ids = new Set([...Object.keys(A), ...Object.keys(B)]);
+  for (const id of ids) {
+    const a = A[id] || B[id], b = B[id] || A[id];
+    out[id] = {
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t,
+      facing: lerpAngle(a.facing || 0, b.facing || 0, t),
+    };
+  }
+  return out;
+}
+function posAt(project, beat) {
+  const formations = project.formations;
+  if (!formations.length) return { positions: {}, seg: null, phase: 'hold', t: 0 };
+  const { segments } = computeSegments(project);
+  if (beat <= 0) return { positions: formations[0].positions, seg: segments[0], phase: 'hold', t: 0 };
+  const last = segments[segments.length - 1];
+  if (beat >= last.travelEnd) return { positions: formations[formations.length - 1].positions, seg: last, phase: 'hold', t: 1 };
+  const seg = segmentAt(segments, beat);
+  if (beat < seg.holdEnd) return { positions: formations[seg.i].positions, seg, phase: 'hold', t: 0 };
+  const t = easeInOut((beat - seg.holdEnd) / Math.max(1e-6, seg.travelEnd - seg.holdEnd));
+  return { positions: lerpFormations(formations[seg.i].positions, formations[seg.i + 1].positions, t), seg, phase: 'travel', t };
+}
+function currentFormationIndexAt(project, beat) {
+  const { segments } = computeSegments(project);
+  const seg = segmentAt(segments, beat);
+  return seg ? seg.i : 0;
+}
+
+// ---------- 小节/8拍显示 ----------
+function beatLabel(project, beat) {
+  const bpb = project.audio.beatsPerBar || 4;
+  const b = Math.max(0, beat);
+  const bar = Math.floor(b / bpb) + 1, bt = Math.floor(b % bpb) + 1;
+  return `${bar}.${bt}`;
+}
+function countLabel(beat) { return `${Math.floor(Math.max(0, beat) / 8) + 1}`; } // 第 n 个 8 拍
+
+// ---------- 时间轴对齐 ----------
+// 把第 index 个队形块的起点对齐到目标拍（调整前一个过渡的时长，必要时压缩上一块的保持时长）
+function alignBlockStart(project, index, targetBeat, segments = computeSegments(project).segments) {
+  if (index <= 0 || !segments[index] || !segments[index - 1]) return false;
+  const prevSeg = segments[index - 1];
+  const prev = project.timeline.blocks[index - 1];
+  let need = targetBeat - prevSeg.holdEnd;
+  if (need < 0.5) {
+    const reduce = Math.min(0.5 - need, Math.max(0, prev.holdBeats - 0.5));
+    prev.holdBeats = Math.max(0.5, prev.holdBeats - reduce);
+    need += reduce;
+  }
+  prev.travelBeats = Math.max(0.5, need);
+  return true;
+}
+
+// ---------- 校验 / 迁移 ----------
+function num(v, def, lo, hi) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(hi, Math.max(lo, n));
+}
+function validateProject(json) {
+  const errors = [];
+  if (!json || typeof json !== 'object') return { ok: false, errors: ['不是合法的项目对象'] };
+  if (json.version !== 1 && json.version !== 2) errors.push(`未知版本 ${json.version}`);
+  delete (json.audio || {}).dataBase64; // 内嵌音乐在导入入口处还原为 Blob，不进项目记录
+  delete (json.audio || {}).dataFormat;
+  const p = json;
+  p.meta = (p.meta && typeof p.meta === 'object') ? p.meta : { title: '导入项目' };
+  p.meta.title = String(p.meta.title ?? '未命名').slice(0, 120);
+  p.stage = { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null, ...p.stage };
+  p.stage.widthM = num(p.stage.widthM, 12, 4, 60);
+  p.stage.depthM = num(p.stage.depthM, 16, 4, 60);
+  p.stage.gridM = num(p.stage.gridM, 0.5, 0.1, 2);
+  p.stage.backstageM = num(p.stage.backstageM, 2, 0, 10);
+  p.stage.snap = !!p.stage.snap;
+  if (!['bottom', 'top', 'left', 'right'].includes(p.stage.audience)) p.stage.audience = 'bottom';
+  p.audio = { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0, ...p.audio };
+  p.audio.bpm = num(p.audio.bpm, DEFAULT_BPM, 30, 300);
+  p.audio.beatsPerBar = num(p.audio.beatsPerBar, 4, 2, 12);
+  p.audio.firstBeatSec = num(p.audio.firstBeatSec, 0, 0, 3600);
+  p.audio.durationSec = num(p.audio.durationSec, 0, 0, 36000);
+  p.audio.name = String(p.audio.name ?? '').slice(0, 200);
+  p.dancers = Array.isArray(p.dancers) ? p.dancers : [];
+  p.pairs = Array.isArray(p.pairs) ? p.pairs : [];
+  p.formations = Array.isArray(p.formations) ? p.formations : [];
+  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, ...p.timeline };
+  p.timeline.countInBeats = num(p.timeline.countInBeats, 8, 0, 32);
+  p.timeline.blocks = Array.isArray(p.timeline.blocks) ? p.timeline.blocks : [];
+  for (const f of p.formations) f.positions = f.positions || {};
+  const ids = new Set();
+  for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }
+  const dids = new Set(p.dancers.map(d => d.id));
+  p.pairs = p.pairs.filter(pp => dids.has(pp.leader) && dids.has(pp.follower));
+  p.formations = p.formations.filter(f => f && f.id);
+  if (!p.formations.length) p.formations.push({ id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {} });
+  for (const f of p.formations) {
+    const np = {};
+    for (const [k, v] of Object.entries(f.positions)) if (dids.has(k) && v && typeof v.x === 'number' && typeof v.y === 'number' && Number.isFinite(v.x) && Number.isFinite(v.y)) np[k] = { x: v.x, y: v.y, facing: ((v.facing || 0) % 360 + 360) % 360 };
+    f.positions = np;
+  }
+  syncTimeline(p);
+  return { ok: errors.length === 0, errors, project: p };
+}
+
+Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, addPair, createProject, dancerById, pairOf, partnerOf, orderedDancers, removeDancer, removePair, carryPositionsForward, setCombined, isCombined, addPairByIds, renameShortsByPair, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, validateProject });
+})();
+
+/* ===== module: shapes ===== */
+FS.shapes = FS.shapes || {};
+FS.shapes = FS.shapes || {};
+(function(){
+'use strict';
+const { faceAudience, uid } = FS.model;
+// 队形生成器与整体位置变换 —— 纯逻辑，无 DOM 依赖
+/* import from model */
+const SHAPE_KINDS = ['rows', 'line', 'columns', 'circle', 'arc', 'v', 'diagonal', 'diamond'];
+
+const margin = stage => Math.min(1.5, stage.widthM / 8);
+
+// 生成 count 个槽位（米坐标）
+function genSlots(kind, count, stage, opts = {}) {
+  const m = margin(stage), W = stage.widthM, H = stage.depthM;
+  const cx = W / 2, cy = H / 2;
+  const face = faceAudience(stage);
+  const pts = [];
+  const push = (x, y, f = face) => pts.push({ x, y, facing: ((f % 360) + 360) % 360 });
+
+  switch (kind) {
+    case 'line': {
+      const y = cy, sp = count > 1 ? (W - 2 * m) / (count - 1) : 0;
+      for (let i = 0; i < count; i++) push(cx - (count - 1) * sp / 2 + i * sp, y);
+      break;
+    }
+    case 'rows': {
+      const rows = clampInt(opts.rows || (count <= 4 ? 1 : 2), 1, 4);
+      const per = Math.ceil(count / rows), gap = 1.6;
+      const sp = per > 1 ? (W - 2 * m) / (per - 1) : 0;
+      for (let i = 0; i < count; i++) {
+        const r = Math.floor(i / per), c = i % per;
+        const rowCount = Math.min(per, count - r * per);
+        const off = (per - rowCount) * sp / 2;
+        push(m + off + c * sp, cy + (r - (rows - 1) / 2) * gap);
+      }
+      break;
+    }
+    case 'columns': {
+      const cols = clampInt(opts.cols || Math.max(2, Math.round(count / 3)), 1, count);
+      const per = Math.ceil(count / cols), gapX = 1.4, gapY = per > 1 ? (H - 2 * m) / (per - 1) : 0;
+      for (let i = 0; i < count; i++) {
+        const c = Math.floor(i / per), r = i % per;
+        push(cx + (c - (cols - 1) / 2) * gapX, m + r * gapY);
+      }
+      break;
+    }
+    case 'circle': {
+      const r = Math.min(W, H) / 2 - m;
+      for (let i = 0; i < count; i++) {
+        const th = 360 * i / count; // 0=顶部，顺时针
+        const rad = th * Math.PI / 180;
+        push(cx + r * Math.sin(rad), cy - r * Math.cos(rad), th + 180); // 面向圆心
+      }
+      break;
+    }
+    case 'arc': {
+      // 弧形：圆心在观众侧，队伍背对观众心、面向观众，呈环抱状
+      const r = Math.min(W / 2, H * 0.7) - m;
+      const baseY = cy + r * 0.45;
+      const spread = 130; // 总张角
+      for (let i = 0; i < count; i++) {
+        const a = (-spread / 2 + spread * (count > 1 ? i / (count - 1) : 0.5)) * Math.PI / 180;
+        push(cx + r * Math.sin(a), baseY - r * Math.cos(a));
+      }
+      break;
+    }
+    case 'v': {
+      // V 形：顶点在上（远台），开口朝观众
+      const s = 1.1, ang = 27 * Math.PI / 180;
+      const half = Math.floor(count / 2);
+      let k = 0;
+      for (let side = -1; side <= 1; side += 2) {
+        for (let j = 0; j < (side < 0 ? half : count - half); j++) {
+          const d = j + 1;
+          push(cx + side * d * s * Math.sin(ang), cy - H * 0.18 + d * s * Math.cos(ang));
+          k++;
+        }
+      }
+      break;
+    }
+    case 'diagonal': {
+      for (let i = 0; i < count; i++) {
+        const t = count > 1 ? i / (count - 1) : 0.5;
+        push(m + t * (W - 2 * m), m + t * (H - 2 * m));
+      }
+      break;
+    }
+    case 'diamond': {
+      // 菱形周界均布：顶点 上/右/下/左
+      const vs = [{ x: cx, y: m }, { x: W - m, y: cy }, { x: cx, y: H - m }, { x: m, y: cy }];
+      const lens = [0, 1, 2, 3].map(i => dist(vs[i], vs[(i + 1) % 4]));
+      const per = lens.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < count; i++) {
+        let d = per * i / count, seg = 0;
+        while (seg < 3 && d > lens[seg]) { d -= lens[seg]; seg++; }
+        const a = vs[seg], b = vs[(seg + 1) % 4], t = d / lens[seg];
+        push(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+      }
+      break;
+    }
+    default:
+      for (let i = 0; i < count; i++) push(cx, cy);
+  }
+  if (opts.face === 'center') for (const p of pts) p.facing = ((angleTo(p, { x: cx, y: cy }) % 360) + 360) % 360;
+  return pts;
+}
+
+function clampInt(v, a, b) { return Math.max(a, Math.min(b, Math.round(v))); }
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function angleTo(a, b) { return (Math.atan2(b.x - a.x, -(b.y - a.y)) * 180 / Math.PI + 360) % 360; } // 0=上 顺时针 0..360
+
+// 把槽位映射进队形：优先保持现有就近站位（slot→最近舞者，贪心）
+function applySlots(formation, orderedIds, slots, { current = {} } = {}) {
+  const remaining = new Set(orderedIds);
+  const positions = {};
+  for (const s of slots) {
+    let best = null, bd = Infinity;
+    for (const id of remaining) {
+      const p = current[id];
+      const d = p ? dist(p, s) : 1e9; // 无位置的舞者最后安排
+      if (d < bd) { bd = d; best = id; }
+    }
+    if (!best) break;
+    remaining.delete(best);
+    positions[best] = { x: round2(s.x), y: round2(s.y), facing: Math.round(s.facing ?? 0) };
+  }
+  formation.positions = positions;
+}
+function round2(v) { return Math.round(v * 100) / 100; }
+
+// ---------- 整体变换 ----------
+function mirrorH(formation, stage) { // 左右镜像
+  for (const p of Object.values(formation.positions)) { p.x = round2(stage.widthM - p.x); p.facing = (360 - p.facing) % 360; }
+}
+function mirrorV(formation, stage) { // 前后镜像
+  for (const p of Object.values(formation.positions)) { p.y = round2(stage.depthM - p.y); p.facing = (180 - p.facing + 360) % 360; }
+}
+function rotateSelected(positions, ids, deg, center) {
+  const rad = deg * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+  for (const id of ids) {
+    const p = positions[id]; if (!p) continue;
+    const dx = p.x - center.x, dy = p.y - center.y;
+    p.x = round2(center.x + dx * cos - dy * sin);
+    p.y = round2(center.y + dx * sin + dy * cos);
+    p.facing = ((p.facing + deg) % 360 + 360) % 360;
+  }
+}
+function distributeAxis(positions, ids, axis) {
+  const list = ids.map(id => ({ id, p: positions[id] })).filter(e => e.p);
+  list.sort((a, b) => a.p[axis] - b.p[axis]);
+  if (list.length < 3) return;
+  const lo = list[0].p[axis], hi = list[list.length - 1].p[axis];
+  list.forEach((e, i) => { e.p[axis] = round2(lo + (hi - lo) * i / (list.length - 1)); });
+}
+function swapTwo(formation, idA, idB) {
+  const a = formation.positions[idA], b = formation.positions[idB];
+  if (!a || !b) return;
+  formation.positions[idA] = b; formation.positions[idB] = a;
+}
+function swapPairPositions(formation, project) {
+  // 镜像后交换每对男女位置（保持相对握持方位的镜像一致性）
+  for (const p of project.pairs) {
+    const a = formation.positions[p.leader], b = formation.positions[p.follower];
+    if (a && b) { formation.positions[p.leader] = b; formation.positions[p.follower] = a; }
+  }
+}
+function faceAll(positions, ids, target, { stage, project }) {
+  const face = faceAudience(stage);
+  const cx = stage.widthM / 2, cy = stage.depthM / 2;
+  for (const id of ids) {
+    const p = positions[id]; if (!p) continue;
+    if (target === 'audience') p.facing = face;
+    else if (target === 'center') p.facing = Math.round(((angleTo(p, { x: cx, y: cy }) % 360) + 360) % 360);
+    else if (target === 'project' || target === 'partner') {
+      const partner = partnerIdOf(project, id);
+      if (partner && positions[partner]) p.facing = Math.round(((angleTo(p, positions[partner]) % 360) + 360) % 360);
+    }
+  }
+}
+function partnerIdOf(project, id) {
+  const p = project.pairs.find(q => q.leader === id || q.follower === id);
+  return p ? (p.leader === id ? p.follower : p.leader) : null;
+}
+
+Object.assign(FS.shapes, { SHAPE_KINDS, genSlots, angleTo, applySlots, mirrorH, mirrorV, rotateSelected, distributeAxis, swapTwo, swapPairPositions, faceAll });
+})();
+
+/* ===== module: store ===== */
+FS.store = FS.store || {};
+FS.store = FS.store || {};
+(function(){
+'use strict';
+const M = FS.model;
+const { createProject, clone, uid, renameShortsByPair } = FS.model;
+// 集中状态树 + 撤销/重做 + IndexedDB 持久化（Node 环境自动降级为内存存储）
+/* import from model */
+// ---------- 存储（IndexedDB / 内存回退） ----------
+const memory = { projects: new Map(), audio: new Map() };
+const hasIDB = typeof indexedDB !== 'undefined';
+let dbPromise = null;
+function db() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open('formation-studio', 1);
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        if (!d.objectStoreNames.contains('projects')) d.createObjectStore('projects', { keyPath: 'id' });
+        if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return dbPromise;
+}
+function tx(store, mode, fn) {
+  return db().then(d => new Promise((resolve, reject) => {
+    const t = d.transaction(store, mode);
+    const req = fn(t.objectStore(store));
+    t.oncomplete = () => resolve(req?.result);
+    t.onerror = () => reject(t.error);
+  }));
+}
+const storage = {
+  async putProject(p) {
+    p.meta.updatedAt = new Date().toISOString();
+    if (!hasIDB) { memory.projects.set(p.id, clone(p)); return; }
+    await tx('projects', 'readwrite', s => s.put(clone(p)));
+  },
+  async getProject(id) {
+    if (!hasIDB) return memory.projects.get(id) ? clone(memory.projects.get(id)) : null;
+    return await tx('projects', 'readonly', s => s.get(id));
+  },
+  async listProjects() {
+    if (!hasIDB) return [...memory.projects.values()].sort((a, b) => (b.meta.updatedAt || '').localeCompare(a.meta.updatedAt || ''));
+    const all = await tx('projects', 'readonly', s => s.getAll());
+    return (all || []).sort((a, b) => (b.meta.updatedAt || '').localeCompare(a.meta.updatedAt || ''));
+  },
+  async deleteProject(id) {
+    if (!hasIDB) { memory.projects.delete(id); memory.audio.delete(id); return; }
+    await tx('projects', 'readwrite', s => s.delete(id));
+    await tx('audio', 'readwrite', s => s.delete(id));
+  },
+  async putAudio(id, blob) {
+    if (!hasIDB) { memory.audio.set(id, blob); return; }
+    await tx('audio', 'readwrite', s => s.put(blob, id));
+  },
+  async getAudio(id) {
+    if (!hasIDB) return memory.audio.get(id) || null;
+    return await tx('audio', 'readonly', s => s.get(id));
+  },
+};
+
+// ---------- 状态 ----------
+let state = {
+  view: 'library',           // library | editor
+  theme: (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('fs.theme')) || 'dark',
+  project: null,
+  projectId: null,
+  formationIndex: 0,
+  selection: [],             // dancer ids
+  editMode: true,            // 编辑开关（默认开）：舞台可拖动编辑；关闭为查看模式
+  theme: 'dark',             // dark | light（持久化到 localStorage）
+  showGhost: true,
+  showPaths: true,
+  previewOnSwitch: true,     // 切换队形帧时自动播放过渡动画
+  ripple: true,
+  playing: false,
+  library: [],
+};
+const listeners = new Set();
+function getState() { return state; }
+function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+function emit() { for (const fn of [...listeners]) fn(state); }
+function setUI(patch) {
+  Object.assign(state, patch);
+  if (patch.theme) { try { localStorage.setItem('fs.theme', patch.theme); } catch {} }
+  emit();
+}
+
+// ---------- 撤销/重做 ----------
+const history = { stack: [], index: -1, max: 60 };
+let saveTimer = null;
+
+function snapshotNow(label) { return { snap: JSON.stringify(state.project), label }; }
+function commit(label = '修改') {
+  if (!state.project) return;
+  const cur = JSON.stringify(state.project);
+  if (history.index >= 0 && history.stack[history.index].snap === cur) return;
+  history.stack.splice(history.index + 1);
+  history.stack.push({ snap: cur, label });
+  if (history.stack.length > history.max) history.stack.shift();
+  history.index = history.stack.length - 1;
+  scheduleSave();
+}
+function canUndo() { return history.index > 0; }
+function canRedo() { return history.index < history.stack.length - 1; }
+function undo() {
+  if (!canUndo()) return false;
+  history.index--;
+  state.project = JSON.parse(history.stack[history.index].snap);
+  afterProjectSwap(); emit(); scheduleSave();
+  return true;
+}
+function redo() {
+  if (!canRedo()) return false;
+  history.index++;
+  state.project = JSON.parse(history.stack[history.index].snap);
+  afterProjectSwap(); emit(); scheduleSave();
+  return true;
+}
+function undoLabel() { return canUndo() ? history.stack[history.index].label : ''; }
+function afterProjectSwap() {
+  // 队形可能被撤销增删，修正当前索引
+  const ids = state.project.formations.map(f => f.id);
+  const cur = state.project.formations[state.formationIndex];
+  if (!cur) state.formationIndex = Math.max(0, ids.length - 1);
+}
+
+// 变更入口：mutate(fn, label) 即时提交历史；拖拽过程用 mutate(fn, null) + 结束时 commit(label)
+function mutate(fn, label = null) {
+  if (!state.project) return;
+  fn(state.project);
+  state.project.meta.updatedAt = new Date().toISOString();
+  if (label !== null) commit(label); else { scheduleSave(); }
+  emit();
+}
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { if (state.project) storage.putProject(state.project); }, 400);
+}
+// 页面隐藏/关闭前立即落盘，避免 debounce 丢最后一次编辑
+if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+  const flush = () => {
+    if (document.visibilityState === 'hidden' && state.project) {
+      clearTimeout(saveTimer);
+      storage.putProject(state.project);
+    }
+  };
+  document.addEventListener('visibilitychange', flush);
+  window.addEventListener('pagehide', flush);
+}
+
+// ---------- 项目生命周期 ----------
+function rememberLast(id) {
+  try { localStorage.setItem('fs.lastProject', id); } catch {} // Node/隐私模式下无 localStorage
+}
+async function init(preferId = null) {
+  const list = await storage.listProjects();
+  state.library = list;
+  let target = preferId && list.find(p => p.id === preferId) ? preferId : (list[0]?.id || null);
+  if (target) await openProject(target); else state.view = 'library';
+  emit();
+}
+async function refreshLibrary() {
+  state.library = await storage.listProjects();
+  emit();
+}
+function createNewProject(opts) {
+  const p = createProject(opts);
+  p.id = uid('prj');
+  rememberLast(p.id);
+  state.project = p;
+  state.projectId = p.id;
+  state.formationIndex = 0;
+  state.selection = [];
+  history.stack = []; history.index = -1;
+  commit('新建项目');
+  state.view = 'editor';
+  storage.putProject(p);
+  emit();
+  return p;
+}
+async function openProject(id) {
+  let p = await storage.getProject(id);
+  if (!p) return false;
+  p = M.validateProject(p).project; // 消毒历史脏数据（如字符串数值）
+  rememberLast(id);
+  state.project = p;
+  state.projectId = id;
+  state.formationIndex = 0;
+  state.selection = [];
+  history.stack = []; history.index = -1;
+  commit('打开项目');
+  state.view = 'editor';
+  emit();
+  return true;
+}
+function importProject(json) {
+  const p = json;
+  p.id = uid('prj');
+  rememberLast(p.id);
+  p.meta = { ...p.meta, title: (p.meta?.title || '导入项目') + '（副本）' };
+  state.project = p;
+  state.projectId = p.id;
+  state.formationIndex = 0;
+  state.selection = [];
+  history.stack = []; history.index = -1;
+  commit('导入项目');
+  state.view = 'editor';
+  storage.putProject(p);
+  emit();
+}
+async function closeProject() {
+  if (state.project) await storage.putProject(state.project);
+  state.view = 'library';
+  state.project = null;
+  await refreshLibrary();
+}
+async function deleteProjectById(id) {
+  await storage.deleteProject(id);
+  if (state.projectId === id) { state.project = null; state.view = 'library'; }
+  await refreshLibrary();
+}
+async function duplicateProject(id) {
+  const p = await storage.getProject(id);
+  if (!p) return;
+  const oldId = p.id;
+  p.id = uid('prj');
+  p.meta.title = p.meta.title + '（副本）';
+  p.meta.createdAt = new Date().toISOString();
+  await storage.putProject(p);
+  const blob = await storage.getAudio(oldId);
+  if (blob) await storage.putAudio(p.id, blob); // 副本继承音频
+  await refreshLibrary();
+}
+
+// ---------- 名册辅助动作 ----------
+/* import from model */
+
+Object.assign(FS.store, { storage, getState, subscribe, emit, setUI, commit, canUndo, canRedo, undo, redo, undoLabel, mutate, init, refreshLibrary, createNewProject, openProject, importProject, closeProject, deleteProjectById, duplicateProject });
+})();
+
+/* ===== module: audio ===== */
+FS.audio = FS.audio || {};
+FS.audio = FS.audio || {};
+(function(){
+'use strict';
+
+// 音频：文件加载、波形峰值、播放控制、节拍器点击声
+class AudioController {
+  constructor() {
+    this.el = new Audio();
+    this.el.preload = 'auto';
+    this.ctx = null;
+    this.peaks = null;        // Float32Array，长度 N，值 -1..1
+    this.duration = 0;
+    this.url = null;
+    this.name = '';
+    this.ready = false;
+  }
+  ensureCtx() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) this.ctx = new AC();
+    }
+    if (this.ctx?.state === 'suspended') this.ctx.resume();
+    return this.ctx;
+  }
+  async loadBlob(blob, name = '') {
+    this.dispose();
+    this.url = URL.createObjectURL(blob);
+    this.el.src = this.url;
+    this.name = name || blob.name || 'audio';
+    await new Promise((resolve, reject) => {
+      const ok = () => { this.duration = this.el.duration || 0; this.ready = true; resolve(); };
+      this.el.addEventListener('loadedmetadata', ok, { once: true });
+      this.el.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
+    });
+    // 波形（失败不阻塞，仅无波形显示）
+    try {
+      const ab = await blob.arrayBuffer();
+      this.ensureCtx();
+      const buf = await this.ctx.decodeAudioData(ab);
+      this.peaks = computePeaks(buf, 1800);
+      this.duration = buf.duration;
+    } catch { this.peaks = null; }
+    return this;
+  }
+  play(offsetSec, rate = 1) {
+    this.el.playbackRate = rate;
+    this.el.currentTime = Math.max(0, Math.min(offsetSec, this.duration || offsetSec));
+    return this.el.play();
+  }
+  pause() { this.el.pause(); }
+  stop() { this.el.pause(); this.el.currentTime = 0; }
+  seek(sec) { this.el.currentTime = Math.max(0, sec); }
+  get currentTime() { return this.el.currentTime; }
+  get playing() { return !this.el.paused && !this.el.ended; }
+  setRate(r) { this.el.playbackRate = r; }
+  // 节拍器点击声
+  click(accent = false, when = 0) {
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    const t = ctx.currentTime + when;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = accent ? 1976 : 1319;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.28, t + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t); osc.stop(t + 0.09);
+  }
+  dispose() {
+    try { this.el.pause(); } catch {}
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = null; this.peaks = null; this.ready = false; this.duration = 0;
+  }
+}
+function computePeaks(audioBuffer, buckets = 1800) {
+  const ch = audioBuffer.getChannelData(0);
+  const per = Math.floor(ch.length / buckets) || 1;
+  const peaks = new Float32Array(buckets);
+  for (let i = 0; i < buckets; i++) {
+    let max = 0;
+    const start = i * per, end = Math.min(start + per, ch.length);
+    for (let j = start; j < end; j += Math.max(1, Math.floor(per / 50))) {
+      const v = Math.abs(ch[j]);
+      if (v > max) max = v;
+    }
+    peaks[i] = max;
+  }
+  const mx = peaks.reduce((a, b) => Math.max(a, b), 0.0001);
+  for (let i = 0; i < buckets; i++) peaks[i] = peaks[i] / mx;
+  return peaks;
+}
+
+Object.assign(FS.audio, { AudioController, computePeaks });
+})();
+
+/* ===== module: player ===== */
+FS.player = FS.player || {};
+FS.player = FS.player || {};
+(function(){
+'use strict';
+const { computeSegments, spb, beatToSec, secToBeat, currentFormationIndexAt } = FS.model;
+// 回放引擎：音频时钟 / 虚拟时钟、数拍入场、循环、节拍器
+/* import from model */
+class Player {
+  constructor({ audio, getProject, onTick, onStateChange, onCountin, onPreviewEnd }) {
+    this.audio = audio;           // AudioController
+    this.getProject = getProject;
+    this.onTick = onTick;         // ({beat, sec, formationIndex, phase})
+    this.onStateChange = onStateChange; // ({playing})
+    this.onCountin = onCountin;   // (n|0) 剩余入场拍，0 隐藏
+    this.onPreviewEnd = onPreviewEnd; // (endBeat) 切帧预览结束
+    this.playing = false;
+    this.countin = false;
+    this.beat = 0;
+    this.speed = 1;
+    this.loopOn = false;
+    this.loopStart = 0; this.loopEnd = 0;
+    this._virtual = null;         // {baseBeat, t0}
+    this._lastIntBeat = null;
+    this._stopAt = null;          // 预览过渡时的结束拍
+  }
+  get useAudio() {
+    if (this._forceVirtual) return false;
+    const p = this.getProject();
+    return !!(p?.audio?.name && this.audio?.ready);
+  }
+  // 切帧预览中（有限段虚拟播放）：不抢占用户选择的队形高亮
+  get previewing() {
+    return this._forceVirtual === true && this._stopAt !== null;
+  }
+  segments() { return computeSegments(this.getProject() || { timeline: { blocks: [] } }); }
+
+  play(fromBeat = null, { previewStop = null, countIn = true, forceVirtual = false } = {}) {
+    if (this.playing) return;
+    // 清理遗留的数拍入场（避免双时钟竞态）
+    this._cancelCountin();
+    const p = this.getProject();
+    if (!p) return;
+    const fresh = fromBeat !== null;
+    if (fresh) this.beat = fromBeat;
+    this._stopAt = previewStop;
+    this._forceVirtual = !!forceVirtual;
+    // 预览期间挂起循环，防止循环拉回导致预览永不结束
+    this._loopStash = null;
+    if (previewStop !== null && this.loopOn) {
+      this._loopStash = { start: this.loopStart, end: this.loopEnd };
+      this.loopOn = false;
+    }
+    const doStart = () => {
+      if (this.playing) return; // 防御：已被其他路径启动
+      this.playing = true;
+      this._lastIntBeat = null;
+      if (this.useAudio) {
+        this.audio.setRate(this.speed);
+        this.audio.play(beatToSec(p, this.beat), this.speed);
+        this._virtual = null;
+      } else {
+        this._virtual = { baseBeat: this.beat, t0: performance.now() };
+      }
+      this.onStateChange?.({ playing: true });
+      this._tick();
+    };
+    const ci = countIn && fresh ? (p.timeline.countInBeats || 0) : 0;
+    if (ci > 0) {
+      // 数拍入场：负拍虚拟时钟，每拍一声（每小节首拍高音）
+      this.countin = true;
+      this.playing = false;
+      let n = ci;
+      const total = ci;
+      const bpb = p.audio.beatsPerBar || 4;
+      const interval = spb(p) * 1000 / this.speed;
+      const clickOne = () => {
+        this.audio.click((total - n) % bpb === 0, 0);
+        n--;
+        this.onCountin?.(n);
+        this.beat = -n; // 负拍显示
+        this._emit();
+        if (n <= 0) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this.beat = 0; doStart(); }
+      };
+      this.onCountin?.(n);
+      clickOne();
+      this._ciTimer = setInterval(clickOne, interval);
+    } else {
+      doStart();
+    }
+  }
+  _cancelCountin() {
+    if (this._ciTimer) {
+      clearInterval(this._ciTimer);
+      this._ciTimer = null;
+      this.countin = false;
+      this.onCountin?.(0);
+    }
+  }
+  _restoreLoop() {
+    if (this._loopStash) {
+      this.setLoop(true, this._loopStash.start, this._loopStash.end);
+      this._loopStash = null;
+    }
+  }
+  pause() {
+    if (this._ciTimer) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this.onCountin?.(0); }
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    if (!this.playing) return;
+    this.playing = false;
+    if (this.useAudio) this.audio.pause();
+    this._virtual = null;
+    this._forceVirtual = false;    this.onStateChange?.({ playing: false });
+  }
+  stop() {
+    this.pause();
+    this.beat = 0;
+    this._stopAt = null;
+    this._forceVirtual = false;    this._restoreLoop();
+    if (this.audio?.ready) this.audio.seek(0);
+    this.onCountin?.(0);
+    this._emit();
+  }
+  seekBeat(b) {
+    this.beat = b;
+    if (this.useAudio) this.audio.seek(beatToSec(this.getProject(), b));
+    else if (this.playing) this._virtual = { baseBeat: b, t0: performance.now() };
+    this._lastIntBeat = null;
+    this._emit();
+  }
+  seekFormation(index) {
+    const { segments } = this.segments();
+    const seg = segments[index];
+    if (seg) this.seekBeat(seg.holdStart);
+  }
+  setSpeed(s) {
+    this.speed = s;
+    if (this.useAudio) this.audio.setRate(s);
+    if (this.playing && this._virtual) this._virtual = { baseBeat: this.beat, t0: performance.now() };
+  }
+  setLoop(on, start = 0, end = 0) {
+    this.loopOn = on; this.loopStart = start; this.loopEnd = end;
+  }
+  _tick() {
+    if (!this.playing) return;
+    const p = this.getProject();
+    if (!p) { this.playing = false; return; }
+    if (this.useAudio && !this.audio.playing) { this.pause(); return; }
+    let beat;
+    if (this.useAudio && this.audio.playing) {
+      beat = secToBeat(p, this.audio.currentTime);
+      this._virtual = null;
+    } else if (this._virtual) {
+      beat = this._virtual.baseBeat + (performance.now() - this._virtual.t0) / 1000 * (p.audio.bpm || 120) / 60  * this.speed;
+    } else {
+      beat = this.beat;
+    }
+    if (p.timeline.metronome) {
+      const ib = Math.floor(beat);
+      if (this._lastIntBeat === null) this._lastIntBeat = ib;
+      else if (ib > this._lastIntBeat) {
+        const bpb = p.audio.beatsPerBar || 4;
+        this.audio.click(((ib % bpb) + bpb) % bpb === 0, 0);
+        this._lastIntBeat = ib;
+      }
+    }
+    this.beat = beat;
+    // 预览终点优先于循环（预览期间循环已挂起，双保险）
+    if (this._stopAt !== null && beat >= this._stopAt) {
+      this.pause();
+      this.beat = this._stopAt;
+      const end = this._stopAt;
+      this._stopAt = null;
+      this._restoreLoop(); // 恢复被预览挂起的循环
+      this.onPreviewEnd?.(end); // 预览结束：通知 UI 复位到编辑视图
+    } else if (this.loopOn && this.loopEnd > this.loopStart && beat >= this.loopEnd) {
+      this.seekBeat(this.loopStart);
+    } else {
+      const { totalBeats } = this.segments();
+      if (beat >= totalBeats || (this.useAudio && this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02)) {
+        this.pause();
+        this.beat = totalBeats;
+        this.onStateChange?.({ playing: false, ended: true });
+      }
+    }
+    this._emit();
+    // setTimeout 驱动（rAF 在后台/部分环境会被节流导致回放停滞）
+    this._timer = setTimeout(() => this._tick(), 16);
+  }
+  _emit() {
+    const p = this.getProject();
+    const fi = p ? currentFormationIndexAt(p, this.beat) : 0;
+    this.onTick?.({ beat: this.beat, sec: p ? beatToSec(p, Math.max(0, this.beat)) : 0, formationIndex: fi });
+  }
+  dispose() {
+    this.pause();
+    this.onTick = null; this.onStateChange = null;
+  }
+}
+
+Object.assign(FS.player, { Player });
+})();
+
+/* ===== module: stage ===== */
+FS.stage = FS.stage || {};
+FS.stage = FS.stage || {};
+(function(){
+'use strict';
+const { faceAudience, partnerOf, posAt, computeSegments, easeInOut, lerpAngle } = FS.model;
+// 舞台画布：渲染 + 命中测试 + 拖拽（拖一带一）/框选/平移缩放/朝向把手
+/* import from model */
+const DANCER_R = 0.38; // 舞者圆点半径（米）
+
+// ---------- 场景绘制（舞台视图/缩略图/PNG/打印共用） ----------
+function stageBounds(stage) {
+  const b = stage.backstageM ?? 0;
+  return { x0: -b, y0: -b, x1: stage.widthM + b, y1: stage.depthM + b };
+}
+function fitView(canvasW, canvasH, stage, pad = 14) {
+  const b = stageBounds(stage);
+  const scale = Math.min((canvasW - pad * 2) / (b.x1 - b.x0), (canvasH - pad * 2) / (b.y1 - b.y0));
+  const ox = (canvasW - (b.x1 - b.x0) * scale) / 2 - b.x0 * scale;
+  const oy = (canvasH - (b.y1 - b.y0) * scale) / 2 - b.y0 * scale;
+  return { scale, ox, oy };
+}
+function drawScene(ctx, rect, project, positions, opts = {}) {
+  const { widthM: W, depthM: H } = project.stage;
+  const MERGE_DIST = 0.8; // 配对舞者接近此间距内合为徽标
+  const theme = opts.theme || (typeof document !== 'undefined' && document.documentElement.dataset.theme) || 'dark';
+  const dark = theme !== 'light';
+  const view = opts.view || fitView(rect.w, rect.h, project.stage, opts.pad ?? 14);
+  const s = view.scale, ox = view.ox + rect.x, oy = view.oy + rect.y;
+  const r = DANCER_R * s;
+  const X = x => ox + x * s, Y = y => oy + y * s;
+  const bs = project.stage.backstageM ?? 0;
+
+  // 背景
+  ctx.fillStyle = opts.bg || '#f8fafc';
+  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  if (project.stage.bgImage && !opts.minimal) {
+    ctx.save(); ctx.globalAlpha = 0.5;
+    // bgImage 存为 {src, w, h}，按舞台区域拉伸
+    if (drawScene._bg?.src !== project.stage.bgImage.src) {
+      const img = new Image();
+      img.onload = () => { drawScene._bg = { src: project.stage.bgImage.src, img }; if (opts.onImageLoad) opts.onImageLoad(); };
+      img.src = project.stage.bgImage.src;
+      drawScene._bg = { src: project.stage.bgImage.src, img, pending: true };
+    }
+    const bg = drawScene._bg;
+    if (bg?.img?.complete) ctx.drawImage(bg.img, X(0), Y(0), W * s, H * s);
+    ctx.restore();
+  }
+
+  // 后台区
+  if (bs > 0 && !opts.minimal) {
+    ctx.save();
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fillRect(X(-bs), Y(-bs), (W + 2 * bs) * s, (H + 2 * bs) * s);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(X(0), Y(0), W * s, H * s);
+    ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1;
+    ctx.setLineDash([6, 5]);
+    ctx.strokeRect(X(0), Y(0), W * s, H * s);
+    ctx.setLineDash([]);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(X(0), Y(0), W * s, H * s);
+    ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(X(0), Y(0), W * s, H * s);
+  }
+
+  // 网格
+  const g = project.stage.gridM || 0.5;
+  if (!opts.minimal && g > 0) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(148,163,184,.25)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = g; x < W; x += g) { ctx.moveTo(X(x), Y(0)); ctx.lineTo(X(x), Y(H)); }
+    for (let y = g; y < H; y += g) { ctx.moveTo(X(0), Y(y)); ctx.lineTo(X(W), Y(y)); }
+    ctx.stroke();
+    // 中心线
+    ctx.strokeStyle = 'rgba(100,116,139,.4)'; ctx.setLineDash([10, 6]);
+    ctx.beginPath();
+    ctx.moveTo(X(W / 2), Y(0)); ctx.lineTo(X(W / 2), Y(H));
+    ctx.moveTo(X(0), Y(H / 2)); ctx.lineTo(X(W), Y(H / 2));
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 观众方向标注
+  if (!opts.minimal) {
+    ctx.save();
+    ctx.fillStyle = '#64748b'; ctx.font = `600 ${Math.max(11, s * 0.5)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const t = '观 众';
+    const pos = { bottom: [X(W / 2), Y(H + bs * 0.5)], top: [X(W / 2), Y(-bs * 0.5)], left: [X(-bs * 0.5), Y(H / 2)], right: [X(W + bs * 0.5), Y(H / 2)] }[project.stage.audience] || [X(W / 2), Y(H + bs * 0.5)];
+    ctx.fillText(t, pos[0], pos[1]);
+    ctx.restore();
+  }
+
+  // Ghost（上一/下一队形）：配对接近=圆角矩形虚影，分离=圆虚影
+  if (opts.ghost) {
+    function ghostBadge(cx, cy, w, hh, bothPresent) {
+      ctx.save(); ctx.globalAlpha = 0.32;
+      ctx.setLineDash([4, 4]);
+      rrPath(cx - w / 2, cy - hh / 2, w, hh, hh * 0.45);
+      if (bothPresent) { ctx.fillStyle = 'rgba(71,85,105,.12)'; ctx.fill(); }
+      ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+    };
+    for (const gp of opts.ghost) {
+      for (const pair of project.pairs) {
+        const a = gp.positions[pair.leader], b = gp.positions[pair.follower];
+        if (!a || !b) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) <= MERGE_DIST) {
+          ghostBadge((X(a.x) + X(b.x)) / 2, (Y(a.y) + Y(b.y)) / 2, r * 3.4, r * 1.5, true);
+        } else {
+          ctx.save(); ctx.globalAlpha = 0.32;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath(); ctx.arc(X(a.x), Y(a.y), DANCER_R * s, 0, Math.PI * 2);
+          ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.beginPath(); ctx.arc(X(b.x), Y(b.y), DANCER_R * s, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      for (const [id, p2] of Object.entries(gp.positions)) {
+        if (project.pairs.some(pa => pa.leader === id || pa.follower === id)) continue;
+        if (!positions[id]) continue;
+        ctx.save(); ctx.globalAlpha = 0.32;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.arc(X(p2.x), Y(p2.y), DANCER_R * s, 0, Math.PI * 2);
+        ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+  // 移动路径（当前 → 下一队形）
+  if (opts.paths && opts.nextPositions) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(14,165,233,.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([7, 6]);
+    ctx.beginPath();
+    for (const [id, p] of Object.entries(positions)) {
+      const q = opts.nextPositions[id]; if (!q) continue;
+      ctx.moveTo(X(p.x), Y(p.y)); ctx.lineTo(X(q.x), Y(q.y));
+    }
+    ctx.stroke(); ctx.restore();
+  }
+
+  // 舞者与舞对单元渲染：
+  //   配对舞者位置接近（≤0.8m）时合为【圆角矩形徽标】（一个视觉符号）；
+  //   分开超过阈值时呈示为两个独立圆 + 虚线绑定（拖动编辑互不影响）。
+  const dancerById = id => project.dancers.find(x => x.id === id);
+  const inSel = id => opts.selection?.has(id);
+  function drawOne(id, p, px, py, rr, sel) {
+    const d = dancerById(id); if (!d) return;
+    // 朝向指示（圆内指针）
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate((p.facing || 0) * Math.PI / 180);
+    ctx.beginPath();
+    ctx.moveTo(0, -rr * 0.55); ctx.lineTo(rr * 0.42, rr * 0.38); ctx.lineTo(-rr * 0.42, rr * 0.38);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.fill();
+    ctx.restore();
+    ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2);
+    ctx.fillStyle = d.color || '#64748b'; ctx.fill();
+    ctx.lineWidth = sel ? Math.max(2.5, s * 0.09) : Math.max(1, s * 0.04);
+    ctx.strokeStyle = sel ? '#0ea5e9' : 'rgba(15,23,42,.55)'; ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${Math.max(8, rr * 0.95)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(d.short || '?', px, py + rr * 0.05);
+  };
+  function rrPath(x, y, w, h, rad) {
+    ctx.beginPath();
+    ctx.moveTo(x + rad, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rad);
+    ctx.arcTo(x + w, y + h, x, y + h, rad);
+    ctx.arcTo(x, y + h, x, y, rad);
+    ctx.arcTo(x, y, x + w, y, rad);
+    ctx.closePath();
+  };
+  // 舞对徽标：圆角矩形，左半=引带色+编号，右半=跟随色+编号
+  function drawPairBadge(pair, a, b, sel, alpha) {
+    const cx = (X(a.x) + X(b.x)) / 2, cy = (Y(a.y) + Y(b.y)) / 2;
+    const w = r * 3.4, hh = r * 1.5;
+    const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;
+    const dL = dancerById(pair.leader), dF = dancerById(pair.follower);
+    ctx.save();
+    if (alpha !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    ctx.save();
+    rrPath(x0, y0, w, hh, rad); ctx.clip();
+    ctx.fillStyle = dL?.color || '#64748b'; ctx.fillRect(x0, y0, w / 2, hh);
+    ctx.fillStyle = dF?.color || '#94a3b8'; ctx.fillRect(x0 + w / 2, y0, w / 2, hh);
+    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(cx - 1, y0, 2, hh); // 中缝
+    ctx.restore();
+    rrPath(x0, y0, w, hh, rad);
+    ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
+    ctx.strokeStyle = sel ? '#0ea5e9' : (dark ? '#f8fafc' : '#334155');
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${Math.max(8, hh * 0.62)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(dL?.short || '?', cx - w * 0.25, cy + hh * 0.02);
+    ctx.fillText(dF?.short || '?', cx + w * 0.25, cy + hh * 0.02);
+    ctx.restore();
+  };
+  function drawBond(a, b, alpha = 1) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(56,189,248,${0.45 * alpha})`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.y)); ctx.lineTo(X(b.x), Y(b.y));
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // 先画配对单元（徽标或双圆+虚线），再画未配对单人
+  for (const pair of project.pairs) {
+    const a = positions[pair.leader], b = positions[pair.follower];
+    if (!a || !b) { // 一方缺席（仅男/仅女段）：存在的一方照常呈示
+      if (a) drawOne(pair.leader, a, X(a.x), Y(a.y), r, inSel(pair.leader));
+      if (b) drawOne(pair.follower, b, X(b.x), Y(b.y), r, inSel(pair.follower));
+      continue;
+    }
+    const sel = inSel(pair.leader) || inSel(pair.follower);
+    const together = Math.hypot(a.x - b.x, a.y - b.y) <= MERGE_DIST;
+    if (together) {
+      drawPairBadge(pair, a, b, sel);
+    } else {
+      drawBond(a, b);
+      drawOne(pair.leader, a, X(a.x), Y(a.y), r, inSel(pair.leader));
+      drawOne(pair.follower, b, X(b.x), Y(b.y), r, inSel(pair.follower));
+    }
+  }
+  for (const [id, p] of Object.entries(positions)) {
+    if (project.pairs.some(pa => pa.leader === id || pa.follower === id)) continue;
+    drawOne(id, p, X(p.x), Y(p.y), r, inSel(id));
+  }
+  return view;
+}
+
+// ---------- 交互视图 ----------
+class StageView {
+  constructor(canvas, ctx2d, getScene, hooks) {
+    this.canvas = canvas;
+    this.ctx = ctx2d;
+    this.getScene = getScene;     // () => {project, positions, formation, selection:Set, showGhost, showPaths, playbackPos, readOnly}
+    this.hooks = hooks;           // {select(ids,{add}), mutateLive(fn), commit(label), onStageClick()}
+    this.view = null;
+    this.pointers = new Map();
+    this.drag = null;
+    this.box = null;
+    this._rafPending = false;
+    this._bind();
+    this._ro = new ResizeObserver(() => this.requestDraw());
+    this._ro.observe(canvas.parentElement);
+  }
+
+  // ---- 坐标换算 ----
+  toStage(px, py) {
+    const rect = this.canvas.getBoundingClientRect();
+    const v = this.view;
+    return { x: (px - rect.left - v.ox) / v.scale, y: (py - rect.top - v.oy) / v.scale };
+  }
+  ensureView() {
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const W = rect.width, H = rect.height;
+    if (this.canvas.width !== Math.round(W * dpr) || this.canvas.height !== Math.round(H * dpr)) {
+      this.canvas.width = Math.round(W * dpr); this.canvas.height = Math.round(H * dpr);
+      this.view = null;
+    }
+    const scene = this.getScene();
+    const fit = fitView(W, H, scene.project.stage, 16);
+    if (!this.view) this.view = fit;
+    else {
+      const min = fit.scale * 0.5, max = fit.scale * 8;
+      this.view.scale = Math.min(max, Math.max(min, this.view.scale));
+    }
+    return { W, H, dpr };
+  }
+  requestDraw() {
+    // 同步重绘：画布元素少开销低，且不受 rAF/定时器节流影响
+    this.draw();
+  }
+
+  // ---- 切帧动效（纯舞台 UI 动画：不经过播放引擎、不动播放头/时间线） ----
+  startPositionsPreview(fromFormation, toFormation, durationMs = 700) {
+    if (!fromFormation || !toFormation) return;
+    this.anim = {
+      from: fromFormation.positions, to: toFormation.positions,
+      t0: performance.now(), dur: Math.max(200, durationMs),
+    };
+    this.drag = null;
+    this.box = null;
+    this._animTick();
+  }
+  _animTick() {
+    if (!this.anim) return;
+    const elapsed = performance.now() - this.anim.t0;
+    if (elapsed >= this.anim.dur) {
+      this.anim = null;
+      this.draw();
+      this.hooks.onSwitchAnimEnd?.();
+      return;
+    }
+    this.draw();
+    setTimeout(() => this._animTick(), 16);
+  }
+  resetView() { this.view = null; this.requestDraw(); }
+  zoomAt(cx, cy, factor) {
+    this.ensureView();
+    const rect = this.canvas.getBoundingClientRect();
+    const px = cx - rect.left, py = cy - rect.top;
+    const sx = (px - this.view.ox) / this.view.scale, sy = (py - this.view.oy) / this.view.scale;
+    this.view.scale *= factor;
+    this.view.ox = px - sx * this.view.scale;
+    this.view.oy = py - sy * this.view.scale;
+    this.clampPan();
+    this.requestDraw();
+  }
+  // 平移软钳制：舞台始终保留 ≥80px 可见
+  clampPan() {
+    const scene = this.getScene();
+    if (!scene?.project || !this.view) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const b = stageBounds(scene.project.stage);
+    const s = this.view.scale, W = rect.width, H = rect.height, m = 80;
+    this.view.ox = Math.min(W - m - b.x0 * s, Math.max(m - b.x1 * s, this.view.ox));
+    this.view.oy = Math.min(H - m - b.y0 * s, Math.max(m - b.y1 * s, this.view.oy));
+  }
+
+  draw() {
+    const scene = this.getScene();
+    if (!scene?.project) return;
+    const { W, H, dpr } = this.ensureView();
+    const ctx = this.ctx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = (typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light') ? '#dfe6ee' : '#0b1220';
+    ctx.fillRect(0, 0, W, H);
+    const project = scene.project;
+    // 切帧动效期间：插值位置优先（不影响编辑数据，仅绘制）
+    let animPos = null;
+    if (this.anim) {
+      const t = easeInOut(Math.min(1, (performance.now() - this.anim.t0) / this.anim.dur));
+      animPos = {};
+      const ids = new Set([...Object.keys(this.anim.from), ...Object.keys(this.anim.to)]);
+      for (const id of ids) {
+        const a = this.anim.from[id] || this.anim.to[id], b = this.anim.to[id] || this.anim.from[id];
+        if (a && b) animPos[id] = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, facing: lerpAngle(a.facing || 0, b.facing || 0, t) };
+      }
+    }
+    const positions = scene.playbackPos || animPos || scene.formation?.positions || {};
+
+    // ghost / paths
+    let ghost = null, nextPositions = null;
+    if (!scene.playbackPos && !scene.readOnly) {
+      const i = scene.formationIndex;
+      if (scene.showGhost) {
+        ghost = [];
+        if (i > 0) ghost.push(project.formations[i - 1]);
+        if (i < project.formations.length - 1) ghost.push(project.formations[i + 1]);
+        if (!ghost.length) ghost = null;
+      }
+      if (scene.showPaths && i < project.formations.length - 1) nextPositions = project.formations[i + 1].positions;
+    }
+    // 使用当前视图（缩放/平移状态），不被 fitView 每帧重置
+    this.view = drawScene(ctx, { x: 0, y: 0, w: W, h: H }, project, positions, {
+      view: this.view,
+      ghost, nextPositions,
+      selection: scene.selection,
+      theme: scene.theme,
+      pad: 16,
+      onImageLoad: () => this.requestDraw(),
+    });
+
+    // 框选矩形（画布内像素坐标）
+    if (this.box) {
+      const { x0, y0, x1, y1 } = this.box;
+      ctx.save();
+      ctx.fillStyle = 'rgba(56,189,248,.12)';
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1;
+      const x = Math.min(x0, x1), y = Math.min(y0, y1);
+      ctx.fillRect(x, y, Math.abs(x1 - x0), Math.abs(y1 - y0));
+      ctx.strokeRect(x, y, Math.abs(x1 - x0), Math.abs(y1 - y0));
+      ctx.restore();
+    }
+
+    // 朝向把手（恰好选中一名舞者且非播放）
+    this.handlePx = null;
+    if (scene.singleSelected && scene.selection?.size >= 1 && !scene.playbackPos && !scene.readOnly) {
+      const id = [...scene.selection][0];
+      const p = positions[id];
+      if (p) {
+        const v = this.view;
+        const rect = this.canvas.getBoundingClientRect();
+        const fr = (p.facing || 0) * Math.PI / 180;
+        const hx = v.ox + (p.x + Math.sin(fr) * 0.9) * v.scale;
+        const hy = v.oy + (p.y - Math.cos(fr) * 0.9) * v.scale;
+        this.handlePx = { x: hx + rect.left, y: hy + rect.top, px: hx, py: hy };
+        ctx.save();
+        ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(v.ox + p.x * v.scale, v.oy + p.y * v.scale);
+        ctx.lineTo(hx, hy); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(hx, hy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = '#38bdf8'; ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
+  // ---- 命中 ----
+  // 始终按单个舞者命中（选择不含舞伴联动；共同移动仅来自框选/多选）
+  hitDancer(sx, sy) {
+    const scene = this.getScene();
+    const positions = scene.playbackPos || scene.formation?.positions || {};
+    let best = null, bd = Infinity;
+    for (const [id, p] of Object.entries(positions)) {
+      const d = Math.hypot(p.x - sx, p.y - sy);
+      if (d < DANCER_R * 1.35 && d < bd) { bd = d; best = id; }
+    }
+    return best;
+  }
+  hitHandle(px, py) {
+    if (!this.handlePx) return false;
+    return Math.hypot(px - this.handlePx.x, py - this.handlePx.y) < 16;
+  }
+
+  _bind() {
+    const cv = this.canvas;
+    cv.addEventListener('pointerdown', e => this._down(e));
+    cv.addEventListener('pointermove', e => this._move(e));
+    cv.addEventListener('pointerup', e => this._up(e));
+    cv.addEventListener('pointercancel', e => this._up(e));
+    cv.addEventListener('wheel', e => {
+      e.preventDefault();
+      this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012));
+    }, { passive: false });
+  }
+  _down(e) {
+    try { this.canvas.setPointerCapture(e.pointerId); } catch {} // 合成事件/已释放指针时可能抛错
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2) { // 进入双指手势
+      this.drag = null; this.box = null;
+      const [a, b] = [...this.pointers.values()];
+      this.pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+      this.requestDraw();
+      return;
+    }
+    const scene = this.getScene();
+    if (scene.readOnly) return;
+    if (this.anim) { this.anim = null; this.draw(); } // 动效中操作：立即跳到终态，不吞输入
+    if (this.hitHandle(e.clientX, e.clientY)) {
+      this.drag = { kind: 'face', id: [...scene.selection][0] };
+      return;
+    }
+    const s = this.toStage(e.clientX, e.clientY);
+    const hit = this.hitDancer(s.x, s.y);
+    if (hit) {
+      if (!scene.selection.has(hit)) this.hooks.select([hit], { add: e.shiftKey });
+      else if (e.shiftKey) { this.hooks.select([hit], { add: true, toggleOff: true }); return; }
+      // 记录拖拽起始快照（避免引用累加）
+      const snap = {};
+      for (const id of this.getScene().selection) {
+        const p = this.getScene().formation?.positions[id];
+        if (p) snap[id] = { x: p.x, y: p.y };
+      }
+      this.drag = { kind: 'dancer', startS: s, start: snap, moved: false };
+    } else if (e.pointerType === 'mouse') {
+      const r = this.canvas.getBoundingClientRect();
+      this.box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top, startClientX: e.clientX, startClientY: e.clientY };
+    } else {
+      this.drag = { kind: 'pan', lastX: e.clientX, lastY: e.clientY };
+    }
+  }
+  _move(e) {
+    if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pointers.size === 2 && this.pinch) {
+      const [a, b] = [...this.pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      if (this.pinch.dist > 8 && d > 0) this.zoomAt(cx, cy, d / this.pinch.dist); // 防零距离产生 Infinity
+      this.view.ox += cx - this.pinch.cx; this.view.oy += cy - this.pinch.cy;
+      this.pinch = { dist: d, cx, cy };
+      this.clampPan();
+      this.requestDraw();
+      return;
+    }
+    const drag = this.drag;
+    const scene = this.getScene();
+    if (drag?.kind === 'dancer') {
+      const s = this.toStage(e.clientX, e.clientY);
+      let dx = s.x - drag.startS.x, dy = s.y - drag.startS.y;
+      if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 0.02) drag.moved = true;
+      const stage = scene.project.stage;
+      if (stage.snap) {
+        const g = stage.gridM;
+        const baseId = [...scene.selection][0];
+        const base = drag.start[baseId];
+        if (base) {
+          dx = Math.round((base.x + dx) / g) * g - base.x;
+          dy = Math.round((base.y + dy) / g) * g - base.y;
+        }
+      }
+      const start = drag.start;
+      const bs = stage.backstageM ?? 0;
+      this.hooks.mutateLive(p => {
+        const f = p.formations[this._formationIndex()];
+        for (const [id, s0] of Object.entries(start)) {
+          const q = f.positions[id];
+          if (q) {
+            // 钳制在舞台+后台区范围内，防止拖丢
+            q.x = Math.min(stage.widthM + bs, Math.max(-bs, s0.x + dx));
+            q.y = Math.min(stage.depthM + bs, Math.max(-bs, s0.y + dy));
+          }
+        }
+      });
+      this.requestDraw();
+    } else if (drag?.kind === 'face') {
+      const s = this.toStage(e.clientX, e.clientY);
+      const f = scene.project.formations[this._formationIndex()];
+      const p = f.positions[drag.id];
+      if (p) {
+        const ang = Math.round(((Math.atan2(s.x - p.x, -(s.y - p.y)) * 180 / Math.PI) % 360 + 360) % 360);
+        this.hooks.mutateLive(proj => {
+          const ff = proj.formations[this._formationIndex()];
+          if (ff.positions[drag.id]) ff.positions[drag.id].facing = ang;
+        });
+        this.requestDraw();
+      }
+    } else if (drag?.kind === 'pan') {
+      this.ensureView();
+      this.view.ox += e.clientX - drag.lastX;
+      this.view.oy += e.clientY - drag.lastY;
+      drag.lastX = e.clientX; drag.lastY = e.clientY;
+      this.clampPan();
+      this.requestDraw();
+    } else if (this.box) {
+      const r = this.canvas.getBoundingClientRect();
+      this.box.x1 = e.clientX - r.left; this.box.y1 = e.clientY - r.top;
+      this.requestDraw();
+    }
+  }
+  _formationIndex() { return this.getScene().formationIndex; }
+  _up(e) {
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    const drag = this.drag;
+    const scene = this.getScene();
+    if (drag?.kind === 'dancer' && drag.moved) {
+      this.hooks.commit('移动舞者');
+    } else if (this.box) {
+      const p1 = this.toStage(this.box.startClientX, this.box.startClientY);
+      const r = this.canvas.getBoundingClientRect();
+      const p2 = this.toStage(this.box.x1 + r.left, this.box.y1 + r.top);
+      const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
+      const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
+      const positions = scene.formation?.positions || {};
+      const ids = Object.entries(positions)
+        .filter(([, p]) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
+        .map(([id]) => id);
+      const tiny = Math.abs(this.box.x1 - this.box.x0) < 6 && Math.abs(this.box.y1 - this.box.y0) < 6;
+      this.hooks.select(tiny ? [] : ids, { add: e.shiftKey });
+      this.box = null;
+      this.requestDraw();
+    }
+    this.drag = null;
+  }
+}
+
+Object.assign(FS.stage, { DANCER_R, stageBounds, fitView, drawScene, StageView });
+})();
+
+/* ===== module: timeline ===== */
+FS.timeline = FS.timeline || {};
+FS.timeline = FS.timeline || {};
+(function(){
+'use strict';
+const { drawScene } = FS.stage;
+const { computeSegments, spb, beatToSec, secToBeat, beatLabel } = FS.model;
+// 时间线：编辑模式队形条（缩略图+拖拽排序） / 音乐模式波形时间线（块拖拽、节拍吸附、播放头）
+/* import from stage */
+/* import from model */
+// ---------- 编辑模式：队形条 ----------
+class EditStrip {
+  constructor(container, hooks) {
+    this.el = container;
+    this.hooks = hooks; // {select(i), add(), duplicate(), delete(), move(from,to), getProject(), getIndex(), names()}
+    this._key = '';
+    this._thumbTimer = null;
+  }
+  render() {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const key = p.formations.map(f => f.id).join(',') + '|' + this.hooks.getIndex();
+    if (key === this._key) { this.drawThumbs(); return; }
+    this._key = key;
+    this.el.innerHTML = '';
+    p.formations.forEach((f, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'es-chip' + (i === this.hooks.getIndex() ? ' active' : '');
+      chip.draggable = true;
+      const cv = document.createElement('canvas');
+      cv.width = 120; cv.height = 68;
+      const nm = document.createElement('div');
+      nm.className = 'es-name';
+      nm.textContent = `${i + 1}. ${f.name}`;
+      nm.title = f.name;
+      chip.append(cv, nm);
+      chip.addEventListener('click', () => this.hooks.select(i));
+      chip.addEventListener('dragstart', e => { this._dragFrom = i; e.dataTransfer.effectAllowed = 'move'; });
+      chip.addEventListener('dragover', e => { e.preventDefault(); });
+      chip.addEventListener('drop', e => { e.preventDefault(); if (this._dragFrom != null && this._dragFrom !== i) this.hooks.move(this._dragFrom, i); this._dragFrom = null; });
+      this.el.append(chip);
+    });
+    const add = document.createElement('button');
+    add.className = 'btn small'; add.textContent = '＋';
+    add.title = '新队形（复制当前）';
+    add.addEventListener('click', () => this.hooks.add());
+    this.el.append(add);
+    this.drawThumbs();
+  }
+  drawThumbs() {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    [...this.el.querySelectorAll('.es-chip')].forEach((chip, i) => {
+      const f = p.formations[i];
+      const cv = chip.querySelector('canvas');
+      const ctx = cv.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      if (cv.width !== 120 * dpr) { cv.width = 120 * dpr; cv.height = 68 * dpr; }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (f) drawScene(ctx, { x: 0, y: 0, w: 120, h: 68 }, p, f.positions, { minimal: true, pad: 4, pairLines: false });
+    });
+  }
+}
+
+// ---------- 音乐模式：波形时间线 ----------
+class MusicTimeline {
+  constructor({ canvas, overlay, scroll, hooks }) {
+    this.cv = canvas; this.ov = overlay; this.scroll = scroll;
+    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), seekBeat(b), audio}
+    this.secPerPx = 0;  // 0 = 自适应
+    this.drag = null;
+    this._bind();
+  }
+  pxPerSec() { return this.secPerPx ? 1 / this.secPerPx : 0; }
+  layoutWidth(p) {
+    const { totalBeats } = computeSegments(p);
+    const totalSec = beatToSec(p, totalBeats) || 10;
+    const w0 = this.scroll.clientWidth || 600;
+    return Math.max(w0, this.secPerPx ? totalSec / this.secPerPx : totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
+  }
+  render() {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const dpr = window.devicePixelRatio || 1;
+    const h = this.scroll.clientHeight || 120;
+    const W = this.layoutWidth(p);
+    for (const c of [this.cv, this.ov]) {
+      c.width = Math.round(W * dpr); c.height = Math.round(h * dpr);
+      c.style.width = W + 'px'; c.style.height = h + 'px';
+    }
+    this.W = W; this.H = h;
+    const ctx = this.cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0b1220';
+    ctx.fillRect(0, 0, W, h);
+    this.drawRuler(ctx, p, h);
+    this.drawWave(ctx, p, h);
+    this.drawBlocks(ctx, p, h);
+    this.drawPlayhead();
+  }
+
+  drawRuler(ctx, p, h) {
+    const pps = this.ppsOf(p);
+    const rulerH = 22;
+    ctx.save();
+    ctx.fillStyle = '#131c31';
+    ctx.fillRect(0, 0, this.W, rulerH);
+    ctx.strokeStyle = '#243049'; ctx.fillStyle = '#8ea2bd';
+    ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
+    const bpb = p.audio.beatsPerBar || 4;
+    const spbV = spb(p);
+    const pxPerBar = bpb * spbV * pps;
+    const barStep = pxPerBar < 26 ? 8 : pxPerBar < 60 ? 4 : 1;
+    const { totalBeats } = computeSegments(p);
+    const totalBars = Math.ceil(beatToSec(p, totalBeats) / spbV / bpb) + 2;
+    ctx.beginPath();
+    for (let bar = 0; bar <= totalBars; bar += barStep) {
+      const x = beatToSec(p, bar * bpb) * pps;
+      ctx.moveTo(x, rulerH - 8); ctx.lineTo(x, h);
+      if (pxPerBar * barStep > 30) ctx.fillText(String(bar + 1), x + 3, rulerH / 2);
+    }
+    // 8拍刻度（舞蹈计数）
+    const pxPer8 = 8 * spbV * pps;
+    if (pxPer8 > 44) {
+      ctx.strokeStyle = 'rgba(56,189,248,.35)';
+      ctx.beginPath();
+      for (let c8 = 0; ; c8++) {
+        const x = beatToSec(p, c8 * 8) * pps;
+        if (x > this.W) break;
+        ctx.moveTo(x, rulerH); ctx.lineTo(x, h);
+        if (pxPer8 > 70) ctx.fillText(`${c8 + 1}个8拍`, x + 3, h - 8);
+      }
+      ctx.stroke();
+    }
+    ctx.stroke();
+    ctx.restore();
+    this.rulerH = rulerH;
+  }
+  drawWave(ctx, p, h) {
+    const audio = this.hooks.audio;
+    const pps = this.ppsOf(p);
+    if (!audio?.peaks) {
+      if (audio?.ready) { // 无波形：画时长条
+        ctx.save();
+        ctx.fillStyle = 'rgba(56,189,248,.15)';
+        ctx.fillRect(0, this.rulerH, (audio.duration || 0) * pps, h - this.rulerH);
+        ctx.restore();
+      }
+      return;
+    }
+    const peaks = audio.peaks;
+    const mid = this.rulerH + (h - this.rulerH) * 0.42;
+    const amp = (h - this.rulerH) * 0.34;
+    ctx.save();
+    ctx.fillStyle = 'rgba(56,189,248,.5)';
+    const step = Math.max(1, Math.floor(this.W / 2000)); // 大宽度下抽稀绘制
+    for (let x = 0; x < this.W; x += step) {
+      const sec = x / pps;
+      const i = Math.floor(sec / (audio.duration || 1) * peaks.length);
+      const v = peaks[Math.max(0, Math.min(peaks.length - 1, i))] || 0;
+      ctx.fillRect(x, mid - v * amp, step, Math.max(1, v * amp * 2));
+    }
+    ctx.restore();
+  }
+  drawBlocks(ctx, p, h) {
+    const { segments } = computeSegments(p);
+    const pps = this.ppsOf(p);
+    const spbV = spb(p);
+    const top = h - 44, bh = 36;
+    const selIdx = this.hooks.getIndex();
+    ctx.save();
+    ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
+    for (const s of segments) {
+      const f = p.formations[s.i];
+      if (!f) continue;
+      const x0 = beatToSec(p, s.holdStart) * pps;
+      const x1 = beatToSec(p, s.holdEnd) * pps;
+      const selected = s.i === selIdx;
+      const hovered = this.hoverSeg === s.i;
+      const holdSec = ((s.holdEnd - s.holdStart) * spbV).toFixed(1).replace(/\.0$/, '');
+      // 保持块
+      ctx.fillStyle = (f.color || '#64748b') + (hovered ? '77' : '55');
+      ctx.fillRect(x0, top, Math.max(2, x1 - x0), bh);
+      ctx.lineWidth = selected ? 2 : 1;
+      ctx.strokeStyle = selected ? '#38bdf8' : (f.color || '#64748b');
+      ctx.strokeRect(x0, top, x1 - x0, bh);
+      if (x1 - x0 > 34) {
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillText(f.name.slice(0, Math.floor((x1 - x0) / 7)), x0 + 4, top + 9);
+      }
+      // 保持时长徽标（拍 + 秒）
+      if (x1 - x0 > 40) {
+        ctx.fillStyle = 'rgba(255,255,255,.92)';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(`${Math.round(s.holdEnd - s.holdStart)}拍·${holdSec}s`, x0 + 4, top + bh - 9);
+        ctx.font = '10px sans-serif';
+      } else if (x1 - x0 > 8) {
+        ctx.fillStyle = 'rgba(255,255,255,.85)';
+        ctx.fillText(`${Math.round(s.holdEnd - s.holdStart)}`, x0 + 2, top + bh - 9);
+      }
+      // 过渡块
+      if (s.hasTravel) {
+        const tx1 = beatToSec(p, s.travelEnd) * pps;
+        const tw = Math.max(1, tx1 - x1);
+        ctx.fillStyle = hovered ? 'rgba(56,189,248,.30)' : 'rgba(148,163,184,.25)';
+        ctx.fillRect(x1, top, tw, bh);
+        ctx.strokeStyle = 'rgba(148,163,184,.5)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x1, top, tw, bh);
+        // 斜线纹理
+        if (tw > 6 && bh > 10) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x1, top, tw, bh); ctx.clip();
+          ctx.strokeStyle = 'rgba(148,163,184,.28)';
+          for (let gx = x1 - bh; gx < x1 + tw; gx += 7) {
+            ctx.moveTo(gx, top + bh); ctx.lineTo(gx + bh, top);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+        const travelBeats = Math.round((s.travelEnd - s.holdEnd) * 10) / 10;
+        const travelSec = ((s.travelEnd - s.holdEnd) * spbV).toFixed(1).replace(/\.0$/, '');
+        const label = `↷过渡${travelBeats}拍·${travelSec}s`;
+        if (tw > label.length * 6 + 6) {
+          ctx.fillStyle = '#cbd5e1';
+          ctx.fillText(label, x1 + 4, top + bh / 2);
+        } else if (tw > 14) {
+          ctx.fillStyle = '#cbd5e1';
+          ctx.fillText('↷' + travelBeats + '拍', x1 + 3, top + bh / 2);
+        } else {
+          // 太窄：标到块右侧外
+          ctx.fillStyle = '#8ea2bd';
+          ctx.fillText('↷' + travelBeats + '拍', tx1 + 3, top + bh / 2);
+        }
+        // 边缘把手（选中块或悬停时显示）
+        if (selected || hovered) {
+          this._drawGrip(ctx, x1, top, bh, 'hold');
+          this._drawGrip(ctx, tx1, top, bh, 'travel');
+        }
+      }
+      // 悬停高亮描边
+      if (hovered && !selected) {
+        ctx.strokeStyle = 'rgba(56,189,248,.8)';
+        ctx.lineWidth = 1.5;
+        const hx1 = s.hasTravel ? beatToSec(p, s.travelEnd) * pps : x1;
+        ctx.strokeRect(x0, top, hx1 - x0, bh);
+      }
+    }
+    ctx.restore();
+    this.blocksTop = top; this.blocksH = bh;
+  }
+  _drawGrip(ctx, x, top, bh, kind) {
+    ctx.save();
+    ctx.fillStyle = kind === 'hold' ? '#38bdf8' : '#a78bfa';
+    ctx.fillRect(x - 2, top - 2, 4, bh + 4);
+    // 把手抓点
+    ctx.fillRect(x - 5, top + bh / 2 - 7, 10, 14);
+    ctx.restore();
+  }
+  drawPlayhead() {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const dpr = window.devicePixelRatio || 1;
+    const ctx = this.ov.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, this.W, this.H);
+    const player = this.hooks.getPlayer();
+    const pps = this.ppsOf(p);
+    const x = beatToSec(p, Math.max(0, player.beat)) * pps;
+    ctx.save();
+    ctx.strokeStyle = '#f43f5e'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, this.H); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x - 5, 0); ctx.lineTo(x + 5, 0); ctx.lineTo(x, 8); ctx.closePath();
+    ctx.fillStyle = '#f43f5e'; ctx.fill();
+    ctx.restore();
+  }
+  ppsOf(p) {
+    if (this.secPerPx) return 1 / this.secPerPx;
+    const { totalBeats } = computeSegments(p);
+    const totalSec = Math.max(beatToSec(p, totalBeats), 5);
+    return this.W / (totalSec + 1);
+  }
+  secToX(sec) { return sec * this.ppsOf(this.hooks.getProject()); }
+  xToBeat(x) {
+    const p = this.hooks.getProject();
+    const sec = x / this.ppsOf(p);
+    return secToBeat(p, sec);
+  }
+  zoom(factor) {
+    const p = this.hooks.getProject();
+    const cur = this.ppsOf(p);
+    const { totalBeats } = computeSegments(p);
+    const totalSec = Math.max(beatToSec(p, totalBeats), 1);
+    const maxPps = 4096 / totalSec; // 画布宽度上限，防止超出浏览器 canvas 尺寸限制
+    this.secPerPx = 1 / Math.min(Math.max(cur * factor, 0.5), maxPps);
+    this.render();
+  }
+  zoomFit() { this.secPerPx = 0; this.render(); }
+
+  _bind() {
+    const cv = this.cv;
+    cv.addEventListener('pointerdown', e => this._down(e));
+    cv.addEventListener('pointermove', e => this._move(e));
+    window.addEventListener('pointerup', e => this._up(e), { passive: true });
+    this.scroll.addEventListener('wheel', e => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        this.zoom(e.deltaY < 0 ? 1.2 : 1 / 1.2);
+      }
+    }, { passive: false });
+  }
+  edgeHits(x) {
+    const p = this.hooks.getProject();
+    const { segments } = computeSegments(p);
+    const pps = this.ppsOf(p);
+    const tol = 10;
+    const hits = [];
+    for (const s of segments) {
+      const hx = beatToSec(p, s.holdEnd) * pps;
+      const tx = beatToSec(p, s.travelEnd) * pps;
+      if (s.hasTravel && Math.abs(x - hx) < tol) hits.push({ kind: 'hold', seg: s });
+      if (s.hasTravel && Math.abs(x - tx) < tol) hits.push({ kind: 'travel', seg: s });
+    }
+    return hits;
+  }
+  _down(e) {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const r = this.cv.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    const edges = this.edgeHits(x);
+    if (edges.length && y > this.rulerH) {
+      try { this.cv.setPointerCapture(e.pointerId); } catch {}
+      this.drag = { ...edges[0], startX: x };
+      return;
+    }
+    if (y <= this.rulerH) {
+      // 尺规：点击/拖动定位
+      try { this.cv.setPointerCapture(e.pointerId); } catch {}
+      this.drag = { kind: 'scrub' };
+      this.hooks.seekBeat(this.xToBeat(x));
+      return;
+    }
+    if (y >= this.blocksTop && y <= this.blocksTop + this.blocksH) {
+      const { segments } = computeSegments(p);
+      const beat = this.xToBeat(x);
+      for (const s of segments) {
+        if (beat >= s.holdStart && beat < s.travelEnd) { this.hooks.onSelectFormation(s.i); return; }
+      }
+    }
+  }
+  _move(e) {
+    const drag = this.drag;
+    if (!drag) {
+      // 悬停反馈：边缘光标 + 块高亮
+      const r = this.cv.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const edges = this.edgeHits(x);
+      this.cv.style.cursor = edges.length ? 'ew-resize' : 'default';
+      let hoverSeg = null;
+      for (const hit of edges) hoverSeg = hit.seg.i;
+      if (hoverSeg === null && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
+        const p = this.hooks.getProject();
+        if (p) {
+          const beat = this.xToBeat(x);
+          for (const s of computeSegments(p).segments) {
+            if (beat >= s.holdStart && beat < s.travelEnd) { hoverSeg = s.i; break; }
+          }
+        }
+      }
+      if (this.hoverSeg !== hoverSeg) { this.hoverSeg = hoverSeg; this.render(); }
+      return;
+    }
+    const p = this.hooks.getProject();
+    const r = this.cv.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const spbV = spb(p);
+    const minBeats = 0.5;
+    if (drag.kind === 'scrub') {
+      this.hooks.seekBeat(this.xToBeat(x));
+      return;
+    }
+    let beat = this.xToBeat(x);
+    // 吸附到整拍
+    beat = Math.round(beat);
+    this.hooks.mutate(proj => {
+      const blk = proj.timeline.blocks[drag.seg.i];
+      const next = proj.timeline.blocks[drag.seg.i + 1];
+      if (drag.kind === 'hold') {
+        const newHold = Math.max(minBeats, beat - drag.seg.holdStart);
+        if (this.hooks.ripple()) {
+          blk.holdBeats = newHold;
+        } else {
+          const d = newHold - (drag.seg.holdEnd - drag.seg.holdStart);
+          blk.holdBeats = newHold;
+          blk.travelBeats = Math.max(0, blk.travelBeats - d); // 压缩自身过渡，后续块不动
+        }
+      } else if (drag.kind === 'travel' && next) {
+        blk.travelBeats = Math.max(minBeats, beat - drag.seg.holdEnd);
+      }
+    });
+    // 更新缓存的 seg 边界，避免累积误差
+    const { segments } = computeSegments(p);
+    drag.seg = segments[drag.seg.i];
+  }
+  _up() {
+    if (this.drag && (this.drag.kind === 'hold' || this.drag.kind === 'travel')) {
+      this.hooks.commitEdit?.('调整时长');
+    }
+    this.drag = null;
+  }
+}
+
+Object.assign(FS.timeline, { EditStrip, MusicTimeline });
+})();
+
+/* ===== module: export ===== */
+FS.exporter = FS.exporter || {};
+FS.exporter = FS.exporter || {};
+(function(){
+'use strict';
+const { drawScene } = FS.stage;
+const { validateProject, beatLabel, computeSegments } = FS.model;
+// 导出：PNG 截图 / 打印 PDF / 项目 JSON 导入导出
+/* import from stage */
+/* import from model */
+function download(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+}
+// 移动端优先走系统分享（可存入文件/云盘/发送给队友），不支持时回退下载
+async function shareOrDownload(blob, filename) {
+  try {
+    const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return 'shared';
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return 'cancelled';
+  }
+  download(blob, filename);
+  return 'downloaded';
+}
+function safeName(s) { return (s || 'project').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60); }
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    rd.onload = () => resolve(String(rd.result).split(',')[1] || '');
+    rd.onerror = () => reject(new Error('音频读取失败'));
+    rd.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(b64, type = 'audio/mpeg') {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
+// 渲染单个队形为离屏画布
+function renderFormation(project, formation, { width = 1000, theme = 'light' } = {}) {
+  const ratio = project.stage.depthM / project.stage.widthM;
+  const cv = document.createElement('canvas');
+  cv.width = width;
+  cv.height = Math.round(width * ratio);
+  const ctx = cv.getContext('2d');
+  drawScene(ctx, { x: 0, y: 0, w: cv.width, h: cv.height }, project, formation.positions, { minimal: false, pad: 20, pairLocked: formation.pairLocked !== false, theme });
+  return cv;
+}
+function exportPNG(project, formation, theme = 'dark') {
+  const cv = renderFormation(project, formation, { theme });
+  cv.toBlob(blob => download(blob, `${safeName(project.meta.title)}-${safeName(formation.name)}.png`));
+}
+// includeAudio=true 时把音乐以 base64 内嵌进项目文件（格式 v2），导入后无需重新找音乐
+async function exportProjectJSON(project, audioBlob, { share = false } = {}) {
+  const data = cloneBasic(project);
+  if (audioBlob) {
+    data.version = 2;
+    data.audio.dataBase64 = await blobToBase64(audioBlob);
+    data.audio.dataFormat = audioBlob.type || 'audio/mpeg';
+  }
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const filename = `${safeName(project.meta.title)}.formation.json`;
+  if (share) await shareOrDownload(blob, filename);
+  else download(blob, filename);
+  return { withAudio: !!audioBlob, bytes: blob.size };
+}
+function cloneBasic(project) {
+  // 音频不内嵌（体积大），仅记录元信息
+  const p = JSON.parse(JSON.stringify(project));
+  delete p.id;
+  return p;
+}
+async function readProjectFile(file) {
+  const text = await file.text();
+  let json;
+  try { json = JSON.parse(text); } catch { throw new Error('不是合法的 JSON 文件'); }
+  // v2 格式：先提取内嵌音乐（validate 会剥离内嵌字段），还原为 Blob
+  let audioBlob = null;
+  if (json.audio && json.audio.dataBase64) {
+    audioBlob = base64ToBlob(String(json.audio.dataBase64), json.audio.dataFormat || 'audio/mpeg');
+    delete json.audio.dataBase64;
+    delete json.audio.dataFormat;
+  }
+  const r = validateProject(json);
+  if (!r.ok) throw new Error(r.errors.join('；'));
+  return { project: r.project, audioBlob };
+}
+
+// 打印 / PDF：每队形一页
+function printFormations(project) {
+  const { segments } = computeSegments(project);
+  const pages = project.formations.map((f, i) => {
+    const cv = renderFormation(project, f, { width: 900, theme: 'light' });
+    const seg = segments[i];
+    const bars = seg ? `第 ${Math.floor(seg.holdStart / 8) + 1} 个8拍 · 保持${Math.round(seg.holdEnd - seg.holdStart)}拍${seg.hasTravel ? ` · 过渡${Math.round(seg.travelEnd - seg.holdEnd)}拍` : ''}` : '';
+    return `<div class="print-page">
+      <h2>${i + 1}. ${escapeHtml(f.name)}</h2>
+      <div class="p-meta">${bars}${f.note ? '\n备注：' + escapeHtml(f.note) : ''}</div>
+      <img src="${cv.toDataURL('image/png')}" alt="${escapeHtml(f.name)}">
+    </div>`;
+  });
+  const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(project.meta.title)} - 队形图</title>
+  <style>
+    body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#0f172a;margin:24px}
+    h1{font-size:20px}
+  </style></head><body>
+  <h1>${escapeHtml(project.meta.title)}</h1>
+  ${pages.join('\n')}
+  <script>window.onload=()=>{setTimeout(()=>window.print(),300)}<\/script>
+  </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { throw new Error('弹窗被拦截，请允许弹出窗口后重试'); }
+  w.document.write(html);
+  w.document.close();
+  return w;
+}
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+Object.assign(FS.exporter, { renderFormation, exportPNG, exportProjectJSON, readProjectFile, printFormations });
+})();
+
+/* ===== module: ui ===== */
+FS.ui = FS.ui || {};
+FS.ui = FS.ui || {};
+(function(){
+'use strict';
+const M = FS.model;
+const { ROLE_NAME } = FS.model;
+const { subscribe } = FS.store;
+const { drawScene } = FS.stage;
+// UI 辅助：DOM 构建、Toast、项目库、新建向导、名册弹窗
+/* import from model */
+/* import from model */
+/* import from store */
+/* import from stage */
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'html') el.innerHTML = v;
+    else if (v !== null && v !== undefined && v !== false) el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of children.flat()) {
+    if (c == null) continue;
+    el.append(c.nodeType ? c : document.createTextNode(c));
+  }
+  return el;
+}
+function toast(msg, ms = 2200) {
+  const box = document.getElementById('toasts');
+  const t = h('div', { class: 'toast' }, msg);
+  box.append(t);
+  setTimeout(() => t.remove(), ms);
+}
+function modal(title, bodyEl, footEls = [], { onClose } = {}) {
+  const root = document.getElementById('modal-root');
+  root.innerHTML = '';
+  root.hidden = false;
+  const close = () => { root.hidden = true; root.innerHTML = ''; onClose?.(); };
+  const back = h('div', { class: 'modal-back', onclick: e => { if (e.target === back) close(); } },
+    h('div', { class: 'modal' },
+      h('h3', {}, title),
+      bodyEl,
+      h('div', { class: 'm-foot' }, ...footEls, h('button', { class: 'btn', onclick: close }, '关闭'))));
+  root.append(back);
+  return { close, back };
+}
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  catch { return ''; }
+}
+
+// ---------- 项目库 ----------
+function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplicate }) {
+  const grid = document.getElementById('library-grid');
+  const empty = document.getElementById('library-empty');
+  grid.innerHTML = '';
+  empty.hidden = projects.length > 0;
+  for (const p of projects) {
+    const cv = h('canvas', { width: 440, height: Math.round(440 * p.stage.depthM / p.stage.widthM) });
+    const f0 = p.formations[0];
+    if (f0) drawScene(cv.getContext('2d'), { x: 0, y: 0, w: cv.width, h: cv.height }, p, f0.positions, { minimal: true, pad: 10, pairLines: false });
+    const card = h('div', { class: 'lib-card' },
+      cv,
+      h('div', { class: 'lc-body' },
+        h('div', { class: 'lc-title' }, p.meta.title || '未命名'),
+        h('div', { class: 'lc-meta' },
+          h('span', {}, `${p.pairs.length}对 · ${p.dancers.length}人 · ${p.formations.length}队形`),
+          h('span', {}, fmtDate(p.meta.updatedAt))),
+        h('div', { class: 'lc-meta' },
+          h('span', {}, p.audio?.name ? '🎵 ' + p.audio.name : '无音乐'),
+          h('button', { class: 'lc-del', title: '删除项目', onclick: e => { e.stopPropagation(); onDelete(p); } }, '🗑'))));
+    card.addEventListener('click', () => onOpen(p));
+    card.addEventListener('contextmenu', e => { e.preventDefault(); onDuplicate(p); });
+    grid.append(card);
+  }
+}
+
+// ---------- 新建项目向导 ----------
+function showNewProjectModal(onCreate) {
+  const title = h('input', { type: 'text', value: '未命名队列舞', style: 'width:100%' });
+  const pairs = h('input', { type: 'number', min: '0', max: '30', value: '6', style: 'width:80px' });
+  const extraM = h('input', { type: 'number', min: '0', max: '30', value: '0', style: 'width:80px' });
+  const extraF = h('input', { type: 'number', min: '0', max: '30', value: '0', style: 'width:80px' });
+  const body = h('div', {},
+    h('div', { class: 'prop-row' }, h('label', {}, '项目名称'), title),
+    h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '舞对数（男女搭档）'), pairs),
+    h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '额外男舞者'), extraM),
+    h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '额外女舞者'), extraF),
+    h('p', { class: 'dim', style: 'margin-top:10px' }, '先建好名单进入编辑器，之后可随时在「名册」中增删舞者、重组舞对。'));
+  const m = modal('新建项目', body, [
+    h('button', { class: 'btn primary', onclick: () => {
+      onCreate({
+        title: title.value.trim() || '未命名队列舞',
+        pairs: Math.max(0, +pairs.value || 0),
+        extraM: Math.max(0, +extraM.value || 0),
+        extraF: Math.max(0, +extraF.value || 0),
+      });
+      m.close();
+    } }, '创建'),
+  ]);
+  title.focus(); title.select();
+}
+
+// ---------- 名册弹窗 ----------
+function showRosterModal({ mutate, toast: t, getProject }) {
+  const wrap = h('div', {});
+  const render = () => {
+    const project = getProject(); // 每次实时取，撤销/重做后引用不会失效
+    wrap.innerHTML = '';
+    // 舞者表
+    const tb = h('tbody', {});
+    project.dancers.forEach(d => {
+      const roleSel = h('select', { onchange: () => mutate(p => { const dd = p.dancers.find(x => x.id === d.id); dd.role = roleSel.value; dd.color = { M: '#3b82f6', F: '#ec4899', X: '#10b981' }[roleSel.value]; }, '修改舞者') },
+        ...Object.entries(ROLE_NAME).map(([v, n]) => h('option', { value: v, ...(d.role === v ? { selected: true } : {}) }, n)));
+      const nameInp = h('input', { type: 'text', value: d.name, onchange: () => mutate(p => { p.dancers.find(x => x.id === d.id).name = nameInp.value; }, '重命名舞者') });
+      const shortInp = h('input', { type: 'text', value: d.short, maxlength: '3', style: 'width:44px', onchange: () => mutate(p => { p.dancers.find(x => x.id === d.id).short = shortInp.value; }, '修改简称') });
+      tb.append(h('tr', {},
+        h('td', {}, nameInp), h('td', {}, shortInp), h('td', {}, roleSel),
+        h('td', {}, h('span', { style: `display:inline-block;width:16px;height:16px;border-radius:50%;background:${d.color};vertical-align:middle` })),
+        h('td', {}, pairLabel(project, d.id)),
+        h('td', {}, h('button', { class: 'btn small danger', onclick: () => {
+          if (!confirm(`删除舞者「${d.name}」？（将从所有队形移除）`)) return;
+          mutate(p => {
+            M.removeDancer(p, d.id);
+          }, '删除舞者');
+          render();
+        } }, '删除'))));
+    });
+    wrap.append(
+      h('div', { class: 'prop-group' },
+        h('div', { class: 'pg-title' }, `舞者（${project.dancers.length}）`),
+        h('table', { class: 'roster-table' },
+          h('thead', {}, h('tr', {}, h('th', {}, '姓名'), h('th', {}, '简称'), h('th', {}, '角色'), h('th', {}, '颜色'), h('th', {}, '舞伴'), h('th', {}, ''))),
+          tb),
+        h('div', { style: 'display:flex;gap:6px;margin-top:8px' },
+          h('button', { class: 'btn small', onclick: () => { mutate(p => { M.addDancer(p, `舞者${p.dancers.length + 1}`, 'X'); }, '添加舞者'); render(); } }, '＋ 单人'),
+          h('button', { class: 'btn small', onclick: () => { mutate(p => { M.addPair(p, `M${p.pairs.length + 1}`, `F${p.pairs.length + 1}`); }, '添加舞对'); render(); } }, '＋ 舞对（男女）'))),
+      // 舞对
+      h('div', { class: 'prop-group', style: 'margin-top:10px' },
+        h('div', { class: 'pg-title' }, `舞对（${project.pairs.length}）`),
+        ...project.pairs.map(pr => {
+          const opts = sel => project.dancers.map(d => h('option', { value: d.id, ...(sel === d.id ? { selected: true } : {}) }, `${d.name}（${ROLE_NAME[d.role]} ${d.short}）`));
+          const lSel = h('select', { onchange: () => mutate(p => { p.pairs.find(x => x.id === pr.id).leader = lSel.value; }, '调整舞对') }, ...opts(pr.leader));
+          const fSel = h('select', { onchange: () => mutate(p => { p.pairs.find(x => x.id === pr.id).follower = fSel.value; }, '调整舞对') }, ...opts(pr.follower));
+          return h('div', { class: 'pair-row' }, h('span', { class: 'dim' }, '对'), lSel, h('span', {}, '—'), fSel,
+            h('button', { class: 'btn small', title: '拆对', onclick: () => { mutate(p => { M.removePair(p, pr.id); }, '拆对'); render(); } }, '拆对'));
+        }),
+        ...unpairedRows(project, mutate, render),
+        h('div', { style: 'display:flex;gap:6px;margin-top:8px' },
+          h('button', { class: 'btn small', onclick: () => { mutate(p => { autoPair(p); }, '自动配对'); render(); } }, '自动配对剩余单人'),
+          h('button', { class: 'btn small', onclick: () => { mutate(p => { M.renameShortsByPair(p); }, '重编号码'); render(); } }, '按舞对重编号码'))));
+  };
+  render();
+  // 撤销/重做会替换 project 对象：引用变化时重渲染弹窗；关闭时退订
+  let unsub = null;
+  if (getProject) {
+    let lastProj = getProject();
+    unsub = subscribe(() => {
+      const np = getProject();
+      if (np && np !== lastProj) { lastProj = np; render(); }
+    });
+  }
+  const m = modal('名册 · 舞者与舞对', wrap, [], { onClose: () => unsub?.() });
+  return m;
+}
+function pairLabel(project, dancerId) {
+  const p = project.pairs.find(q => q.leader === dancerId || q.follower === dancerId);
+  if (!p) return '—';
+  const otherId = p.leader === dancerId ? p.follower : p.leader;
+  const other = project.dancers.find(d => d.id === otherId);
+  return other ? other.name : '—';
+}
+function unpairedRows(project, mutate, render) {
+  const unpaired = project.dancers.filter(d => !project.pairs.some(q => q.leader === d.id || q.follower === d.id));
+  if (!unpaired.length) return [];
+  return [h('div', { class: 'dim', style: 'margin-top:6px' }, `未配对：${unpaired.map(d => d.name).join('、')}`)];
+}
+function autoPair(project) {
+  const unM = project.dancers.filter(d => d.role === 'M' && !project.pairs.some(q => q.leader === d.id || q.follower === d.id));
+  const unF = project.dancers.filter(d => d.role === 'F' && !project.pairs.some(q => q.leader === d.id || q.follower === d.id));
+  const n = Math.min(unM.length, unF.length);
+  for (let i = 0; i < n; i++) {
+    project.pairs.push({ id: `p_${Date.now().toString(36)}_${i}${Math.random().toString(36).slice(2, 5)}`, leader: unM[i].id, follower: unF[i].id });
+  }
+}
+
+Object.assign(FS.ui, { h, toast, modal, fmtDate, renderLibrary, showNewProjectModal, showRosterModal });
+})();
+
+/* ===== module: main ===== */
+FS.main = FS.main || {};
+FS.main = FS.main || {};
+(function(){
+'use strict';
+const store = FS.store;
+const M = FS.model;
+const shapes = FS.shapes;
+const exp = FS.exporter;
+const { StageView, drawScene } = FS.stage;
+const { EditStrip, MusicTimeline } = FS.timeline;
+const { AudioController } = FS.audio;
+const { Player } = FS.player;
+const { renderLibrary, showNewProjectModal, showRosterModal, toast, h } = FS.ui;
+// 应用编排：视图路由、状态订阅渲染、交互接线、快捷键
+/* import from store */
+/* import from model */
+/* import from shapes */
+/* import from stage */
+/* import from timeline */
+/* import from audio */
+/* import from player */
+/* import from export */
+/* import from ui */
+const $ = id => document.getElementById(id);
+const audio = new AudioController();
+let player, stageView, leftStrip, musicTl;
+let propsKey = '', audioPanelBuilt = false;
+
+// ---------- 选择 ----------
+// 选择只作用于被点中的舞者本身；共同移动仅来自框选/多选
+function expandedSelection() {
+  return [...store.getState().selection];
+}
+function selectIds(ids, { add = false, toggleOff = false } = {}) {
+  const s = store.getState();
+  let next;
+  if (add) {
+    const cur = new Set(s.selection);
+    for (const id of ids) { if (toggleOff) cur.delete(id); else cur.add(id); }
+    next = [...cur];
+  } else next = ids;
+  store.setUI({ selection: next });
+}
+function currentFormation() {
+  const s = store.getState();
+  return s.project?.formations[s.formationIndex] || null;
+}
+function stageScene() {
+  const s = store.getState();
+  const p = s.project;
+  // 编辑开关（默认开）：编辑视图优先，舞台始终可拖动；真实播放期间临时切到回放画面
+  // 查看模式（开关关）：舞台始终跟随时间轴播放头，只读
+  const playing = !!(player && player.playing);
+  const showPlayback = s.editMode ? playing : true;
+  const pr = showPlayback && p ? M.posAt(p, player.beat) : null;
+  return {
+    project: p,
+    formation: currentFormation(),
+    formationIndex: s.formationIndex,
+    selection: new Set(expandedSelection()),
+    singleSelected: s.selection.length === 1, // 朝向把手按原始选择判定（舞对联动会扩成 2 个）
+    showGhost: s.showGhost,
+    showPaths: s.showPaths,
+    playbackPos: pr ? pr.positions : null,
+    phase: pr ? pr.phase : 'hold',
+    readOnly: s.editMode ? playing : true,
+    theme: s.theme,
+  };
+}
+
+// ---------- 启动 ----------
+async function boot() {
+  buildStage();
+  buildPlayer();
+  buildStrips();
+  wireTopbar();
+  wireStageTools();
+  wirePlaybar();
+  wireAudioPanel();
+  wireMobileTabs();
+  wireLibrary();
+  wireKeyboard();
+  try {
+    applyTheme(store.getState().theme);
+    await store.init(localStorage.getItem('fs.lastProject') || undefined);
+  } catch (e) {
+    console.error('初始化失败', e);
+    toast('本地存储不可用，已进入空项目库');
+    store.setUI({ view: 'library' });
+  }
+  await restoreAudio(); // 自动恢复上次项目时同步恢复音频
+  render(store.getState());
+  store.subscribe(render);
+}
+function buildStage() {
+  const cv = $('stage-canvas');
+  stageView = new StageView(cv, cv.getContext('2d'), stageScene, {
+    select: selectIds,
+    mutateLive: fn => store.mutate(fn, null),
+    commit: commitWithThumbs,
+  });
+  new ResizeObserver(() => stageView.requestDraw()).observe($('stage-wrap'));
+}
+// 提交历史并刷新队形缩略图
+function commitWithThumbs(label) {
+  store.commit(label);
+  leftStrip?.drawThumbs();
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = theme === 'light' ? '#f1f5f9' : '#0f172a';
+}
+function buildPlayer() {
+  player = new Player({
+    audio,
+    getProject: () => store.getState().project,
+    onTick: t => {
+      const proj0 = store.getState().project;
+      $('pb-pos').textContent = proj0 ? M.beatLabel(proj0, t.beat) : '—';
+      const f = store.getState().project?.formations[t.formationIndex];
+      $('pb-formation').textContent = f ? `${t.formationIndex + 1}. ${f.name}` : '';
+      // 真实播放中高亮跟随节拍；切帧预览/seek 不抢占用户选择的队形
+      if (player.playing && !player.previewing && store.getState().formationIndex !== t.formationIndex) {
+        store.setUI({ formationIndex: t.formationIndex });
+        if (document.getElementById('pb-loop').checked) updateLoop();
+      }
+      stageView?.requestDraw();
+      musicTl?.drawPlayhead();
+    },
+    onPreviewEnd: () => {
+      // 预览结束回到编辑视图：播放头归零，舞台显示当前所选队形
+      player.seekBeat(0);
+      stageView?.requestDraw();
+      musicTl?.drawPlayhead();
+    },
+    onStateChange: ({ playing }) => {
+      $('pb-play').textContent = playing ? '⏸' : '▶';
+      if (!playing) renderUndoButtons();
+    },
+    onCountin: n => {
+      const ov = $('countin-overlay');
+      if (n > 0) { ov.hidden = false; ov.textContent = n; }
+      else ov.hidden = true;
+    },
+  });
+}
+function buildStrips() {
+  const hooks = {
+    getProject: () => store.getState().project,
+    getIndex: () => store.getState().formationIndex,
+    select: i => switchFormation(i),
+    add: () => addFormation(),
+    duplicate: i => addFormation(i),
+    delete: () => deleteFormation(),
+    move: (from, to) => { player.pause(); store.mutate(p => M.moveFormation(p, from, to), '调整队形顺序'); },
+  };
+  leftStrip = new EditStrip($('formation-list'), hooks);
+  musicTl = new MusicTimeline({
+    canvas: $('tl-canvas'), overlay: $('tl-overlay'), scroll: $('tl-scroll'),
+    hooks: {
+      getProject: () => store.getState().project,
+      getPlayer: () => player,
+      audio,
+      getIndex: () => store.getState().formationIndex,
+      ripple: () => store.getState().ripple,
+      onSelectFormation: i => switchFormation(i),
+      mutate: fn => store.mutate(fn, null),
+      commitEdit: label => store.commit(label),
+      seekBeat: b => player.seekBeat(Math.max(0, b)),
+    },
+  });
+}
+// 手动切换队形帧：更新选中；若开启切帧预览，播放一段纯舞台 UI 动画（不经播放引擎、不动播放头/时间线）
+function switchFormation(i) {
+  player.pause(); // 无条件暂停（同时取消进行中的数拍入场）
+  const s = store.getState();
+  const changed = i !== s.formationIndex;
+  store.setUI({ formationIndex: i, selection: [] });
+  if (!s.editMode && player.beat > 0.001) player.seekFormation(i); // 查看模式：切换帧时播放头跟随所选队形
+  if (changed && s.previewOnSwitch && i > 0) {
+    stageView.startPositionsPreview(s.project.formations[i - 1], s.project.formations[i], 700);
+  }
+}
+async function addFormation(after = null) {
+  player.pause();
+  const s = store.getState();
+  const idx = after ?? s.formationIndex;
+  const prevPos = M.clone(s.project.formations[idx]?.positions || {});
+  store.mutate(p => { M.createFormationFrom(p, idx); }, '新队形');
+  const ni = store.getState().formationIndex + 1;
+  store.setUI({ formationIndex: ni, selection: [] });
+  if (s.previewOnSwitch && ni > 0) {
+    // 新帧动效：从上一帧流动到新帧（动线靠插入中间帧表达）
+    const pf = store.getState().project;
+    stageView.startPositionsPreview(pf.formations[ni - 1] || pf.formations[ni], pf.formations[ni], 700);
+  }
+}
+function deleteFormation() {
+  player.pause(); // 停掉进行中的预览/播放，避免 _stopAt 指向已删除的段
+  const s = store.getState();
+  if (s.project.formations.length <= 1) { toast('至少保留一个队形'); return; }
+  store.mutate(p => { M.deleteFormation(p, s.formationIndex); }, '删除队形');
+  store.setUI({ formationIndex: Math.max(0, Math.min(s.formationIndex, s.project.formations.length - 1)), selection: [] });
+}
+
+// ---------- 顶栏 ----------
+function wireTopbar() {
+  $('btn-back').addEventListener('click', async () => { player?.stop(); await store.closeProject(); });
+  $('proj-title').addEventListener('change', () => store.mutate(p => { p.meta.title = $('proj-title').value || '未命名'; }, '重命名项目'));
+  // 右面板 Tab 切换（队形/舞台）
+  document.querySelectorAll('.ptab').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.ptab').forEach(x => x.classList.toggle('active', x === b));
+    $('props-formation').hidden = b.dataset.tab !== 'formation';
+    $('props-stage').hidden = b.dataset.tab !== 'stage';
+  }));
+  $('btn-theme').addEventListener('click', () => {
+    const next = store.getState().theme === 'light' ? 'dark' : 'light';
+    store.setUI({ theme: next });
+    applyTheme(next);
+  });
+  $('btn-roster').addEventListener('click', () => {
+    showRosterModal({ mutate: (fn, label) => store.mutate(fn, label), toast, getProject: () => store.getState().project });
+  });
+  $('btn-undo').addEventListener('click', () => { store.undo(); });
+  $('btn-redo').addEventListener('click', () => { store.redo(); });
+  // 导出菜单
+  const dd = $('export-dd'), menu = dd.querySelector('.dd-menu');
+  $('btn-export').addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+  document.addEventListener('click', () => { menu.hidden = true; });
+  $('exp-png').addEventListener('click', () => { const f = currentFormation(); if (f) exp.exportPNG(store.getState().project, f, store.getState().theme); });
+  $('exp-print').addEventListener('click', () => {
+    try { exp.printFormations(store.getState().project, 'light'); } catch (e) { toast(e.message); }
+  });
+  const doExportJSON = async (includeAudio, share) => {
+    const s = store.getState();
+    let blob = null;
+    if (includeAudio) {
+      try { blob = await store.storage.getAudio(s.projectId); } catch {}
+    }
+    const res = await exp.exportProjectJSON(s.project, blob, { share });
+    if (res === 'cancelled') return;
+    const how = res === 'shared' ? '已通过系统分享发送' : '已导出';
+    const what = includeAudio && blob ? '（含音乐）' : '';
+    toast(`${how}项目文件${what}`);
+  };
+  $('exp-json-audio').addEventListener('click', async () => {
+    const s = store.getState();
+    if (!s.project.audio.name) { toast('当前项目未载入音乐，将导出不含音乐的项目文件'); }
+    let blob = null;
+    try { blob = await store.storage.getAudio(s.projectId); } catch {}
+    if (!blob) { toast('本地未找到音乐文件，请重新载入后再导出含音乐版本'); }
+    await doExportJSON(!!blob, true);
+  });
+  $('exp-json').addEventListener('click', async () => {
+    const s = store.getState();
+    let blob = null;
+    try { blob = await store.storage.getAudio(s.projectId); } catch {}
+    await doExportJSON(!!blob, false);
+  });
+  $('imp-json').addEventListener('click', async () => {
+    const inp = h('input', { type: 'file', accept: '.json,application/json' });
+    inp.addEventListener('change', async () => {
+      if (!inp.files[0]) return;
+      try {
+        const { project, audioBlob } = await exp.readProjectFile(inp.files[0]);
+        store.importProject(project);
+        player.stop();
+        if (audioBlob) {
+          await store.storage.putAudio(store.getState().projectId, audioBlob);
+          await restoreAudio();
+          toast('导入成功（音乐已一并恢复）');
+        } else {
+          toast('导入成功（该项目文件不含音乐，请重新载入音乐）');
+        }
+      } catch (e) { toast('导入失败：' + e.message); }
+    });
+    inp.click();
+  });
+}
+function renderUndoButtons() {
+  $('btn-undo').disabled = !store.canUndo();
+  $('btn-redo').disabled = !store.canRedo();
+  $('btn-undo').style.opacity = store.canUndo() ? 1 : 0.4;
+  $('btn-redo').style.opacity = store.canRedo() ? 1 : 0.4;
+}
+
+// ---------- 舞台工具 ----------
+function wireStageTools() {
+  $('btn-edit-mode').addEventListener('click', () => store.setUI({ editMode: !store.getState().editMode }));
+  // 当前队形的组队呈示切换（组队=菱形单元 / 拆开=独立圆点），含位置收拢/偏移与缺席顺延
+  $('btn-combined').addEventListener('click', () => {
+    const s = store.getState();
+    const f = s.project.formations[s.formationIndex];
+    const next = f.combined === false;
+    store.mutate(p => M.setCombined(p, s.formationIndex, next), next ? '队形组队呈示' : '队形拆开呈示');
+  });
+  $('btn-add-formation').addEventListener('click', () => addFormation());
+  $('btn-del-formation').addEventListener('click', () => deleteFormation());
+  $('gen-kind').addEventListener('change', () => {
+    const kind = $('gen-kind').value;
+    if (!kind) return;
+    applyGenerator(kind);
+    $('gen-kind').value = '';
+  });
+  $('btn-mirror-h').addEventListener('click', () => store.mutate(p => {
+    const f = p.formations[store.getState().formationIndex];
+    shapes.mirrorH(f, p.stage);
+  }, '水平镜像'));
+  $('btn-mirror-v').addEventListener('click', () => store.mutate(p => {
+    const f = p.formations[store.getState().formationIndex];
+    shapes.mirrorV(f, p.stage);
+  }, '垂直镜像'));
+  const rot = $('rot-slider');
+  rot.addEventListener('input', () => {
+    const deg = +rot.value;
+    $('rot-val').textContent = deg + '°';
+    const sel = store.getState().selection;
+    const ids = sel.length ? expandedSelection() : [...currentFormation().positions.keys()];
+    const center = centroid(currentFormation().positions, ids);
+    store.mutate(p => {
+      const f = p.formations[store.getState().formationIndex];
+      shapes.rotateSelected(f.positions, ids, deg - (stageView._lastRot || 0), center);
+    }, null);
+    stageView._lastRot = deg;
+  });
+  rot.addEventListener('change', () => { commitWithThumbs('整体旋转'); stageView._lastRot = 0; rot.value = 0; $('rot-val').textContent = '0°'; });
+  $('btn-distribute').addEventListener('click', () => {
+    const sel = store.getState().selection;
+    const ids = sel.length >= 3 ? expandedSelection() : [];
+    if (ids.length < 3) { toast('请先框选至少 3 名舞者'); return; }
+    store.mutate(p => {
+      const f = p.formations[store.getState().formationIndex];
+      shapes.distributeAxis(f.positions, ids, store.getState().distributeAxis || 'y');
+    }, '等间距');
+  });
+  $('btn-distribute').addEventListener('contextmenu', e => {
+    e.preventDefault();
+    store.setUI({ distributeAxis: store.getState().distributeAxis === 'y' ? 'x' : 'y' });
+    toast('均布方向：' + (store.getState().distributeAxis === 'y' ? '纵向' : '横向') + '（右键切换）');
+  });
+  $('btn-swap').addEventListener('click', () => {
+    // 单元换位：把所选按"舞对/单人"分组，恰好 2 个单元时对调位置
+    const s = store.getState();
+    const units = [];
+    const used = new Set();
+    for (const id of s.selection) {
+      if (used.has(id)) continue;
+      const partner = M.partnerOf(s.project, id);
+      if (partner && s.selection.includes(partner)) { units.push([id, partner]); used.add(partner); }
+      else units.push([id]);
+      used.add(id);
+    }
+    if (units.length !== 2) { toast('请选中两个单元（两名单人或两对舞伴）'); return; }
+    store.mutate(p => {
+      const f = p.formations[s.formationIndex];
+      const [u1, u2] = units;
+      u1.forEach((id, k) => {
+        const other = u2[k];
+        if (!other) return;
+        const pa = f.positions[id], pb = f.positions[other];
+        if (pa && pb) { f.positions[id] = pb; f.positions[other] = pa; }
+      });
+    }, '单元换位');
+  });
+  // 组对 / 拆对（原始选择，不受舞对联动扩展影响）
+  $('btn-pair-create').addEventListener('click', () => {
+    const sel = store.getState().selection;
+    if (sel.length !== 2) { toast('请先选中恰好 2 名舞者'); return; }
+    const [a, b] = sel;
+    if (M.pairOf(store.getState().project, a) || M.pairOf(store.getState().project, b)) { toast('所选舞者已有舞伴，请先拆对'); return; }
+    const da = M.dancerById(store.getState().project, a), db = M.dancerById(store.getState().project, b);
+    const leader = da.role === 'M' ? a : (db.role === 'M' ? b : a);
+    const follower = leader === a ? b : a;
+    store.mutate(p => { M.addPairByIds(p, leader, follower); }, '组成舞对');
+    toast(`已组成舞伴：${da.name} × ${db.name}`);
+  });
+  $('btn-pair-split').addEventListener('click', () => {
+    const s = store.getState();
+    const targets = [...new Set(s.selection.map(id => M.pairOf(s.project, id)).filter(Boolean))];
+    if (!targets.length) { toast('所选舞者没有舞伴绑定'); return; }
+    store.mutate(p => {
+      const ids = new Set(targets.map(t => t.id));
+      p.pairs = p.pairs.filter(x => !ids.has(x.id));
+    }, '拆开舞伴');
+    toast(targets.length > 1 ? `已拆开 ${targets.length} 对舞伴` : '已拆开舞伴（两人保留在队形中）');
+  });
+  $('face-target').addEventListener('change', () => {
+    const t = $('face-target').value;
+    if (!t) return;
+    const sel = store.getState().selection;
+    const ids = sel.length ? expandedSelection() : [...currentFormation().positions.keys()];
+    store.mutate(p => {
+      const f = p.formations[store.getState().formationIndex];
+      shapes.faceAll(f.positions, ids, t === 'partner' ? 'partner' : t, { stage: p.stage, project: p });
+    }, '统一朝向');
+    $('face-target').value = '';
+  });
+  $('btn-ghost').addEventListener('click', () => { store.setUI({ showGhost: !store.getState().showGhost }); });
+  $('btn-paths').addEventListener('click', () => { store.setUI({ showPaths: !store.getState().showPaths }); });
+  $('btn-switch-anim').addEventListener('click', () => { store.setUI({ previewOnSwitch: !store.getState().previewOnSwitch }); });
+  $('btn-fit').addEventListener('click', () => stageView.resetView());
+}
+function centroid(positions, ids) {
+  let x = 0, y = 0, n = 0;
+  for (const id of ids) { const p = positions[id]; if (p) { x += p.x; y += p.y; n++; } }
+  return n ? { x: x / n, y: y / n } : { x: 0, y: 0 };
+}
+function applyGenerator(kind) {
+  const s = store.getState();
+  const unit = $('gen-unit').value;
+  const rows = Number($('gen-rows')?.value) || undefined;
+  store.mutate(p => {
+    const f = p.formations[s.formationIndex];
+    let ids;
+    if (unit === 'men') ids = p.dancers.filter(d => d.role === 'M').map(d => d.id);
+    else if (unit === 'women') ids = p.dancers.filter(d => d.role === 'F').map(d => d.id);
+    else ids = M.orderedDancers(p, unit);
+    const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
+    shapes.applySlots(f, ids, slots, { current: f.positions });
+    // 未参与生成的舞者从上一队形顺延位置（如单人段里的另一半）
+    M.carryPositionsForward(p, s.formationIndex);
+    // 组队呈示的队形：舞对收拢到同一点
+    if (f.combined !== false) {
+      for (const pair of p.pairs) {
+        const a = f.positions[pair.leader], b = f.positions[pair.follower];
+        if (!a || !b) continue;
+        a.x = b.x = Math.round(((a.x + b.x) / 2) * 100) / 100;
+        a.y = b.y = Math.round(((a.y + b.y) / 2) * 100) / 100;
+      }
+    }
+  }, `生成队形(${kind})`);
+}
+
+// ---------- 播放条 ----------
+function wirePlaybar() {
+  $('pb-play').addEventListener('click', () => togglePlay());
+  $('pb-stop').addEventListener('click', () => { player.stop(); store.setUI({}); });
+  $('pb-prev').addEventListener('click', () => stepFormation(-1));
+  $('pb-next').addEventListener('click', () => stepFormation(1));
+  $('pb-speed').addEventListener('change', () => player.setSpeed(+$('pb-speed').value));
+  $('pb-loop').addEventListener('change', () => updateLoop());
+  $('pb-metro').addEventListener('change', () => store.mutate(p => { p.timeline.metronome = $('pb-metro').checked; }, null));
+}
+function updateLoop() {
+  const on = $('pb-loop').checked;
+  const s = store.getState();
+  const { segments } = M.computeSegments(s.project);
+  const seg = segments[s.formationIndex];
+  player.setLoop(!!(on && seg), seg ? seg.holdStart : 0, seg ? seg.travelEnd : 0);
+  if (on && seg && player.beat < seg.holdStart) player.seekBeat(seg.holdStart);
+}
+function togglePlay() {
+  if (player.playing) { player.pause(); return; }
+  const s = store.getState();
+  const { segments } = M.computeSegments(s.project);
+  const seg = segments[s.formationIndex];
+  if (player.beat > 0.001 && !playerAtEnd()) {
+    player.play(null, { countIn: false }); // 暂停后续播
+  } else if (audio.ready) {
+    player.play(seg ? seg.holdStart : 0); // 有音乐：按音乐时钟从当前队形播
+  } else {
+    // 无音乐：虚拟时钟，预览当前队形的保持+过渡
+    player.play(seg ? seg.holdStart : 0, { previewStop: seg && seg.hasTravel ? seg.travelEnd : (seg ? seg.holdEnd : 0), countIn: false, forceVirtual: true });
+  }
+  updateLoop();
+}
+function playerAtEnd() {
+  const { totalBeats } = M.computeSegments(store.getState().project);
+  return player.beat >= totalBeats - 0.001;
+}
+function stepFormation(d) {
+  const s = store.getState();
+  const ni = Math.max(0, Math.min(s.formationIndex + d, s.project.formations.length - 1));
+  switchFormation(ni);
+  if (player.beat > 0.001 && !player.playing) player.seekFormation(ni);
+  if ($('pb-loop').checked) updateLoop(); // 循环区间跟随队形切换
+}
+
+// ---------- 音乐面板 ----------
+let tapTimes = [];
+function wireAudioPanel() {
+  audioPanelBuilt = true;
+  // 移动端默认收起音乐设置面板，节省纵向空间
+  if (window.matchMedia('(max-width: 1023.5px)').matches) $('audio-disc').open = false;
+  $('btn-load-audio').addEventListener('click', () => $('audio-file').click());
+  $('audio-file').addEventListener('change', async () => {
+    const file = $('audio-file').files[0];
+    if (!file) return;
+    await loadAudioFile(file);
+  });
+  $('bpm-input').addEventListener('change', () => store.mutate(p => { p.audio.bpm = Math.max(30, Math.min(300, +$('bpm-input').value || 120)); }, null));
+  $('btn-tap').addEventListener('click', () => {
+    const now = performance.now();
+    if (tapTimes.length && now - tapTimes[tapTimes.length - 1] > 2500) tapTimes = [];
+    tapTimes.push(now);
+    if (tapTimes.length >= 3) {
+      const win = tapTimes.slice(-8);
+      const ivals = [];
+      for (let i = 1; i < win.length; i++) ivals.push(win[i] - win[i - 1]);
+      const avg = ivals.reduce((a, b) => a + b, 0) / ivals.length;
+      const bpm = Math.round(60000 / avg);
+      $('bpm-input').value = bpm;
+      store.mutate(p => { p.audio.bpm = bpm; }, null);
+    }
+    if (tapTimes.length > 10) tapTimes = tapTimes.slice(-8);
+  });
+  $('offset-input').addEventListener('change', () => store.mutate(p => { p.audio.firstBeatSec = Math.max(0, +$('offset-input').value || 0); }, null));
+  $('btn-offset-test').addEventListener('click', () => {
+    if (!audio.ready) { toast('请先载入音乐'); return; }
+    player.pause();
+    const p = store.getState().project;
+    const from = Math.max(0, (p.audio.firstBeatSec || 0) - 2);
+    audio.play(from, 1);
+    setTimeout(() => { if (!player.playing) audio.pause(); }, 4500);
+  });
+  $('bpb-select').addEventListener('change', () => store.mutate(p => { p.audio.beatsPerBar = +$('bpb-select').value; }, null));
+  $('countin-input').addEventListener('change', () => store.mutate(p => { p.timeline.countInBeats = Math.max(0, Math.min(32, +$('countin-input').value || 0)); }, null));
+  // 把当前队形块的起点对齐到播放头时间戳（调整前一段过渡时长）
+  $('btn-align-playhead').addEventListener('click', () => {
+    const s = store.getState();
+    if (s.formationIndex === 0) { toast('第一个队形从 0 拍开始，无需对齐'); return; }
+    const target = player.beat;
+    store.mutate(p => { M.alignBlockStart(p, s.formationIndex, target); }, '对齐到播放头');
+    const actual = M.computeSegments(s.project).segments[s.formationIndex].holdStart;
+    if (Math.abs(actual - target) > 0.5) {
+      toast(`目标不可达：起点已尽量前移到 ${M.beatLabel(s.project, actual)}（${actual.toFixed(1)} 拍）`);
+    } else {
+      toast(`队形 ${s.formationIndex + 1} 起点已对齐到 ${M.beatLabel(s.project, actual)}（${actual.toFixed(1)} 拍）`);
+    }
+  });
+  $('ripple-check').addEventListener('change', () => store.setUI({ ripple: $('ripple-check').checked }));
+  // 块时长快捷步进（±1拍，钳制 0.5–999）
+  const stepBlock = (key, delta) => {
+    const s = store.getState();
+    if (key === 'travelBeats' && s.formationIndex >= s.project.formations.length - 1) return;
+    store.mutate(p => {
+      const b = p.timeline.blocks[s.formationIndex];
+      if (!b) return;
+      b[key] = Math.max(0.5, Math.min(999, (b[key] || 0) + delta));
+    }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
+  };
+  $('bc-hold-minus').addEventListener('click', () => stepBlock('holdBeats', -1));
+  $('bc-hold-plus').addEventListener('click', () => stepBlock('holdBeats', 1));
+  $('bc-travel-minus').addEventListener('click', () => stepBlock('travelBeats', -1));
+  $('bc-travel-plus').addEventListener('click', () => stepBlock('travelBeats', 1));
+  $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
+  $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
+  $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
+  window.addEventListener('resize', () => { stageView?.requestDraw(); musicTl?.render(); });
+}
+async function loadAudioFile(file) {
+  try {
+    await audio.loadBlob(file);
+    const dur = audio.duration;
+    store.mutate(p => { p.audio.name = file.name; p.audio.durationSec = dur; }, '载入音乐');
+    await store.storage.putAudio(store.getState().projectId, file);
+    toast(`音乐已载入：${file.name}`);
+  } catch (e) {
+    toast('音乐载入失败：' + e.message);
+  }
+}
+async function restoreAudio() {
+  const s = store.getState();
+  if (!s.project?.audio?.name) return;
+  try {
+    const blob = await store.storage.getAudio(s.projectId);
+    if (blob) await audio.loadBlob(blob, s.project.audio.name);
+  } catch {}
+}
+
+// ---------- 移动端 Tab ----------
+function wireMobileTabs() {
+  document.querySelectorAll('#mobile-tabs button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#mobile-tabs button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      document.body.dataset.mtab = b.dataset.mtab;
+      setTimeout(() => { stageView?.requestDraw(); musicTl?.render(); }, 60);
+    });
+  });
+  document.body.dataset.mtab = 'stage';
+}
+
+// ---------- 项目库 ----------
+function wireLibrary() {
+  $('btn-new-project').addEventListener('click', () => showNewProjectModal(opts => { store.createNewProject(opts); player.stop(); }));
+}
+function renderLibraryView() {
+  const s = store.getState();
+  renderLibrary($('library-grid'), {
+    projects: s.library,
+    onOpen: p => store.openProject(p.id).then(ok => { if (ok) { player.stop(); restoreAudio(); } }),
+    onDelete: p => { if (confirm(`删除项目「${p.meta.title}」？不可恢复`)) store.deleteProjectById(p.id); },
+    onDuplicate: p => store.duplicateProject(p.id),
+    onNew: () => showNewProjectModal(opts => { store.createNewProject(opts); player.stop(); }),
+  });
+}
+
+// ---------- 属性面板 ----------
+function buildProps() {
+  const s = store.getState();
+  const f = currentFormation();
+  if (!f) return;
+  const durKey = s.project.timeline.blocks.map(b => `${b.holdBeats}:${b.travelBeats}`).join(',');
+  const key = `${s.project.formations.map(x => x.id).join(',')}|${s.formationIndex}|${s.selection.join(',')}|${durKey}|${f.combined !== false}`;
+  if (key === propsKey) return;
+  propsKey = key;
+  // 队形页
+  const page = $('props-formation');
+  page.innerHTML = '';
+  page.append(
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, `队形 ${s.formationIndex + 1} / ${s.project.formations.length}`),
+      h('div', { class: 'prop-row' }, h('label', {}, '名称'),
+        h('input', { type: 'text', value: f.name, onchange: e => store.mutate(p => { p.formations[s.formationIndex].name = e.target.value; }, '重命名队形') })),
+      h('div', { class: 'prop-row' }, h('label', {}, '颜色'),
+        h('input', { type: 'color', value: f.color, onchange: e => store.mutate(p => { p.formations[s.formationIndex].color = e.target.value; }, '队形颜色') })),
+      // 时间轴时长：保持/过渡可独立调整（决定音乐里这段队形的快慢）
+      (() => {
+        const blk = s.project.timeline.blocks[s.formationIndex];
+        const hasNext = s.formationIndex < s.project.formations.length - 1;
+        const setDur = (key, v) => store.mutate(p => {
+          const b = p.timeline.blocks[s.formationIndex];
+          const n = Number(v);
+          b[key] = Number.isFinite(n) ? Math.max(0.5, Math.min(999, n)) : b[key];
+        }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
+        return h('div', { class: 'prop-group' },
+          h('div', { class: 'pg-title' }, '时间轴时长（拍）'),
+          h('div', { class: 'prop-row' }, h('label', {}, '保持到下一队形前'),
+            h('input', { type: 'number', min: '0.5', max: '999', step: '1', value: blk.holdBeats, onchange: e => setDur('holdBeats', e.target.value) })),
+          hasNext ? h('div', { class: 'prop-row' }, h('label', {}, '变换到下一队形'),
+            h('input', { type: 'number', min: '0.5', max: '999', step: '1', value: blk.travelBeats, onchange: e => setDur('travelBeats', e.target.value) }))
+            : h('div', { class: 'dim' }, '最后一个队形，无过渡'),
+          h('div', { class: 'dim' }, '过渡越长变换越慢；与切帧预览的界面动画互不影响'));
+      })(),
+      h('div', { class: 'prop-row' },
+        h('button', { class: 'btn small', onclick: () => moveFormationRel(-1), disabled: s.formationIndex === 0 }, '↑ 上移'),
+        h('button', { class: 'btn small', onclick: () => moveFormationRel(1), disabled: s.formationIndex === s.project.formations.length - 1 }, '↓ 下移')),
+      h('div', { class: 'prop-row' }, h('label', {}, '备注'), ),
+      h('textarea', { class: 'note', placeholder: '这一段的动作要点…', onchange: e => store.mutate(p => { p.formations[s.formationIndex].note = e.target.value; }, '队形备注') }, f.note || '')),
+    selectionProps(f, s));
+  // 舞台页
+  const st = s.project.stage;
+  const sp = $('props-stage');
+  sp.innerHTML = '';
+  sp.append(
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '舞台尺寸（米）'),
+      h('div', { class: 'prop-row' }, h('label', {}, '宽'), h('input', { type: 'number', min: '4', max: '50', step: '0.5', value: st.widthM, onchange: e => stageChange('widthM', e.target.value) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '深'), h('input', { type: 'number', min: '4', max: '50', step: '0.5', value: st.depthM, onchange: e => stageChange('depthM', e.target.value) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '后台区'), h('input', { type: 'number', min: '0', max: '10', step: '0.5', value: st.backstageM, onchange: e => stageChange('backstageM', e.target.value) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '观众方向'),
+        h('select', { onchange: e => stageChange('audience', e.target.value) },
+          ...['bottom', 'top', 'left', 'right'].map(v => h('option', { value: v, ...(st.audience === v ? { selected: true } : {}) }, { bottom: '下方', top: '上方', left: '左侧', right: '右侧' }[v]))))),
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '网格'),
+      h('div', { class: 'prop-row' }, h('label', {}, '网格间距'), h('input', { type: 'number', min: '0.1', max: '2', step: '0.1', value: st.gridM, onchange: e => stageChange('gridM', e.target.value) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '拖动吸附'), h('input', { type: 'checkbox', ...(st.snap ? { checked: true } : {}), onchange: e => stageChange('snap', e.target.checked) }))),
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '背景图'),
+      h('div', { class: 'prop-row' },
+        h('button', { class: 'btn small', onclick: () => {
+          const inp = h('input', { type: 'file', accept: 'image/*' });
+          inp.addEventListener('change', () => {
+            const file = inp.files[0]; if (!file) return;
+            const rd = new FileReader();
+            rd.onload = () => stageChange('bgImage', { src: rd.result });
+            rd.readAsDataURL(file);
+          });
+          inp.click();
+        } }, '上传背景…'),
+        st.bgImage ? h('button', { class: 'btn small', onclick: () => stageChange('bgImage', null) }, '清除') : null)));
+}
+const STAGE_NUMERIC_KEYS = new Set(['widthM', 'depthM', 'backstageM', 'gridM']);
+function stageChange(k, v) {
+  // number input 的 value 是字符串：必须转数值，否则坐标拼接/钳制/网格全部损坏
+  stageView.view = null; // 先复位视图，再触发重绘
+  store.mutate(p => {
+    p.stage[k] = STAGE_NUMERIC_KEYS.has(k) ? (Number(v) || p.stage[k]) : v;
+  }, '舞台设置');
+}
+function moveFormationRel(d) {
+  const s = store.getState();
+  const to = s.formationIndex + d;
+  if (to < 0 || to >= s.project.formations.length) return;
+  store.mutate(p => { M.moveFormation(p, s.formationIndex, to); }, '调整队形顺序');
+  store.setUI({ formationIndex: to, selection: [] });
+}
+function selectionProps(f, s) {
+  const sel = s.selection;
+  const group = h('div', { class: 'prop-group' });
+  group.append(h('div', { class: 'pg-title' }, `选中 ${sel.length} 人`));
+  if (!sel.length) {
+    group.append(h('div', { class: 'dim' }, '点击/框选舞者进行编辑；舞对锁定时自动带上舞伴。'));
+    return group;
+  }
+  for (const id of sel.slice(0, 8)) {
+    const d = M.dancerById(s.project, id);
+    const p = f.positions[id];
+    if (!d || !p) continue;
+    group.append(h('div', { class: 'prop-row' },
+      h('label', { style: `color:${d.color};font-weight:600` }, `${d.short} ${d.name}`),
+      h('span', { class: 'ctl' }, '朝向',
+        h('input', { type: 'number', min: '0', max: '359', value: Math.round(p.facing), style: 'width:56px', onchange: e => store.mutate(pr => { const ff = pr.formations[s.formationIndex]; if (ff.positions[id]) ff.positions[id].facing = +e.target.value || 0; }, '调整朝向') }))));
+  }
+  if (sel.length > 8) group.append(h('div', { class: 'dim' }, `…等 ${sel.length} 人`));
+  return group;
+}
+
+// ---------- 快捷键 ----------
+function wireKeyboard() {
+  document.addEventListener('keydown', e => {
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (store.getState().view !== 'editor') return;
+    const s = store.getState();
+    if (e.code === 'Space') { e.preventDefault(); togglePlay(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) store.redo(); else store.undo();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
+    if (e.key === 'Escape') { store.setUI({ selection: [] }); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // 其余单键快捷键不与浏览器/系统修饰键冲突
+    if (e.key.toLowerCase() === 'e') { store.setUI({ editMode: !s.editMode }); return; } // 编辑开关
+    if (!s.editMode) return; // 查看模式下禁用编辑类快捷键
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (s.selection.length) {
+        e.preventDefault();
+        store.mutate(p => {
+          const f = p.formations[s.formationIndex];
+          for (const id of s.selection) delete f.positions[id];
+        }, '移出队形');
+        store.setUI({ selection: [] });
+      }
+      return;
+    }
+    if (e.key.toLowerCase() === 'd') { addFormation(); return; }
+    if (e.key.toLowerCase() === 'g') { store.mutate(p => { p.stage.snap = !p.stage.snap; }, '切换吸附'); return; }
+    if (e.key.toLowerCase() === 'f') {
+      const ids = s.selection.length ? expandedSelection() : [...currentFormation().positions.keys()];
+      store.mutate(p => {
+        shapes.faceAll(p.formations[s.formationIndex].positions, ids, 'audience', { stage: p.stage, project: p });
+      }, '面向观众');
+      return;
+    }
+    if (e.key.startsWith('Arrow') && s.selection.length) {
+      e.preventDefault();
+      const step = e.shiftKey ? 1 : (s.project.stage.snap ? s.project.stage.gridM : 0.1);
+      const dx = e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0;
+      const dy = e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0;
+      const bs = s.project.stage.backstageM ?? 0;
+      store.mutate(p => {
+        const f = p.formations[s.formationIndex];
+        for (const id of expandedSelection()) {
+          const q = f.positions[id];
+          if (q) {
+            q.x = Math.min(p.stage.widthM + bs, Math.max(-bs, q.x + dx));
+            q.y = Math.min(p.stage.depthM + bs, Math.max(-bs, q.y + dy));
+          }
+        }
+      }, '微调位置');
+    }
+  });
+}
+
+// ---------- 移动端队形索引条 ----------
+function fitThumbView(w, h, stage) {
+  const b = { x0: -(stage.backstageM ?? 0), y0: -(stage.backstageM ?? 0), x1: stage.widthM + (stage.backstageM ?? 0), y1: stage.depthM + (stage.backstageM ?? 0) };
+  const scale = Math.min((w - 8) / (b.x1 - b.x0), (h - 8) / (b.y1 - b.y0));
+  return { scale, ox: (w - (b.x1 - b.x0) * scale) / 2 - b.x0 * scale, oy: (h - (b.y1 - b.y0) * scale) / 2 - b.y0 * scale };
+}
+let indexKey = '';
+function renderFormationIndex(state) {
+  const host = document.getElementById('formation-index');
+  if (!host) return;
+  const p = state.project;
+  if (!p) { host.innerHTML = ''; return; }
+  const key = p.formations.map(f => f.id).join(',') + '|' + state.formationIndex;
+  if (key !== indexKey) {
+    indexKey = key;
+    host.innerHTML = '';
+    p.formations.forEach((f, i) => {
+      const chip = document.createElement('button');
+      chip.className = 'fi-chip' + (i === state.formationIndex ? ' active' : '');
+      chip.title = (i + 1) + ' ' + f.name;
+      // 迷你缩略图（形状是最强的视觉记忆点）
+      const cv = document.createElement('canvas');
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      cv.width = 128 * dpr; cv.height = 72 * dpr;
+      cv.style.width = '64px'; cv.style.height = '36px';
+      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, pairLines: false, view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
+      const label = document.createElement('span');
+      label.className = 'fi-label';
+      label.textContent = (i + 1) + ' ' + f.name;
+      chip.append(cv, label);
+      chip.addEventListener('click', () => switchFormation(i));
+      host.append(chip);
+    });
+  }
+  // 当前帧滚入可视区
+  const active = host.children[state.formationIndex];
+  if (active) {
+    const hr = host.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    if (ar.left < hr.left || ar.right > hr.right) {
+      host.scrollLeft += ar.left - (hr.left + hr.width / 2) + ar.width / 2;
+    }
+  }
+}
+
+// ---------- 总渲染 ----------
+let audioVals = {};
+function render(state) {
+  const isLib = state.view === 'library';
+  $('library-view').hidden = isLib ? false : true;
+  $('editor-view').hidden = isLib ? true : false;
+  if (isLib) { renderLibraryView(); return; }
+  const p = state.project;
+  if (!p) return;
+  // 顶栏
+  if (document.activeElement !== $('proj-title')) $('proj-title').value = p.meta.title;
+  renderUndoButtons();
+  // 工具按钮状态
+  $('btn-edit-mode').classList.toggle('toggled-on', state.editMode);
+  $('btn-ghost').classList.toggle('toggled-on', state.showGhost);
+  $('btn-paths').classList.toggle('toggled-on', state.showPaths);
+  $('btn-switch-anim').classList.toggle('toggled-on', state.previewOnSwitch);
+  $('btn-theme').textContent = state.theme === 'light' ? '☀️' : '🌙';
+  const curF = state.project?.formations[state.formationIndex];
+  const combinedNow = curF ? curF.combined !== false : true;
+  $('btn-combined').classList.toggle('toggled-on', combinedNow);
+  $('btn-combined').textContent = combinedNow ? '⛓ 组队' : '⇱ 拆开';
+  // 组对/拆对按钮可用性（按原始选择）
+  $('btn-pair-create').disabled = state.selection.length !== 2;
+  $('btn-pair-split').disabled = !state.selection.some(id => M.pairOf(p, id));
+  $('formation-count').textContent = `${p.formations.length}`;
+  renderFormationIndex(state);
+  // 面板（统一时间线：编队条 + 波形时间线常驻）
+  leftStrip.render();
+  buildProps();
+  musicTl.render();
+  // 音频面板
+  if (document.activeElement !== $('bpm-input')) $('bpm-input').value = Math.round(p.audio.bpm);
+  if (document.activeElement !== $('offset-input')) $('offset-input').value = p.audio.firstBeatSec || 0;
+  $('bpb-select').value = String(p.audio.beatsPerBar || 4);
+  if (document.activeElement !== $('countin-input')) $('countin-input').value = p.timeline.countInBeats ?? 8;
+  $('ripple-check').checked = state.ripple;
+  $('pb-metro').checked = !!p.timeline.metronome;
+  // 块时长快捷栏
+  const blk = p.timeline.blocks[state.formationIndex];
+  if (blk) {
+    const fmtB = v => String(Math.round(v * 10) / 10);
+    const spbv = M.spb(p);
+    const fmtS = v => (v * spbv).toFixed(1).replace(/\.0$/, '');
+    const isLast = state.formationIndex >= p.formations.length - 1;
+    $('bc-name').textContent = `${state.formationIndex + 1}. ${currentFormation()?.name || ''}`;
+    $('bc-hold').textContent = `${fmtB(blk.holdBeats)}拍·${fmtS(blk.holdBeats)}s`;
+    $('bc-travel').textContent = `${fmtB(blk.travelBeats)}拍·${fmtS(blk.travelBeats)}s`;
+    $('bc-travel-wrap').style.display = isLast ? 'none' : '';
+    $('bc-hold-minus').disabled = blk.holdBeats <= 0.5;
+    $('bc-travel-minus').disabled = !isLast && blk.travelBeats <= 0.5;
+    $('bc-travel-plus').disabled = isLast;
+    $('bc-sec').textContent = `（${M.beatLabel(p, 0)} 起 · 共 ${M.totalDurationSec(p).toFixed(1)}s）`;
+  }
+  $('audio-name').textContent = audio.ready ? `${p.audio.name} (${(p.audio.durationSec || 0).toFixed(1)}s)` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
+  $('pb-formation').textContent = currentFormation() ? `${state.formationIndex + 1}. ${currentFormation().name}` : '';
+  // 播放暂停后按钮态
+  $('pb-play').textContent = player.playing ? '⏸' : '▶';
+  stageView.requestDraw();
+}
+
+boot();
+
+// 自动化测试钩子（不影响正常使用）：注入音频、读取状态
+window.__fs = {
+  store, player: () => player, audio, M, shapes, exp,
+  stageView: () => stageView,
+  musicTl: () => musicTl,
+  async loadAudioUrl(url, name = 'test.wav') {
+    const r = await fetch(url);
+    const b = await r.blob();
+    await loadAudioFile(new File([b], name, { type: b.type || 'audio/wav' }));
+    return audio.ready;
+  },
+  drawScene: (ctx, rect, project, positions, opts) => drawScene(ctx, rect, project, positions, opts || {}),
+  snapshot() {
+    const s = store.getState();
+    return {
+      view: s.view, formationIndex: s.formationIndex,
+      selection: s.selection,
+      dancers: s.project?.dancers.length, pairs: s.project?.pairs.length,
+      formations: s.project?.formations.map(f => ({ name: f.name, n: Object.keys(f.positions).length })),
+      positions: currentFormation()?.positions,
+      blocks: s.project?.timeline.blocks,
+      audio: { name: s.project?.audio.name, bpm: s.project?.audio.bpm, ready: audio.ready, duration: audio.duration },
+      beat: player?.beat, playing: player?.playing,
+    };
+  },
+};
+
+
+})();
+
+</script>
+</body>
+</html>

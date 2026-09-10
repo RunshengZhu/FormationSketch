@@ -1,0 +1,5 @@
+# 测试音频可由 npm run gen:wav 重新生成
+tests/fixtures/*.wav
+# 日志与系统文件
+*.log
+.DS_Store
