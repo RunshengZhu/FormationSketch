@@ -114,25 +114,65 @@ export function carryPositionsForward(project, index) {
     f.positions[d.id] = found || { x: widthM / 2, y: depthM / 2, facing: faceAudience(project.stage) };
   }
 }
+// ---------- 帧内合并单元（任意两名舞者合为一个呈示符号） ----------
+export const UNIT_STYLES = ['capsule', 'diamond', 'twin'];
+export const mergeKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+export function findMerge(formation, idA, idB) {
+  const key = mergeKey(idA, idB);
+  return (formation.merges || []).find(m => mergeKey(m.a, m.b) === key) || null;
+}
+export function addMerge(formation, idA, idB, style = 'capsule') {
+  if (idA === idB || findMerge(formation, idA, idB)) return null;
+  if (!UNIT_STYLES.includes(style)) style = 'capsule';
+  const m = { a: idA, b: idB, style };
+  (formation.merges = formation.merges || []).push(m);
+  return m;
+}
+export function removeMerge(formation, idA, idB) {
+  const key = mergeKey(idA, idB);
+  formation.merges = (formation.merges || []).filter(m => mergeKey(m.a, m.b) !== key);
+}
+export function setMergeStyle(formation, idA, idB, style) {
+  const m = findMerge(formation, idA, idB);
+  if (m && UNIT_STYLES.includes(style)) m.style = style;
+}
+// 把一对舞伴收拢/拆开到标准间距（用于生成器后处理与呈示切换）
+export function collapsePair(f, idA, idB) {
+  const a = f.positions[idA], b = f.positions[idB];
+  if (!a || !b) return;
+  const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
+  const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
+  a.x = b.x = mx; a.y = b.y = my;
+}
 // 切换队形帧的组队呈示状态：
-// combined=true（组队）：每对收拢到同一位置（渲染为菱形单元）
-// combined=false（拆队）：每对左右偏移分开（渲染为两个独立圆点），并补齐缺席舞者位置
+// 组队：名册舞对自动建合并单元并收拢；拆队：移除全部合并单元并按标准间距拆开
 export function setCombined(project, index, combined) {
   const f = project.formations[index];
   if (!f) return;
   f.combined = !!combined;
-  carryPositionsForward(project, index); // 两个方向都先补齐缺席舞者（从上一队形顺延）
-  for (const pair of project.pairs) {
-    const a = f.positions[pair.leader], b = f.positions[pair.follower];
-    if (!a || !b) continue;
-    const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
-    const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
-    if (combined) {
-      a.x = b.x = mx; a.y = b.y = my; // 收拢到同一点（菱形单元）
-    } else {
-      a.x = Math.round((mx - 0.3) * 100) / 100; b.x = Math.round((mx + 0.3) * 100) / 100; // 标准间距拆开（幂等）
+  applyFormationLayout(project, index);
+}
+// 帧布局归一：补齐缺席舞者 + 按组队状态收拢/拆开
+export function applyFormationLayout(project, index) {
+  const f = project.formations[index];
+  if (!f) return;
+  carryPositionsForward(project, index);
+  if (f.combined !== false) {
+    for (const pair of project.pairs) {
+      if (!f.positions[pair.leader] || !f.positions[pair.follower]) continue;
+      if (!findMerge(f, pair.leader, pair.follower)) addMerge(f, pair.leader, pair.follower, 'capsule');
+    }
+    for (const m of f.merges || []) collapsePair(f, m.a, m.b);
+  } else {
+    for (const m of f.merges || []) {
+      const a = f.positions[m.a], b = f.positions[m.b];
+      if (!a || !b) continue;
+      const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
+      const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
+      a.x = Math.round((mx - 0.35) * 100) / 100; b.x = Math.round((mx + 0.35) * 100) / 100;
       a.y = b.y = my;
     }
+    f.merges = [];
   }
 }
 // 帧的组队呈示状态（缺省视为组队）
@@ -185,6 +225,7 @@ export function createFormationFrom(project, srcIndex, { name } = {}) {
     color: ['#0ea5e9', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'][project.formations.length % 6],
     note: src?.note || '', 
     positions: src ? clone(src.positions) : {},
+    merges: src && src.merges ? clone(src.merges) : [],
   };
   if (srcIndex >= 0 && srcIndex < project.formations.length - 1) project.formations.splice(srcIndex + 1, 0, f);
   else project.formations.push(f);
@@ -349,6 +390,12 @@ export function validateProject(json) {
     const np = {};
     for (const [k, v] of Object.entries(f.positions)) if (dids.has(k) && v && typeof v.x === 'number' && typeof v.y === 'number' && Number.isFinite(v.x) && Number.isFinite(v.y)) np[k] = { x: v.x, y: v.y, facing: ((v.facing || 0) % 360 + 360) % 360 };
     f.positions = np;
+    // 合并单元清洗：引用有效、去重、样式合法
+    if (Array.isArray(f.merges)) {
+      const seen = new Set();
+      f.merges = f.merges.filter(m => m && dids.has(m.a) && dids.has(m.b) && m.a !== m.b && UNIT_STYLES.includes(m.style) && !seen.has(mergeKey(m.a, m.b)) && (seen.add(mergeKey(m.a, m.b)), true)).slice(0, 32);
+      if (!f.merges.length) delete f.merges;
+    } else delete f.merges;
   }
   syncTimeline(p);
   return { ok: errors.length === 0, errors, project: p };

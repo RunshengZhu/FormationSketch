@@ -63,7 +63,7 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
   }
 
   // 网格
-  const g = project.stage.gridM || 0.5;
+  const g = opts.showGrid === false ? 0 : (project.stage.gridM || 0.5);
   if (!opts.minimal && g > 0) {
     ctx.save();
     ctx.strokeStyle = 'rgba(148,163,184,.25)'; ctx.lineWidth = 1;
@@ -174,29 +174,58 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.arcTo(x, y, x + w, y, rad);
     ctx.closePath();
   };
-  // 舞对徽标：圆角矩形，左半=引带色+编号，右半=跟随色+编号
-  function drawPairBadge(pair, a, b, sel, alpha) {
+  // 合并单元符号：capsule=圆角矩形 / diamond=菱形 / twin=双圆，左右各色+编号
+  function drawUnitSymbol(style, idA, idB, a, b, sel, alpha) {
     const cx = (X(a.x) + X(b.x)) / 2, cy = (Y(a.y) + Y(b.y)) / 2;
-    const w = r * 3.4, hh = r * 1.5;
-    const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;
-    const dL = dancerById(pair.leader), dF = dancerById(pair.follower);
+    const dA = dancerById(idA), dB = dancerById(idB);
     ctx.save();
     if (alpha !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    ctx.save();
-    rrPath(x0, y0, w, hh, rad); ctx.clip();
-    ctx.fillStyle = dL?.color || '#64748b'; ctx.fillRect(x0, y0, w / 2, hh);
-    ctx.fillStyle = dF?.color || '#94a3b8'; ctx.fillRect(x0 + w / 2, y0, w / 2, hh);
-    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(cx - 1, y0, 2, hh); // 中缝
-    ctx.restore();
-    rrPath(x0, y0, w, hh, rad);
-    ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
-    ctx.strokeStyle = sel ? '#0ea5e9' : (dark ? '#f8fafc' : '#334155');
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `700 ${Math.max(8, hh * 0.62)}px sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(dL?.short || '?', cx - w * 0.25, cy + hh * 0.02);
-    ctx.fillText(dF?.short || '?', cx + w * 0.25, cy + hh * 0.02);
+    if (style === 'diamond') {
+      const h = r * 1.9;
+      const T = [cx, cy - h], Rt = [cx + h, cy], B = [cx, cy + h], L = [cx - h, cy], C = [cx, cy];
+      const poly = pts => { ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); };
+      poly([T, L, C]); ctx.fillStyle = dA?.color || '#64748b'; ctx.fill();
+      poly([T, C, B, Rt]); ctx.fillStyle = dB?.color || '#94a3b8'; ctx.fill();
+      poly([T, Rt, B, L]);
+      ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
+      ctx.strokeStyle = sel ? '#0ea5e9' : '#f8fafc';
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${Math.max(8, h * 0.42)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(dA?.short || '?', cx - h * 0.42, cy);
+      ctx.fillText(dB?.short || '?', cx + h * 0.42, cy);
+    } else if (style === 'twin') {
+      const rr = r * 1.08;
+      for (const [id, px, py] of [[idA, cx - rr * 0.62, cy], [idB, cx + rr * 0.62, cy]]) {
+        const d = dancerById(id);
+        ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2);
+        ctx.fillStyle = d?.color || '#64748b'; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#f8fafc'; ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = `700 ${Math.max(8, rr * 0.8)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(d?.short || '?', px, py);
+      }
+    } else { // capsule 圆角矩形
+      const w = r * 3.4, hh = r * 1.5;
+      const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;
+      ctx.save();
+      rrPath(x0, y0, w, hh, rad); ctx.clip();
+      ctx.fillStyle = dA?.color || '#64748b'; ctx.fillRect(x0, y0, w / 2, hh);
+      ctx.fillStyle = dB?.color || '#94a3b8'; ctx.fillRect(x0 + w / 2, y0, w / 2, hh);
+      ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(cx - 1, y0, 2, hh); // 中缝
+      ctx.restore();
+      rrPath(x0, y0, w, hh, rad);
+      ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
+      ctx.strokeStyle = sel ? '#0ea5e9' : (dark ? '#f8fafc' : '#334155');
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${Math.max(8, hh * 0.62)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(dA?.short || '?', cx - w * 0.25, cy + hh * 0.02);
+      ctx.fillText(dB?.short || '?', cx + w * 0.25, cy + hh * 0.02);
+    }
     ctx.restore();
   };
   function drawBond(a, b, alpha = 1) {
@@ -210,26 +239,24 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.restore();
   };
 
-  // 先画配对单元（徽标或双圆+虚线），再画未配对单人
-  for (const pair of project.pairs) {
-    const a = positions[pair.leader], b = positions[pair.follower];
-    if (!a || !b) { // 一方缺席（仅男/仅女段）：存在的一方照常呈示
-      if (a) drawOne(pair.leader, a, X(a.x), Y(a.y), r, inSel(pair.leader));
-      if (b) drawOne(pair.follower, b, X(b.x), Y(b.y), r, inSel(pair.follower));
-      continue;
-    }
-    const sel = inSel(pair.leader) || inSel(pair.follower);
-    const together = Math.hypot(a.x - b.x, a.y - b.y) <= MERGE_DIST;
-    if (together) {
-      drawPairBadge(pair, a, b, sel);
+  // 合并单元（帧级 merges）：接近=合并符号，分离=两圆+虚线（"拉伸的合并"）
+  for (const m of opts.merges || []) {
+    const a = positions[m.a], b = positions[m.b];
+    if (!a || !b) continue;
+    const sel = inSel(m.a) || inSel(m.b);
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (d <= MERGE_DIST) {
+      drawUnitSymbol(m.style, m.a, m.b, a, b, sel);
     } else {
       drawBond(a, b);
-      drawOne(pair.leader, a, X(a.x), Y(a.y), r, inSel(pair.leader));
-      drawOne(pair.follower, b, X(b.x), Y(b.y), r, inSel(pair.follower));
+      drawOne(m.a, a, X(a.x), Y(a.y), r, inSel(m.a));
+      drawOne(m.b, b, X(b.x), Y(b.y), r, inSel(m.b));
     }
   }
+  // 未合并舞者（单圆）
+  const mergedIds = new Set((opts.merges || []).flatMap(m => [m.a, m.b]));
   for (const [id, p] of Object.entries(positions)) {
-    if (project.pairs.some(pa => pa.leader === id || pa.follower === id)) continue;
+    if (mergedIds.has(id)) continue;
     drawOne(id, p, X(p.x), Y(p.y), r, inSel(id));
   }
   return view;
@@ -365,6 +392,7 @@ export class StageView {
       view: this.view,
       ghost, nextPositions,
       selection: scene.selection,
+      showGrid: scene.showGrid,
       theme: scene.theme,
       pad: 16,
       onImageLoad: () => this.requestDraw(),
@@ -385,7 +413,7 @@ export class StageView {
 
     // 朝向把手（恰好选中一名舞者且非播放）
     this.handlePx = null;
-    if (scene.singleSelected && scene.selection?.size >= 1 && !scene.playbackPos && !scene.readOnly) {
+    if (scene.facingHandle && scene.singleSelected && scene.selection?.size >= 1 && !scene.playbackPos && !scene.readOnly) {
       const id = [...scene.selection][0];
       const p = positions[id];
       if (p) {
@@ -406,6 +434,57 @@ export class StageView {
         ctx.restore();
       }
     }
+  }
+
+  // ---- 手势：长按合并单元弹浮窗；拖拽重叠 2s 弹合并确认 ----
+  _armLongPress(id) {
+    const scene = this.getScene();
+    const f = scene.formation;
+    if (!f) return;
+    const partner = (f.merges || []).find(m => m.a === id || m.b === id);
+    if (!partner) return; // 未合并的舞者不弹
+    const otherId = partner.a === id ? partner.b : partner.a;
+    const a = f.positions[id], b = f.positions[otherId];
+    if (!a || !b || Math.hypot(a.x - b.x, a.y - b.y) > MERGE_DIST) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const px = rect.left + this.view.ox + ((a.x + b.x) / 2) * this.view.scale;
+    const py = rect.top + this.view.oy + ((a.y + b.y) / 2) * this.view.scale;
+    this.longPressTimer = setTimeout(() => {
+      this.longPressTimer = null;
+      this.drag = null; // 取消拖拽，锁定等待浮窗操作
+      this.lockedByLongPress = true;
+      this.hooks.showUnitMenu({ mode: 'unit', ids: [id, otherId], screen: { x: px, y: py } });
+    }, 500);
+  }
+  _checkMergeHold(draggedId) {
+    if (this.mergeHold && this.mergeHold.fired) return;
+    const scene = this.getScene();
+    const f = scene.formation;
+    if (!f) return;
+    const pos = f.positions;
+    const dragged = pos[draggedId];
+    if (!dragged) { this._clearMergeHold(); return; }
+    let other = null;
+    for (const [id, q] of Object.entries(pos)) {
+      if (id === draggedId) continue;
+      if (Math.hypot(q.x - dragged.x, q.y - dragged.y) < 0.6) { other = id; break; }
+    }
+    if (!other) { this._clearMergeHold(); return; }
+    if (!this.mergeHold || this.mergeHold.other !== other) {
+      this._clearMergeHold();
+      this.mergeHold = { other, start: performance.now() };
+    }
+    if (performance.now() - this.mergeHold.start >= 2000 && !this.mergePromptShown) {
+      this.mergePromptShown = true;
+      const rect = this.canvas.getBoundingClientRect();
+      const mx = rect.left + this.view.ox + dragged.x * this.view.scale;
+      const my = rect.top + this.view.oy + dragged.y * this.view.scale;
+      this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, other], formationIndex: scene.formationIndex, screen: { x: mx, y: my } });
+    }
+  }
+  _clearMergeHold() {
+    this.mergeHold = null;
+    this.mergePromptShown = false;
   }
 
   // ---- 命中 ----
@@ -454,6 +533,7 @@ export class StageView {
       return;
     }
     const s = this.toStage(e.clientX, e.clientY);
+    this.hooks.hideUnitMenu?.();
     const hit = this.hitDancer(s.x, s.y);
     if (hit) {
       if (!scene.selection.has(hit)) this.hooks.select([hit], { add: e.shiftKey });
@@ -464,7 +544,7 @@ export class StageView {
         const p = this.getScene().formation?.positions[id];
         if (p) snap[id] = { x: p.x, y: p.y };
       }
-      this.drag = { kind: 'dancer', startS: s, start: snap, moved: false };
+      this.pendingDrag = { kind: 'dancer', id: hit, startS: s, start: snap, moved: false, downTime: performance.now() };
     } else if (e.pointerType === 'mouse') {
       const r = this.canvas.getBoundingClientRect();
       this.box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top, startClientX: e.clientX, startClientY: e.clientY };
@@ -487,7 +567,37 @@ export class StageView {
     }
     const drag = this.drag;
     const scene = this.getScene();
+    if (this.longPressTimer && Math.hypot(e.clientX - (this._lpStart?.x ?? e.clientX), e.clientY - (this._lpStart?.y ?? e.clientY)) > 6) {
+      clearTimeout(this.longPressTimer); this.longPressTimer = null;
+    }
+    if (this.lockedByLongPress) return;
+    // 待定拖拽转正：位移超阈值才真正开始拖动（避免微动误触）
+    if (this.pendingDrag && !this.drag) {
+      const sNow = this.toStage(e.clientX, e.clientY);
+      const movedDist = Math.hypot(sNow.x - this.pendingDrag.startS.x, sNow.y - this.pendingDrag.startS.y);
+      if (movedDist > 0.06) {
+        this.drag = this.pendingDrag;
+      } else if (performance.now() - this.pendingDrag.downTime >= 600 && !this._longPressFired) {
+        // 长按合并单元（组队呈示下）→ 弹单元操作浮窗
+        this._longPressFired = true;
+        const f = scene.formation;
+        const partner = (f.merges || []).find(m => m.a === this.pendingDrag.id || m.b === this.pendingDrag.id);
+        if (partner) {
+          const otherId = partner.a === this.pendingDrag.id ? partner.b : partner.a;
+          const a = f.positions[partner.a], b2 = f.positions[partner.b];
+          const cvRect = this.canvas.getBoundingClientRect();
+          const px2 = cvRect.left + this.view.ox + ((a.x + b2.x) / 2) * this.view.scale;
+          const py2 = cvRect.top + this.view.oy + ((a.y + b2.y) / 2) * this.view.scale;
+          this.hooks.showUnitMenu({ mode: 'unit', ids: [partner.a, partner.b], style: partner.style, formationIndex: scene.formationIndex, screen: { x: px2, y: py2 } });
+          this.pendingDrag = null;
+          this.lockedByLongPress = true;
+          return;
+        }
+      }
+    }
+    if (this.lockedByLongPress) return;
     if (drag?.kind === 'dancer') {
+      this._checkMergeHold(drag.id ?? [...scene.selection][0]);
       const s = this.toStage(e.clientX, e.clientY);
       let dx = s.x - drag.startS.x, dy = s.y - drag.startS.y;
       if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 0.02) drag.moved = true;
@@ -544,6 +654,8 @@ export class StageView {
   _up(e) {
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
+    this._clearMergeHold();
+    this.lockedByLongPress = false;
     const drag = this.drag;
     const scene = this.getScene();
     if (drag?.kind === 'dancer' && drag.moved) {

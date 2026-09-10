@@ -200,3 +200,12 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .print-page img{max-width:100%}
 .print-page h2{margin:6px 0}
 .print-page .p-meta{color:#334155;font-size:13px;margin-bottom:8px;white-space:pre-line}
+
+/* ---- 单元浮窗（合并确认/单元操作） ---- */
+.unit-menu{position:absolute;z-index:50;background:var(--bg2);border:1px solid var(--acc);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px;box-shadow:0 8px 24px rgba(0,0,0,.35);min-width:150px}
+.unit-menu .um-title{font-size:12px;color:var(--dim);font-weight:600}
+.unit-menu .um-row{display:flex;gap:4px}
+.unit-menu .um-btn{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:5px 10px;color:var(--fg);white-space:nowrap}
+.unit-menu .um-btn:hover{border-color:var(--acc);color:var(--acc)}
+.unit-menu .um-btn.um-cur{border-color:var(--acc);color:var(--acc);font-weight:600}
+.unit-menu .um-btn.um-cancel{border-color:var(--line);color:var(--dim)}

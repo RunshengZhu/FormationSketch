@@ -68,8 +68,10 @@ let state = {
   selection: [],             // dancer ids
   editMode: true,            // 编辑开关（默认开）：舞台可拖动编辑；关闭为查看模式
   theme: 'dark',             // dark | light（持久化到 localStorage）
+  showFacingHandle: false,  // 朝向把手（样式类，默认隐藏）
   showGhost: true,
   showPaths: true,
+  showGrid: true,
   previewOnSwitch: true,     // 切换队形帧时自动播放过渡动画
   ripple: true,
   playing: false,

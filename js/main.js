@@ -44,16 +44,89 @@ function stageScene() {
   return {
     project: p,
     formation: currentFormation(),
+    merges: currentFormation()?.merges || [],
     formationIndex: s.formationIndex,
     selection: new Set(expandedSelection()),
     singleSelected: s.selection.length === 1, // 朝向把手按原始选择判定（舞对联动会扩成 2 个）
+    facingHandle: s.showFacingHandle,
     showGhost: s.showGhost,
     showPaths: s.showPaths,
+    showGrid: s.showGrid,
     playbackPos: pr ? pr.positions : null,
     phase: pr ? pr.phase : 'hold',
     readOnly: s.editMode ? playing : true,
     theme: s.theme,
   };
+}
+
+// ---------- 单元浮窗（合并确认 / 单元操作） ----------
+let unitMenuEl = null;
+const UNIT_STYLE_LABEL = { capsule: '胶囊', diamond: '菱形', twin: '双圆' };
+function hideUnitMenu() {
+  if (unitMenuEl) { unitMenuEl.remove(); unitMenuEl = null; }
+}
+function showUnitMenu(payload) {
+  hideUnitMenu();
+  const wrap = document.getElementById('stage-wrap');
+  if (!wrap) return;
+  const el = document.createElement('div');
+  el.className = 'unit-menu';
+  if (payload.mode === 'merge') {
+    const title = document.createElement('div');
+    title.className = 'um-title';
+    title.textContent = '合并为单元';
+    el.append(title);
+  } else {
+    const title = document.createElement('div');
+    title.className = 'um-title';
+    title.textContent = '舞对单元';
+    el.append(title);
+  }
+  // 样式按钮（合并确认时点击即以该样式创建；单元操作时切换样式）
+  const mkStyleBtn = sty => {
+    const b = document.createElement('button');
+    b.className = 'um-btn' + (payload.style === sty ? ' um-cur' : '');
+    b.textContent = UNIT_STYLE_LABEL[sty] || sty;
+    b.addEventListener('click', () => {
+      if (payload.mode === 'merge') {
+        store.mutate(p => {
+          const f = p.formations[st.formationIndex];
+          if (!f) return;
+          M.addMerge(f, payload.ids[0], payload.ids[1], sty);
+          M.collapsePair(f, payload.ids[0], payload.ids[1]);
+        }, '合并单元');
+      } else {
+        store.mutate(q => { M.setMergeStyle(q.formations[st.formationIndex], payload.ids[0], payload.ids[1], sty); }, '切换单元样式');
+      }
+      hideUnitMenu();
+    });
+    return b;
+  };
+  if (payload.mode === 'merge') {
+    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+  } else {
+    // 拆开按钮
+    const untie = document.createElement('button');
+    untie.className = 'um-btn';
+    untie.textContent = '✂ 拆开';
+    untie.addEventListener('click', () => {
+      store.mutate(q => { M.removeMerge(q.formations[payload.formationIndex], payload.ids[0], payload.ids[1]); }, '拆开单元');
+      hideUnitMenu();
+    });
+    el.append(untie);
+    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+  }
+  const cancel = document.createElement('button');
+  cancel.className = 'um-btn um-cancel';
+  cancel.textContent = '✕';
+  cancel.addEventListener('click', hideUnitMenu);
+  el.append(cancel);
+  wrap.append(el);
+  unitMenuEl = el;
+  // 定位并钳制在容器内
+  const wr = wrap.getBoundingClientRect();
+  el.style.left = Math.max(4, Math.min(payload.screen.x - 40, wr.width - el.offsetWidth - 4)) + 'px';
+  el.style.top = Math.max(4, Math.min(payload.screen.y + 10, wr.height - el.offsetHeight - 4)) + 'px';
 }
 
 // ---------- 启动 ----------
@@ -86,6 +159,8 @@ function buildStage() {
     select: selectIds,
     mutateLive: fn => store.mutate(fn, null),
     commit: commitWithThumbs,
+    showUnitMenu: showUnitMenu,
+    hideUnitMenu: hideUnitMenu,
   });
   new ResizeObserver(() => stageView.requestDraw()).observe($('stage-wrap'));
 }
@@ -201,6 +276,7 @@ function wireTopbar() {
     document.querySelectorAll('.ptab').forEach(x => x.classList.toggle('active', x === b));
     $('props-formation').hidden = b.dataset.tab !== 'formation';
     $('props-stage').hidden = b.dataset.tab !== 'stage';
+    $('props-style').hidden = b.dataset.tab !== 'style';
   }));
   $('btn-theme').addEventListener('click', () => {
     const next = store.getState().theme === 'light' ? 'dark' : 'light';
@@ -406,17 +482,7 @@ function applyGenerator(kind) {
     else ids = M.orderedDancers(p, unit);
     const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
     shapes.applySlots(f, ids, slots, { current: f.positions });
-    // 未参与生成的舞者从上一队形顺延位置（如单人段里的另一半）
-    M.carryPositionsForward(p, s.formationIndex);
-    // 组队呈示的队形：舞对收拢到同一点
-    if (f.combined !== false) {
-      for (const pair of p.pairs) {
-        const a = f.positions[pair.leader], b = f.positions[pair.follower];
-        if (!a || !b) continue;
-        a.x = b.x = Math.round(((a.x + b.x) / 2) * 100) / 100;
-        a.y = b.y = Math.round(((a.y + b.y) / 2) * 100) / 100;
-      }
-    }
+    M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者 + 按组队/拆开呈示收拢或拆开
   }, `生成队形(${kind})`);
 }
 
@@ -696,6 +762,33 @@ function selectionProps(f, s) {
   return group;
 }
 
+// ---------- 样式面板 ----------
+let stylePanelBuilt = false;
+const styleRefs = {};
+function buildStylePanel() {
+  if (stylePanelBuilt) return;
+  stylePanelBuilt = true;
+  const host = $('props-style');
+  host.append(
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '选中与把手'),
+      h('div', { class: 'prop-row' }, h('label', {}, '朝向把手（选中单人时显示，拖动调整朝向）'),
+        h('input', { type: 'checkbox', id: 'sty-facing', onchange: e => store.setUI({ showFacingHandle: e.target.checked }) }))),
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '舞台显示'),
+      h('div', { class: 'prop-row' }, h('label', {}, 'Ghost 虚影（前后队形）'),
+        h('input', { type: 'checkbox', id: 'sty-ghost', onchange: e => store.setUI({ showGhost: e.target.checked }) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '移动路径（虚线）'),
+        h('input', { type: 'checkbox', id: 'sty-paths', onchange: e => store.setUI({ showPaths: e.target.checked }) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '网格'),
+        h('input', { type: 'checkbox', id: 'sty-grid', onchange: e => store.setUI({ showGrid: e.target.checked }) }))),
+    h('div', { class: 'dim' }, '提示：以上均为显示样式，不影响队形数据。工具栏的「幽灵 / 路径」按钮与本面板同步。'));
+  styleRefs.facing = $('sty-facing');
+  styleRefs.ghost = $('sty-ghost');
+  styleRefs.paths = $('sty-paths');
+  styleRefs.grid = $('sty-grid');
+}
+
 // ---------- 快捷键 ----------
 function wireKeyboard() {
   document.addEventListener('keydown', e => {
@@ -817,6 +910,11 @@ function render(state) {
   $('btn-paths').classList.toggle('toggled-on', state.showPaths);
   $('btn-switch-anim').classList.toggle('toggled-on', state.previewOnSwitch);
   $('btn-theme').textContent = state.theme === 'light' ? '☀️' : '🌙';
+  buildStylePanel();
+  styleRefs.facing.checked = state.showFacingHandle;
+  styleRefs.ghost.checked = state.showGhost;
+  styleRefs.paths.checked = state.showPaths;
+  styleRefs.grid.checked = state.showGrid;
   const curF = state.project?.formations[state.formationIndex];
   const combinedNow = curF ? curF.combined !== false : true;
   $('btn-combined').classList.toggle('toggled-on', combinedNow);

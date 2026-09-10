@@ -5,7 +5,7 @@ import {
   createProject, addDancer, addPair, removeDancer, removePair, partnerOf, orderedDancers,
   createFormationFrom, deleteFormation, moveFormation, syncTimeline,
   computeSegments, posAt, spb, beatToSec, secToBeat, beatLabel,
-  lerpAngle, validateProject, renameShortsByPair, ensureFormationComplete, uid, clone, addPairByIds,
+  lerpAngle, validateProject, renameShortsByPair, ensureFormationComplete, uid, clone, addPairByIds, addMerge, removeMerge, setMergeStyle, findMerge, setCombined,
 } from '../js/model.js';
 
 test('createProject：舞者/舞对数量与编号', () => {
@@ -185,4 +185,36 @@ test('validateProject：v2 格式接受并剥离内嵌音频', () => {
   assert.equal(r.project.audio.dataFormat, undefined);
   // v3 拒绝
   assert.equal(validateProject({ version: 3 }).ok, false);
+});
+
+test('帧级合并单元：add/style/remove 与 setCombined 联动', () => {
+  const p = createProject({ pairs: 2 });
+  const a = p.dancers[0].id, b = p.dancers[1].id;
+  // 添加合并（任意两名舞者，不限名册舞对）
+  const m = addMerge(p.formations[0], a, b, 'diamond');
+  assert.ok(m);
+  // 重复添加被拒绝
+  assert.equal(addMerge(p.formations[0], a, b, 'twin'), null);
+  // 切换样式
+  setMergeStyle(p.formations[0], a, b, 'twin');
+  assert.equal(findMerge(p.formations[0], a, b).style, 'twin');
+  // setCombined(true)：名册舞对自动建合并单元
+  setCombined(p, 0, true);
+  const fm = p.formations[0];
+  assert.ok((fm.merges || []).length >= 2, '名册舞对应自动建合并');
+  assert.ok(findMerge(fm, a, b), '已有合并应保留');
+  // setCombined(false)：清空全部合并
+  setCombined(p, 0, false);
+  assert.equal((p.formations[0].merges || []).length, 0);
+  // validateProject 清洗：无效引用/样式被剔除
+  const json = JSON.parse(JSON.stringify(p));
+  json.version = 2;
+  json.formations[0].merges = [
+    { a: 'ghost', b: a, style: 'capsule' },
+    { a, b, style: 'bad' },
+    { a, b, style: 'twin' },
+  ];
+  const r = validateProject(json);
+  assert.equal(r.project.formations[0].merges.length, 1);
+  assert.equal(r.project.formations[0].merges[0].style, 'twin');
 });

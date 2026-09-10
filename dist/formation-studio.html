@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0f172a">
-<title>Formation Studio · 队形工坊</title>
+<title>舞阵 · 队形编排</title>
 <style>
 /* Formation Studio · 移动优先 + 桌面断点 · 深浅双主题 */
 :root{ /* 浅色（默认） */
@@ -209,6 +209,15 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .print-page h2{margin:6px 0}
 .print-page .p-meta{color:#334155;font-size:13px;margin-bottom:8px;white-space:pre-line}
 
+/* ---- 单元浮窗（合并确认/单元操作） ---- */
+.unit-menu{position:absolute;z-index:50;background:var(--bg2);border:1px solid var(--acc);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px;box-shadow:0 8px 24px rgba(0,0,0,.35);min-width:150px}
+.unit-menu .um-title{font-size:12px;color:var(--dim);font-weight:600}
+.unit-menu .um-row{display:flex;gap:4px}
+.unit-menu .um-btn{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:5px 10px;color:var(--fg);white-space:nowrap}
+.unit-menu .um-btn:hover{border-color:var(--acc);color:var(--acc)}
+.unit-menu .um-btn.um-cur{border-color:var(--acc);color:var(--acc);font-weight:600}
+.unit-menu .um-btn.um-cancel{border-color:var(--line);color:var(--dim)}
+
 </style>
 </head>
 <body>
@@ -217,7 +226,7 @@ body[data-mtab="formations"] #tl-scroll{display:none}
   <!-- ===== 项目库视图 ===== -->
   <section id="library-view" class="view" hidden>
     <header class="lib-header">
-      <div class="lib-brand">Formation&nbsp;Studio <span class="lib-sub">队形工坊</span></div>
+      <div class="lib-brand">舞阵 <span class="lib-sub">WuZhen · 队形编排</span></div>
       <button id="btn-new-project" class="btn primary">＋ 新建项目</button>
     </header>
     <div id="library-grid" class="lib-grid"></div>
@@ -317,9 +326,11 @@ body[data-mtab="formations"] #tl-scroll{display:none}
         <div class="panel-tabs">
           <button class="ptab active" data-tab="formation">队形</button>
           <button class="ptab" data-tab="stage">舞台</button>
+          <button class="ptab" data-tab="style">样式</button>
         </div>
         <div id="props-formation" class="props-page"></div>
         <div id="props-stage" class="props-page" hidden></div>
+        <div id="props-style" class="props-page" hidden></div>
       </aside>
     </div>
 
@@ -527,25 +538,65 @@ function carryPositionsForward(project, index) {
     f.positions[d.id] = found || { x: widthM / 2, y: depthM / 2, facing: faceAudience(project.stage) };
   }
 }
+// ---------- 帧内合并单元（任意两名舞者合为一个呈示符号） ----------
+const UNIT_STYLES = ['capsule', 'diamond', 'twin'];
+const mergeKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+function findMerge(formation, idA, idB) {
+  const key = mergeKey(idA, idB);
+  return (formation.merges || []).find(m => mergeKey(m.a, m.b) === key) || null;
+}
+function addMerge(formation, idA, idB, style = 'capsule') {
+  if (idA === idB || findMerge(formation, idA, idB)) return null;
+  if (!UNIT_STYLES.includes(style)) style = 'capsule';
+  const m = { a: idA, b: idB, style };
+  (formation.merges = formation.merges || []).push(m);
+  return m;
+}
+function removeMerge(formation, idA, idB) {
+  const key = mergeKey(idA, idB);
+  formation.merges = (formation.merges || []).filter(m => mergeKey(m.a, m.b) !== key);
+}
+function setMergeStyle(formation, idA, idB, style) {
+  const m = findMerge(formation, idA, idB);
+  if (m && UNIT_STYLES.includes(style)) m.style = style;
+}
+// 把一对舞伴收拢/拆开到标准间距（用于生成器后处理与呈示切换）
+function collapsePair(f, idA, idB) {
+  const a = f.positions[idA], b = f.positions[idB];
+  if (!a || !b) return;
+  const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
+  const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
+  a.x = b.x = mx; a.y = b.y = my;
+}
 // 切换队形帧的组队呈示状态：
-// combined=true（组队）：每对收拢到同一位置（渲染为菱形单元）
-// combined=false（拆队）：每对左右偏移分开（渲染为两个独立圆点），并补齐缺席舞者位置
+// 组队：名册舞对自动建合并单元并收拢；拆队：移除全部合并单元并按标准间距拆开
 function setCombined(project, index, combined) {
   const f = project.formations[index];
   if (!f) return;
   f.combined = !!combined;
-  carryPositionsForward(project, index); // 两个方向都先补齐缺席舞者（从上一队形顺延）
-  for (const pair of project.pairs) {
-    const a = f.positions[pair.leader], b = f.positions[pair.follower];
-    if (!a || !b) continue;
-    const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
-    const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
-    if (combined) {
-      a.x = b.x = mx; a.y = b.y = my; // 收拢到同一点（菱形单元）
-    } else {
-      a.x = Math.round((mx - 0.3) * 100) / 100; b.x = Math.round((mx + 0.3) * 100) / 100; // 标准间距拆开（幂等）
+  applyFormationLayout(project, index);
+}
+// 帧布局归一：补齐缺席舞者 + 按组队状态收拢/拆开
+function applyFormationLayout(project, index) {
+  const f = project.formations[index];
+  if (!f) return;
+  carryPositionsForward(project, index);
+  if (f.combined !== false) {
+    for (const pair of project.pairs) {
+      if (!f.positions[pair.leader] || !f.positions[pair.follower]) continue;
+      if (!findMerge(f, pair.leader, pair.follower)) addMerge(f, pair.leader, pair.follower, 'capsule');
+    }
+    for (const m of f.merges || []) collapsePair(f, m.a, m.b);
+  } else {
+    for (const m of f.merges || []) {
+      const a = f.positions[m.a], b = f.positions[m.b];
+      if (!a || !b) continue;
+      const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
+      const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
+      a.x = Math.round((mx - 0.35) * 100) / 100; b.x = Math.round((mx + 0.35) * 100) / 100;
       a.y = b.y = my;
     }
+    f.merges = [];
   }
 }
 // 帧的组队呈示状态（缺省视为组队）
@@ -598,6 +649,7 @@ function createFormationFrom(project, srcIndex, { name } = {}) {
     color: ['#0ea5e9', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'][project.formations.length % 6],
     note: src?.note || '', 
     positions: src ? clone(src.positions) : {},
+    merges: src && src.merges ? clone(src.merges) : [],
   };
   if (srcIndex >= 0 && srcIndex < project.formations.length - 1) project.formations.splice(srcIndex + 1, 0, f);
   else project.formations.push(f);
@@ -762,12 +814,18 @@ function validateProject(json) {
     const np = {};
     for (const [k, v] of Object.entries(f.positions)) if (dids.has(k) && v && typeof v.x === 'number' && typeof v.y === 'number' && Number.isFinite(v.x) && Number.isFinite(v.y)) np[k] = { x: v.x, y: v.y, facing: ((v.facing || 0) % 360 + 360) % 360 };
     f.positions = np;
+    // 合并单元清洗：引用有效、去重、样式合法
+    if (Array.isArray(f.merges)) {
+      const seen = new Set();
+      f.merges = f.merges.filter(m => m && dids.has(m.a) && dids.has(m.b) && m.a !== m.b && UNIT_STYLES.includes(m.style) && !seen.has(mergeKey(m.a, m.b)) && (seen.add(mergeKey(m.a, m.b)), true)).slice(0, 32);
+      if (!f.merges.length) delete f.merges;
+    } else delete f.merges;
   }
   syncTimeline(p);
   return { ok: errors.length === 0, errors, project: p };
 }
 
-Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, addPair, createProject, dancerById, pairOf, partnerOf, orderedDancers, removeDancer, removePair, carryPositionsForward, setCombined, isCombined, addPairByIds, renameShortsByPair, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, validateProject });
+Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, addPair, createProject, dancerById, pairOf, partnerOf, orderedDancers, removeDancer, removePair, carryPositionsForward, UNIT_STYLES, mergeKey, findMerge, addMerge, removeMerge, setMergeStyle, collapsePair, setCombined, applyFormationLayout, isCombined, addPairByIds, renameShortsByPair, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, validateProject });
 })();
 
 /* ===== module: shapes ===== */
@@ -1034,8 +1092,10 @@ let state = {
   selection: [],             // dancer ids
   editMode: true,            // 编辑开关（默认开）：舞台可拖动编辑；关闭为查看模式
   theme: 'dark',             // dark | light（持久化到 localStorage）
+  showFacingHandle: false,  // 朝向把手（样式类，默认隐藏）
   showGhost: true,
   showPaths: true,
+  showGrid: true,
   previewOnSwitch: true,     // 切换队形帧时自动播放过渡动画
   ripple: true,
   playing: false,
@@ -1575,7 +1635,7 @@ function drawScene(ctx, rect, project, positions, opts = {}) {
   }
 
   // 网格
-  const g = project.stage.gridM || 0.5;
+  const g = opts.showGrid === false ? 0 : (project.stage.gridM || 0.5);
   if (!opts.minimal && g > 0) {
     ctx.save();
     ctx.strokeStyle = 'rgba(148,163,184,.25)'; ctx.lineWidth = 1;
@@ -1686,29 +1746,58 @@ function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.arcTo(x, y, x + w, y, rad);
     ctx.closePath();
   };
-  // 舞对徽标：圆角矩形，左半=引带色+编号，右半=跟随色+编号
-  function drawPairBadge(pair, a, b, sel, alpha) {
+  // 合并单元符号：capsule=圆角矩形 / diamond=菱形 / twin=双圆，左右各色+编号
+  function drawUnitSymbol(style, idA, idB, a, b, sel, alpha) {
     const cx = (X(a.x) + X(b.x)) / 2, cy = (Y(a.y) + Y(b.y)) / 2;
-    const w = r * 3.4, hh = r * 1.5;
-    const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;
-    const dL = dancerById(pair.leader), dF = dancerById(pair.follower);
+    const dA = dancerById(idA), dB = dancerById(idB);
     ctx.save();
     if (alpha !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    ctx.save();
-    rrPath(x0, y0, w, hh, rad); ctx.clip();
-    ctx.fillStyle = dL?.color || '#64748b'; ctx.fillRect(x0, y0, w / 2, hh);
-    ctx.fillStyle = dF?.color || '#94a3b8'; ctx.fillRect(x0 + w / 2, y0, w / 2, hh);
-    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(cx - 1, y0, 2, hh); // 中缝
-    ctx.restore();
-    rrPath(x0, y0, w, hh, rad);
-    ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
-    ctx.strokeStyle = sel ? '#0ea5e9' : (dark ? '#f8fafc' : '#334155');
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `700 ${Math.max(8, hh * 0.62)}px sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(dL?.short || '?', cx - w * 0.25, cy + hh * 0.02);
-    ctx.fillText(dF?.short || '?', cx + w * 0.25, cy + hh * 0.02);
+    if (style === 'diamond') {
+      const h = r * 1.9;
+      const T = [cx, cy - h], Rt = [cx + h, cy], B = [cx, cy + h], L = [cx - h, cy], C = [cx, cy];
+      const poly = pts => { ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); };
+      poly([T, L, C]); ctx.fillStyle = dA?.color || '#64748b'; ctx.fill();
+      poly([T, C, B, Rt]); ctx.fillStyle = dB?.color || '#94a3b8'; ctx.fill();
+      poly([T, Rt, B, L]);
+      ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
+      ctx.strokeStyle = sel ? '#0ea5e9' : '#f8fafc';
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${Math.max(8, h * 0.42)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(dA?.short || '?', cx - h * 0.42, cy);
+      ctx.fillText(dB?.short || '?', cx + h * 0.42, cy);
+    } else if (style === 'twin') {
+      const rr = r * 1.08;
+      for (const [id, px, py] of [[idA, cx - rr * 0.62, cy], [idB, cx + rr * 0.62, cy]]) {
+        const d = dancerById(id);
+        ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2);
+        ctx.fillStyle = d?.color || '#64748b'; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#f8fafc'; ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = `700 ${Math.max(8, rr * 0.8)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(d?.short || '?', px, py);
+      }
+    } else { // capsule 圆角矩形
+      const w = r * 3.4, hh = r * 1.5;
+      const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;
+      ctx.save();
+      rrPath(x0, y0, w, hh, rad); ctx.clip();
+      ctx.fillStyle = dA?.color || '#64748b'; ctx.fillRect(x0, y0, w / 2, hh);
+      ctx.fillStyle = dB?.color || '#94a3b8'; ctx.fillRect(x0 + w / 2, y0, w / 2, hh);
+      ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(cx - 1, y0, 2, hh); // 中缝
+      ctx.restore();
+      rrPath(x0, y0, w, hh, rad);
+      ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
+      ctx.strokeStyle = sel ? '#0ea5e9' : (dark ? '#f8fafc' : '#334155');
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${Math.max(8, hh * 0.62)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(dA?.short || '?', cx - w * 0.25, cy + hh * 0.02);
+      ctx.fillText(dB?.short || '?', cx + w * 0.25, cy + hh * 0.02);
+    }
     ctx.restore();
   };
   function drawBond(a, b, alpha = 1) {
@@ -1722,26 +1811,24 @@ function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.restore();
   };
 
-  // 先画配对单元（徽标或双圆+虚线），再画未配对单人
-  for (const pair of project.pairs) {
-    const a = positions[pair.leader], b = positions[pair.follower];
-    if (!a || !b) { // 一方缺席（仅男/仅女段）：存在的一方照常呈示
-      if (a) drawOne(pair.leader, a, X(a.x), Y(a.y), r, inSel(pair.leader));
-      if (b) drawOne(pair.follower, b, X(b.x), Y(b.y), r, inSel(pair.follower));
-      continue;
-    }
-    const sel = inSel(pair.leader) || inSel(pair.follower);
-    const together = Math.hypot(a.x - b.x, a.y - b.y) <= MERGE_DIST;
-    if (together) {
-      drawPairBadge(pair, a, b, sel);
+  // 合并单元（帧级 merges）：接近=合并符号，分离=两圆+虚线（"拉伸的合并"）
+  for (const m of opts.merges || []) {
+    const a = positions[m.a], b = positions[m.b];
+    if (!a || !b) continue;
+    const sel = inSel(m.a) || inSel(m.b);
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (d <= MERGE_DIST) {
+      drawUnitSymbol(m.style, m.a, m.b, a, b, sel);
     } else {
       drawBond(a, b);
-      drawOne(pair.leader, a, X(a.x), Y(a.y), r, inSel(pair.leader));
-      drawOne(pair.follower, b, X(b.x), Y(b.y), r, inSel(pair.follower));
+      drawOne(m.a, a, X(a.x), Y(a.y), r, inSel(m.a));
+      drawOne(m.b, b, X(b.x), Y(b.y), r, inSel(m.b));
     }
   }
+  // 未合并舞者（单圆）
+  const mergedIds = new Set((opts.merges || []).flatMap(m => [m.a, m.b]));
   for (const [id, p] of Object.entries(positions)) {
-    if (project.pairs.some(pa => pa.leader === id || pa.follower === id)) continue;
+    if (mergedIds.has(id)) continue;
     drawOne(id, p, X(p.x), Y(p.y), r, inSel(id));
   }
   return view;
@@ -1877,6 +1964,7 @@ class StageView {
       view: this.view,
       ghost, nextPositions,
       selection: scene.selection,
+      showGrid: scene.showGrid,
       theme: scene.theme,
       pad: 16,
       onImageLoad: () => this.requestDraw(),
@@ -1897,7 +1985,7 @@ class StageView {
 
     // 朝向把手（恰好选中一名舞者且非播放）
     this.handlePx = null;
-    if (scene.singleSelected && scene.selection?.size >= 1 && !scene.playbackPos && !scene.readOnly) {
+    if (scene.facingHandle && scene.singleSelected && scene.selection?.size >= 1 && !scene.playbackPos && !scene.readOnly) {
       const id = [...scene.selection][0];
       const p = positions[id];
       if (p) {
@@ -1918,6 +2006,57 @@ class StageView {
         ctx.restore();
       }
     }
+  }
+
+  // ---- 手势：长按合并单元弹浮窗；拖拽重叠 2s 弹合并确认 ----
+  _armLongPress(id) {
+    const scene = this.getScene();
+    const f = scene.formation;
+    if (!f) return;
+    const partner = (f.merges || []).find(m => m.a === id || m.b === id);
+    if (!partner) return; // 未合并的舞者不弹
+    const otherId = partner.a === id ? partner.b : partner.a;
+    const a = f.positions[id], b = f.positions[otherId];
+    if (!a || !b || Math.hypot(a.x - b.x, a.y - b.y) > MERGE_DIST) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const px = rect.left + this.view.ox + ((a.x + b.x) / 2) * this.view.scale;
+    const py = rect.top + this.view.oy + ((a.y + b.y) / 2) * this.view.scale;
+    this.longPressTimer = setTimeout(() => {
+      this.longPressTimer = null;
+      this.drag = null; // 取消拖拽，锁定等待浮窗操作
+      this.lockedByLongPress = true;
+      this.hooks.showUnitMenu({ mode: 'unit', ids: [id, otherId], screen: { x: px, y: py } });
+    }, 500);
+  }
+  _checkMergeHold(draggedId) {
+    if (this.mergeHold && this.mergeHold.fired) return;
+    const scene = this.getScene();
+    const f = scene.formation;
+    if (!f) return;
+    const pos = f.positions;
+    const dragged = pos[draggedId];
+    if (!dragged) { this._clearMergeHold(); return; }
+    let other = null;
+    for (const [id, q] of Object.entries(pos)) {
+      if (id === draggedId) continue;
+      if (Math.hypot(q.x - dragged.x, q.y - dragged.y) < 0.6) { other = id; break; }
+    }
+    if (!other) { this._clearMergeHold(); return; }
+    if (!this.mergeHold || this.mergeHold.other !== other) {
+      this._clearMergeHold();
+      this.mergeHold = { other, start: performance.now() };
+    }
+    if (performance.now() - this.mergeHold.start >= 2000 && !this.mergePromptShown) {
+      this.mergePromptShown = true;
+      const rect = this.canvas.getBoundingClientRect();
+      const mx = rect.left + this.view.ox + dragged.x * this.view.scale;
+      const my = rect.top + this.view.oy + dragged.y * this.view.scale;
+      this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, other], formationIndex: scene.formationIndex, screen: { x: mx, y: my } });
+    }
+  }
+  _clearMergeHold() {
+    this.mergeHold = null;
+    this.mergePromptShown = false;
   }
 
   // ---- 命中 ----
@@ -1966,6 +2105,7 @@ class StageView {
       return;
     }
     const s = this.toStage(e.clientX, e.clientY);
+    this.hooks.hideUnitMenu?.();
     const hit = this.hitDancer(s.x, s.y);
     if (hit) {
       if (!scene.selection.has(hit)) this.hooks.select([hit], { add: e.shiftKey });
@@ -1976,7 +2116,7 @@ class StageView {
         const p = this.getScene().formation?.positions[id];
         if (p) snap[id] = { x: p.x, y: p.y };
       }
-      this.drag = { kind: 'dancer', startS: s, start: snap, moved: false };
+      this.pendingDrag = { kind: 'dancer', id: hit, startS: s, start: snap, moved: false, downTime: performance.now() };
     } else if (e.pointerType === 'mouse') {
       const r = this.canvas.getBoundingClientRect();
       this.box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top, startClientX: e.clientX, startClientY: e.clientY };
@@ -1999,7 +2139,37 @@ class StageView {
     }
     const drag = this.drag;
     const scene = this.getScene();
+    if (this.longPressTimer && Math.hypot(e.clientX - (this._lpStart?.x ?? e.clientX), e.clientY - (this._lpStart?.y ?? e.clientY)) > 6) {
+      clearTimeout(this.longPressTimer); this.longPressTimer = null;
+    }
+    if (this.lockedByLongPress) return;
+    // 待定拖拽转正：位移超阈值才真正开始拖动（避免微动误触）
+    if (this.pendingDrag && !this.drag) {
+      const sNow = this.toStage(e.clientX, e.clientY);
+      const movedDist = Math.hypot(sNow.x - this.pendingDrag.startS.x, sNow.y - this.pendingDrag.startS.y);
+      if (movedDist > 0.06) {
+        this.drag = this.pendingDrag;
+      } else if (performance.now() - this.pendingDrag.downTime >= 600 && !this._longPressFired) {
+        // 长按合并单元（组队呈示下）→ 弹单元操作浮窗
+        this._longPressFired = true;
+        const f = scene.formation;
+        const partner = (f.merges || []).find(m => m.a === this.pendingDrag.id || m.b === this.pendingDrag.id);
+        if (partner) {
+          const otherId = partner.a === this.pendingDrag.id ? partner.b : partner.a;
+          const a = f.positions[partner.a], b2 = f.positions[partner.b];
+          const cvRect = this.canvas.getBoundingClientRect();
+          const px2 = cvRect.left + this.view.ox + ((a.x + b2.x) / 2) * this.view.scale;
+          const py2 = cvRect.top + this.view.oy + ((a.y + b2.y) / 2) * this.view.scale;
+          this.hooks.showUnitMenu({ mode: 'unit', ids: [partner.a, partner.b], style: partner.style, formationIndex: scene.formationIndex, screen: { x: px2, y: py2 } });
+          this.pendingDrag = null;
+          this.lockedByLongPress = true;
+          return;
+        }
+      }
+    }
+    if (this.lockedByLongPress) return;
     if (drag?.kind === 'dancer') {
+      this._checkMergeHold(drag.id ?? [...scene.selection][0]);
       const s = this.toStage(e.clientX, e.clientY);
       let dx = s.x - drag.startS.x, dy = s.y - drag.startS.y;
       if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 0.02) drag.moved = true;
@@ -2056,6 +2226,8 @@ class StageView {
   _up(e) {
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
+    this._clearMergeHold();
+    this.lockedByLongPress = false;
     const drag = this.drag;
     const scene = this.getScene();
     if (drag?.kind === 'dancer' && drag.moved) {
@@ -2882,16 +3054,89 @@ function stageScene() {
   return {
     project: p,
     formation: currentFormation(),
+    merges: currentFormation()?.merges || [],
     formationIndex: s.formationIndex,
     selection: new Set(expandedSelection()),
     singleSelected: s.selection.length === 1, // 朝向把手按原始选择判定（舞对联动会扩成 2 个）
+    facingHandle: s.showFacingHandle,
     showGhost: s.showGhost,
     showPaths: s.showPaths,
+    showGrid: s.showGrid,
     playbackPos: pr ? pr.positions : null,
     phase: pr ? pr.phase : 'hold',
     readOnly: s.editMode ? playing : true,
     theme: s.theme,
   };
+}
+
+// ---------- 单元浮窗（合并确认 / 单元操作） ----------
+let unitMenuEl = null;
+const UNIT_STYLE_LABEL = { capsule: '胶囊', diamond: '菱形', twin: '双圆' };
+function hideUnitMenu() {
+  if (unitMenuEl) { unitMenuEl.remove(); unitMenuEl = null; }
+}
+function showUnitMenu(payload) {
+  hideUnitMenu();
+  const wrap = document.getElementById('stage-wrap');
+  if (!wrap) return;
+  const el = document.createElement('div');
+  el.className = 'unit-menu';
+  if (payload.mode === 'merge') {
+    const title = document.createElement('div');
+    title.className = 'um-title';
+    title.textContent = '合并为单元';
+    el.append(title);
+  } else {
+    const title = document.createElement('div');
+    title.className = 'um-title';
+    title.textContent = '舞对单元';
+    el.append(title);
+  }
+  // 样式按钮（合并确认时点击即以该样式创建；单元操作时切换样式）
+  const mkStyleBtn = sty => {
+    const b = document.createElement('button');
+    b.className = 'um-btn' + (payload.style === sty ? ' um-cur' : '');
+    b.textContent = UNIT_STYLE_LABEL[sty] || sty;
+    b.addEventListener('click', () => {
+      if (payload.mode === 'merge') {
+        store.mutate(p => {
+          const f = p.formations[st.formationIndex];
+          if (!f) return;
+          M.addMerge(f, payload.ids[0], payload.ids[1], sty);
+          M.collapsePair(f, payload.ids[0], payload.ids[1]);
+        }, '合并单元');
+      } else {
+        store.mutate(q => { M.setMergeStyle(q.formations[st.formationIndex], payload.ids[0], payload.ids[1], sty); }, '切换单元样式');
+      }
+      hideUnitMenu();
+    });
+    return b;
+  };
+  if (payload.mode === 'merge') {
+    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+  } else {
+    // 拆开按钮
+    const untie = document.createElement('button');
+    untie.className = 'um-btn';
+    untie.textContent = '✂ 拆开';
+    untie.addEventListener('click', () => {
+      store.mutate(q => { M.removeMerge(q.formations[payload.formationIndex], payload.ids[0], payload.ids[1]); }, '拆开单元');
+      hideUnitMenu();
+    });
+    el.append(untie);
+    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+  }
+  const cancel = document.createElement('button');
+  cancel.className = 'um-btn um-cancel';
+  cancel.textContent = '✕';
+  cancel.addEventListener('click', hideUnitMenu);
+  el.append(cancel);
+  wrap.append(el);
+  unitMenuEl = el;
+  // 定位并钳制在容器内
+  const wr = wrap.getBoundingClientRect();
+  el.style.left = Math.max(4, Math.min(payload.screen.x - 40, wr.width - el.offsetWidth - 4)) + 'px';
+  el.style.top = Math.max(4, Math.min(payload.screen.y + 10, wr.height - el.offsetHeight - 4)) + 'px';
 }
 
 // ---------- 启动 ----------
@@ -2924,6 +3169,8 @@ function buildStage() {
     select: selectIds,
     mutateLive: fn => store.mutate(fn, null),
     commit: commitWithThumbs,
+    showUnitMenu: showUnitMenu,
+    hideUnitMenu: hideUnitMenu,
   });
   new ResizeObserver(() => stageView.requestDraw()).observe($('stage-wrap'));
 }
@@ -3039,6 +3286,7 @@ function wireTopbar() {
     document.querySelectorAll('.ptab').forEach(x => x.classList.toggle('active', x === b));
     $('props-formation').hidden = b.dataset.tab !== 'formation';
     $('props-stage').hidden = b.dataset.tab !== 'stage';
+    $('props-style').hidden = b.dataset.tab !== 'style';
   }));
   $('btn-theme').addEventListener('click', () => {
     const next = store.getState().theme === 'light' ? 'dark' : 'light';
@@ -3244,17 +3492,7 @@ function applyGenerator(kind) {
     else ids = M.orderedDancers(p, unit);
     const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
     shapes.applySlots(f, ids, slots, { current: f.positions });
-    // 未参与生成的舞者从上一队形顺延位置（如单人段里的另一半）
-    M.carryPositionsForward(p, s.formationIndex);
-    // 组队呈示的队形：舞对收拢到同一点
-    if (f.combined !== false) {
-      for (const pair of p.pairs) {
-        const a = f.positions[pair.leader], b = f.positions[pair.follower];
-        if (!a || !b) continue;
-        a.x = b.x = Math.round(((a.x + b.x) / 2) * 100) / 100;
-        a.y = b.y = Math.round(((a.y + b.y) / 2) * 100) / 100;
-      }
-    }
+    M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者 + 按组队/拆开呈示收拢或拆开
   }, `生成队形(${kind})`);
 }
 
@@ -3534,6 +3772,33 @@ function selectionProps(f, s) {
   return group;
 }
 
+// ---------- 样式面板 ----------
+let stylePanelBuilt = false;
+const styleRefs = {};
+function buildStylePanel() {
+  if (stylePanelBuilt) return;
+  stylePanelBuilt = true;
+  const host = $('props-style');
+  host.append(
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '选中与把手'),
+      h('div', { class: 'prop-row' }, h('label', {}, '朝向把手（选中单人时显示，拖动调整朝向）'),
+        h('input', { type: 'checkbox', id: 'sty-facing', onchange: e => store.setUI({ showFacingHandle: e.target.checked }) }))),
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '舞台显示'),
+      h('div', { class: 'prop-row' }, h('label', {}, 'Ghost 虚影（前后队形）'),
+        h('input', { type: 'checkbox', id: 'sty-ghost', onchange: e => store.setUI({ showGhost: e.target.checked }) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '移动路径（虚线）'),
+        h('input', { type: 'checkbox', id: 'sty-paths', onchange: e => store.setUI({ showPaths: e.target.checked }) })),
+      h('div', { class: 'prop-row' }, h('label', {}, '网格'),
+        h('input', { type: 'checkbox', id: 'sty-grid', onchange: e => store.setUI({ showGrid: e.target.checked }) }))),
+    h('div', { class: 'dim' }, '提示：以上均为显示样式，不影响队形数据。工具栏的「幽灵 / 路径」按钮与本面板同步。'));
+  styleRefs.facing = $('sty-facing');
+  styleRefs.ghost = $('sty-ghost');
+  styleRefs.paths = $('sty-paths');
+  styleRefs.grid = $('sty-grid');
+}
+
 // ---------- 快捷键 ----------
 function wireKeyboard() {
   document.addEventListener('keydown', e => {
@@ -3655,6 +3920,11 @@ function render(state) {
   $('btn-paths').classList.toggle('toggled-on', state.showPaths);
   $('btn-switch-anim').classList.toggle('toggled-on', state.previewOnSwitch);
   $('btn-theme').textContent = state.theme === 'light' ? '☀️' : '🌙';
+  buildStylePanel();
+  styleRefs.facing.checked = state.showFacingHandle;
+  styleRefs.ghost.checked = state.showGhost;
+  styleRefs.paths.checked = state.showPaths;
+  styleRefs.grid.checked = state.showGrid;
   const curF = state.project?.formations[state.formationIndex];
   const combinedNow = curF ? curF.combined !== false : true;
   $('btn-combined').classList.toggle('toggled-on', combinedNow);
