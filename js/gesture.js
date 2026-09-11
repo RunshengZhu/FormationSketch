@@ -16,10 +16,12 @@
 // 所有手势阈值唯一出处（单位：米 / 毫秒 / client 像素）
 export const TH = {
   promoteM: 0.06,  // PENDING→DRAG 晋升位移
-  mergeM: 0.55,    // 松手落点与他人触发合并确认的距离
-  showM: 0.8,      // 组队徽标呈示距离（与渲染 MERGE_DIST 一致，长按浮窗要求两人在此距离内）
-  lpMs: 500,       // 长按触发时长
-  lpCancelPx: 8,   // 长按取消位移（client px）
+  mergeM: 0.55,    // 拖动重叠触发合并确认的距离
+  showM: 0.8,      // 组队徽标呈示距离（与渲染 MERGE_DIST 一致）
+  dwellMs: 1500,   // 拖动重叠驻留时长：拖到位停住一段时间即弹合并确认（无需松手）
+  lpMs: 500,       // 长按触发时长（仅触摸端；桌面端为双击）
+  lpCancelPx: 12,  // 长按取消位移（client px，放宽以容忍手指抖动）
+  tapMs: 350,      // 双击间隔上限
   boxMinPx: 6,     // 框选最小边长（client px），小于视为点击
 };
 
@@ -37,7 +39,8 @@ export function createGestureMachine(host) {
   let g = null;              // 当前手势上下文
   let pinch = null;          // {dist,cx,cy}
   const pointers = new Map(); // pointerId -> {x,y} client px
-  let lpTimer = null;        // 长按定时器句柄
+  let lpTimer = null;        // 长按定时器句柄（触摸端）
+  let lastTap = null;        // {id,t} 双击检测
 
   const firstTwo = () => [...pointers.values()].slice(0, 2);
   function armLP() {
@@ -140,7 +143,7 @@ export function createGestureMachine(host) {
       }
       g = { kind: 'PENDING', id: hit, startS: s, startPx: { x: e.px, y: e.py }, start, selectMod };
       state = 'PENDING';
-      armLP();
+      if (e.touch) armLP(); // 长按仅触摸端；桌面端用双击
     } else if (!e.touch) {
       g = { kind: 'BOX', x0: e.px, y0: e.py, x1: e.px, y1: e.py };
       state = 'BOX';
@@ -175,6 +178,17 @@ export function createGestureMachine(host) {
     if (g.kind === 'DRAG') {
       const sNow = host.toStage(e.px, e.py);
       host.applyPositions(computeTargets(g.start, sNow.x - g.startS.x, sNow.y - g.startS.y));
+      // 重叠驻留：拖到他人身上停住 dwellMs 即弹合并确认（无需松手）
+      const fmt = host.formation();
+      const other = fmt ? overlapOther(fmt, g.id) : null;
+      if (!other) { g.dwell = null; return; }
+      if (!g.dwell || g.dwell.other !== other) g.dwell = { other, start: host.now() };
+      else if (host.now() - g.dwell.start >= TH.dwellMs) {
+        const anchor = fmt.positions[g.id];
+        host.commit('移动舞者'); // 停在当前位置（取消确认也保留该次移动）
+        const ids = [g.id, other];
+        enterMenu({ mode: 'merge', ids, at: anchor, formationIndex: host.fmtIndex() });
+      }
       return;
     }
     if (g.kind === 'FACE') {
@@ -208,6 +222,24 @@ export function createGestureMachine(host) {
       const sel = host.selection();
       if (!g.selectMod && !host.multiSelect() && sel.length > 1 && sel.includes(g.id)) {
         host.select([g.id]); // 多选中单击其一（未拖动、按下时未改选择）：收拢为单人
+      }
+      // 双击（tapMs 内二次单击同一舞者）：已合并 → 单元浮窗（桌面端替代长按）
+      const t = host.now();
+      const dbl = lastTap && lastTap.id === g.id && (t - lastTap.t) <= TH.tapMs;
+      lastTap = dbl ? null : { id: g.id, t };
+      if (dbl) {
+        const fmt = host.formation();
+        const m = fmt && (fmt.merges || []).find(x => x.a === g.id || x.b === g.id);
+        if (m) {
+          const a = fmt.positions[m.a], b = fmt.positions[m.b];
+          endGesture();
+          enterMenu({
+            mode: 'unit', ids: [m.a, m.b], style: m.style,
+            at: a && b && Math.hypot(a.x - b.x, a.y - b.y) <= TH.showM ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
+            formationIndex: host.fmtIndex(),
+          });
+          return;
+        }
       }
       endGesture();
       return;
@@ -262,7 +294,7 @@ export function createGestureMachine(host) {
 
   function reset() { // 场景切换等场景的强制复位（不回滚数据）
     disarmLP();
-    pointers.clear(); pinch = null; g = null; state = 'IDLE';
+    pointers.clear(); pinch = null; g = null; lastTap = null; state = 'IDLE';
   }
 
   return {

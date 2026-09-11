@@ -43,6 +43,7 @@ function makeWorld(opts = {}) {
     multiSelect: () => w.multi,
     formation: () => ({ positions: w.positions, merges: w.merges }),
     fmtIndex: () => 0,
+    now: () => w.t,
     stage: () => ({ widthM: 10, depthM: 6, snap: !!opts.snap, gridM: 0.5, backstageM: 1 }),
     select: (ids, o = {}) => {
       w.log.selects.push([ids, o]);
@@ -210,9 +211,9 @@ test('15 snap 开启：位移对齐网格', () => {
 });
 
 // ---------- 弹窗手势 ----------
-test('16 长按已组队舞者 500ms：单元浮窗，输入锁定', () => {
+test('16 触摸长按已组队舞者 500ms：单元浮窗，输入锁定', () => {
   const w = makeWorld();
-  w.down(1, 1); w.advance(500);
+  w.down(1, 1, { touch: true }); w.advance(500);
   assert.equal(w.log.menus.length, 1);
   const m = w.log.menus[0];
   assert.equal(m.mode, 'unit');
@@ -221,14 +222,14 @@ test('16 长按已组队舞者 500ms：单元浮窗，输入锁定', () => {
   assert.equal(w.machine.state(), 'MENU');
   // 锁定期间指针事件不产生任何舞台命令
   const before = w.log.applied.length;
-  w.move(2, 2); w.down(2, 2); // down 同时应退出浮窗
+  w.move(2, 2, { touch: true }); w.down(2, 2, { touch: true }); // down 同时应退出浮窗
   assert.equal(w.log.hidden, 1);
   assert.equal(w.machine.state(), 'IDLE');
   assert.equal(w.log.applied.length, before);
 });
-test('17 长按未组队舞者：不弹浮窗，仍可正常拖动', () => {
+test('17 触摸长按未组队舞者：不弹浮窗，仍可正常拖动', () => {
   const w = makeWorld();
-  w.down(8, 2); w.advance(500);
+  w.down(8, 2, { touch: true }); w.advance(500);
   assert.deepEqual(w.log.menus, []);
   w.move(8.5, 2); w.up(8.5, 2);
   assert.deepEqual(w.log.commits, ['移动舞者']);
@@ -261,18 +262,20 @@ test('20 合并浮窗：点外部取消 = 零数据变更，解除锁定', () =>
   assert.equal(w.log.applied.length, appliedLen);
   assert.equal(w.merges.length, 1); // merges 未变
 });
-test('21 长按后移动 8px：取消长按转正常拖拽', () => {
+test('21 触摸长按后移动超阈值：取消长按转正常拖拽', () => {
   const w = makeWorld();
-  w.down(1, 1);
-  w.move(1.1, 1); // client 位移 10px > 8px
-  w.advance(500);
+  w.down(1, 1, { touch: true });
+  w.move(1.1, 1); // client 位移 10px < 12px 容差，先按住
+  w.advance(200);
+  w.move(1.4, 1); // 位移 40px > 12px，取消长按
+  w.advance(400);
   assert.deepEqual(w.log.menus, []);
   w.up(1.1, 1);
   assert.deepEqual(w.log.commits, ['移动舞者']);
 });
 test('22 转正拖拽后长按定时不再触发', () => {
   const w = makeWorld();
-  w.down(1, 1); w.move(1.3, 1);
+  w.down(1, 1, { touch: true }); w.move(1.3, 1, { touch: true });
   w.advance(500);
   assert.deepEqual(w.log.menus, []);
 });
@@ -339,4 +342,68 @@ test('27 PINCH 距离过小（<8px）不产生缩放', () => {
   w.down(1.03, 1, { touch: true, pointerId: 2 }); // 3px 间距
   w.move(1.05, 1, { touch: true, pointerId: 2 });
   assert.deepEqual(w.log.zooms, []);
+});
+
+// ---------- 桌面双击 / 拖动重叠驻留（合并确认） ----------
+test('28 桌面双击已组队舞者：单元浮窗', () => {
+  const w = makeWorld();
+  w.down(1, 1); w.up(1, 1);
+  w.down(1, 1); w.up(1, 1); // 350ms 内二次单击
+  assert.equal(w.log.menus.length, 1);
+  assert.equal(w.log.menus[0].mode, 'unit');
+  assert.deepEqual(w.log.menus[0].ids, ['A', 'B']);
+});
+test('28b 双击间隔超 350ms：不触发', () => {
+  const w = makeWorld();
+  w.down(1, 1); w.up(1, 1);
+  w.advance(400);
+  w.down(1, 1); w.up(1, 1);
+  assert.deepEqual(w.log.menus, []);
+});
+test('28c 双击未组队舞者：不触发', () => {
+  const w = makeWorld();
+  w.down(8, 2); w.up(8, 2);
+  w.down(8, 2); w.up(8, 2);
+  assert.deepEqual(w.log.menus, []);
+});
+test('28d 桌面按住不动：长按不触发（长按仅触摸端）', () => {
+  const w = makeWorld();
+  w.down(1, 1); w.advance(800); w.up(1, 1);
+  assert.deepEqual(w.log.menus, []);
+  assert.deepEqual(w.selection, ['A']);
+});
+test('29 拖到重叠位置驻留 1.5s：不松手即弹合并确认', () => {
+  const w = makeWorld();
+  w.down(5, 5);          // 按住 C
+  w.move(5.2, 5);        // 拖近 D
+  w.advance(1600);       // 停住 1.6s
+  w.move(5.2, 5);        // 驻留检查在 move 中评估
+  assert.equal(w.machine.state(), 'MENU');
+  assert.equal(w.log.menus.length, 1);
+  assert.deepEqual(w.log.menus[0].ids, ['C', 'D']);
+  assert.deepEqual(w.log.commits, ['移动舞者']); // 位移已先提交
+  // 菜单取消后位置保留（移动是真实意图）
+  w.down(8, 2, { touch: false });
+  assert.equal(w.machine.state(), 'IDLE');
+  assert.equal(Math.abs(w.positions.C.x - 5.2) < 0.01, true);
+});
+test('29b 快速经过重叠不停留：不弹窗', () => {
+  const w = makeWorld();
+  w.down(5, 5);
+  w.move(5.4, 5);        // 落在 D 上
+  w.advance(200);        // 远小于驻留时长
+  w.move(7, 5);          // 继续拖走
+  w.advance(2000);       // 即使累计时间很长
+  w.move(7.5, 5);
+  w.up(7.5, 5);
+  assert.deepEqual(w.log.menus, []);
+});
+test('29c 驻留后松手：不重复弹窗', () => {
+  const w = makeWorld();
+  w.down(5, 5);
+  w.move(5.3, 5);
+  w.advance(1600);
+  w.move(5.3, 5);        // 驻留触发 → MENU
+  w.up(5.3, 5);          // 松手（MENU 态吞掉）
+  assert.equal(w.log.menus.length, 1); // 仍是驻留那一次
 });

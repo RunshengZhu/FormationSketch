@@ -467,6 +467,7 @@ export class StageView {
       multiSelect: () => !!this.getScene().multiSelect,
       formation: () => this.getScene().formation,
       fmtIndex: () => this.getScene().formationIndex,
+      now: () => performance.now(),
       stage: () => this.getScene().project.stage,
       // 命令
       select: (ids, opts) => this.hooks.select(ids, opts || {}),
@@ -486,10 +487,13 @@ export class StageView {
       }),
       commit: label => this.hooks.commit(label),
       showMenu: payload => {
+        // .unit-menu 是 #stage-wrap 内的 absolute 定位：必须给容器相对坐标（客户坐标会双重偏移）
         const rect = this.canvas.getBoundingClientRect();
+        const wrap = this.canvas.parentElement?.getBoundingClientRect();
+        const dx = wrap ? rect.left - wrap.left : 0, dy = wrap ? rect.top - wrap.top : 0;
         const v = this.view;
         const at = payload.at || { x: 0, y: 0 };
-        this.hooks.showUnitMenu({ ...payload, screen: { x: rect.left + v.ox + at.x * v.scale, y: rect.top + v.oy + at.y * v.scale } });
+        this.hooks.showUnitMenu({ ...payload, screen: { x: dx + v.ox + at.x * v.scale, y: dy + v.oy + at.y * v.scale } });
       },
       hideMenu: () => this.hooks.hideUnitMenu?.(),
       box: rect => {

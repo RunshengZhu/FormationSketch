@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-16-gesture-machine';
+window.__MAIN_BUILD = 'build-17-merge-dwell-dblclick';
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
@@ -113,7 +113,7 @@ function showUnitMenu(payload) {
     untie.className = 'um-btn';
     untie.textContent = '✂ 拆开';
     untie.addEventListener('click', () => {
-      store.mutate(q => { M.removeMerge(q.formations[payload.formationIndex], payload.ids[0], payload.ids[1]); }, '拆开单元');
+      store.mutate(q => { M.removeMerge(q.formations[store.getState().formationIndex], payload.ids[0], payload.ids[1]); }, '拆开单元');
       hideUnitMenu();
     });
     el.append(untie);
