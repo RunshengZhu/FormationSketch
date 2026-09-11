@@ -390,6 +390,7 @@ export class StageView {
     this.view = drawScene(ctx, { x: 0, y: 0, w: W, h: H }, project, positions, {
       view: this.view,
       ghost, nextPositions,
+      merges: scene.merges || [],
       selection: scene.selection,
       showGrid: scene.showGrid,
       theme: scene.theme,

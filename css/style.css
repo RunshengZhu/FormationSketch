@@ -209,3 +209,5 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .unit-menu .um-btn:hover{border-color:var(--acc);color:var(--acc)}
 .unit-menu .um-btn.um-cur{border-color:var(--acc);color:var(--acc);font-weight:600}
 .unit-menu .um-btn.um-cancel{border-color:var(--line);color:var(--dim)}
+
+.build-tag{font-size:10px;color:var(--dim);opacity:.7;margin-left:8px;user-select:none}

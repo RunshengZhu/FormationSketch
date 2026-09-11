@@ -47,7 +47,7 @@ export function renderFormation(project, formation, { width = 1000, theme = 'lig
   cv.width = width;
   cv.height = Math.round(width * ratio);
   const ctx = cv.getContext('2d');
-  drawScene(ctx, { x: 0, y: 0, w: cv.width, h: cv.height }, project, formation.positions, { minimal: false, pad: 20, pairLocked: formation.pairLocked !== false, theme });
+  drawScene(ctx, { x: 0, y: 0, w: cv.width, h: cv.height }, project, formation.positions, { minimal: false, pad: 20, merges: formation.merges || [], pairLocked: formation.pairLocked !== false, theme });
   return cv;
 }
 export function exportPNG(project, formation, theme = 'dark') {

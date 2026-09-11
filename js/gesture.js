@@ -300,5 +300,6 @@ export function createGestureMachine(host) {
   return {
     down, move, up, cancel, reset,
     state: () => state,
+    debugPointers: () => [...pointers.keys()], // 调试钩子：当前机器内的活跃指针
   };
 }

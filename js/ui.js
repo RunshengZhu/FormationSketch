@@ -52,7 +52,7 @@ export function renderLibrary(container, { projects, onOpen, onNew, onDelete, on
   for (const p of projects) {
     const cv = h('canvas', { width: 440, height: Math.round(440 * p.stage.depthM / p.stage.widthM) });
     const f0 = p.formations[0];
-    if (f0) drawScene(cv.getContext('2d'), { x: 0, y: 0, w: cv.width, h: cv.height }, p, f0.positions, { minimal: true, pad: 10, pairLines: false });
+    if (f0) drawScene(cv.getContext('2d'), { x: 0, y: 0, w: cv.width, h: cv.height }, p, f0.positions, { minimal: true, pad: 10, merges: f0.merges || [], pairLines: false });
     const card = h('div', { class: 'lib-card' },
       cv,
       h('div', { class: 'lc-body' },

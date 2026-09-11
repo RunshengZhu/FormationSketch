@@ -8,7 +8,8 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-18-no-automerge-editlock';
+window.__MAIN_BUILD = 'build-19-matrix';
+const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
@@ -871,7 +872,7 @@ function renderFormationIndex(state) {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       cv.width = 128 * dpr; cv.height = 72 * dpr;
       cv.style.width = '64px'; cv.style.height = '36px';
-      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, pairLines: false, view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
+      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], pairLines: false, view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
       const label = document.createElement('span');
       label.className = 'fi-label';
       label.textContent = (i + 1) + ' ' + f.name;
@@ -956,6 +957,11 @@ function render(state) {
 }
 
 boot();
+// 可见版本徽标：防止旧缓存页面误导验证
+requestAnimationFrame(() => {
+  const bt = document.getElementById('build-tag');
+  if (bt) bt.textContent = BUILD_TAG;
+});
 
 // 自动化测试钩子（不影响正常使用）：注入音频、读取状态
 window.__fs = {
