@@ -274,7 +274,6 @@ body[data-mtab="formations"] #tl-scroll{display:none}
         <div id="stage-tools">
           <button id="btn-edit-mode" class="btn small toggled-on" title="开启：舞台可拖动编辑；关闭：查看模式（舞台随时间轴播放头联动）">✏ 编辑</button>
           <button id="btn-multi" class="btn small" title="多选模式（触摸端多选入口）：开启后点按舞者=追加选择">☰ 多选</button>
-          <button id="btn-combined" class="btn small toggled-on" title="当前队形的舞对呈示：组队=菱形单元；拆开=两人独立圆点。帧间切换时自动产生拆队/组队过渡动画">⛓ 组队</button>
           <span class="vsep"></span>
           <select id="gen-kind" title="队形生成器">
             <option value="">生成队形…</option>
@@ -549,8 +548,10 @@ function findMerge(formation, idA, idB) {
 function addMerge(formation, idA, idB, style = 'capsule') {
   if (idA === idB || findMerge(formation, idA, idB)) return null;
   if (!UNIT_STYLES.includes(style)) style = 'capsule';
+  // 一名舞者同时只属于一个合并单元：先解除两人涉及的其他绑定（替换语义）
+  formation.merges = (formation.merges || []).filter(m => m.a !== idA && m.b !== idA && m.a !== idB && m.b !== idB);
   const m = { a: idA, b: idB, style };
-  (formation.merges = formation.merges || []).push(m);
+  formation.merges.push(m);
   return m;
 }
 function removeMerge(formation, idA, idB) {
@@ -569,39 +570,12 @@ function collapsePair(f, idA, idB) {
   const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
   a.x = b.x = mx; a.y = b.y = my;
 }
-// 切换队形帧的组队呈示状态：
-// 组队：名册舞对自动建合并单元并收拢；拆队：移除全部合并单元并按标准间距拆开
-function setCombined(project, index, combined) {
-  const f = project.formations[index];
-  if (!f) return;
-  f.combined = !!combined;
-  applyFormationLayout(project, index);
-}
-// 帧布局归一：补齐缺席舞者 + 按组队状态收拢/拆开
+// 帧布局顺延：仅补齐缺席舞者位置；合并单元完全由手动操作创建（组队自动逻辑已移除）
 function applyFormationLayout(project, index) {
   const f = project.formations[index];
   if (!f) return;
   carryPositionsForward(project, index);
-  if (f.combined !== false) {
-    for (const pair of project.pairs) {
-      if (!f.positions[pair.leader] || !f.positions[pair.follower]) continue;
-      if (!findMerge(f, pair.leader, pair.follower)) addMerge(f, pair.leader, pair.follower, 'capsule');
-    }
-    for (const m of f.merges || []) collapsePair(f, m.a, m.b);
-  } else {
-    for (const m of f.merges || []) {
-      const a = f.positions[m.a], b = f.positions[m.b];
-      if (!a || !b) continue;
-      const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
-      const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
-      a.x = Math.round((mx - 0.35) * 100) / 100; b.x = Math.round((mx + 0.35) * 100) / 100;
-      a.y = b.y = my;
-    }
-    f.merges = [];
-  }
 }
-// 帧的组队呈示状态（缺省视为组队）
-function isCombined(formation) { return formation ? formation.combined !== false : true; }
 // 将两名已有舞者组成舞伴（两人都必须未配对）；对内编号取不冲突的最小号
 function addPairByIds(project, leaderId, followerId) {
   if (!dancerById(project, leaderId) || !dancerById(project, followerId)) return null;
@@ -826,7 +800,7 @@ function validateProject(json) {
   return { ok: errors.length === 0, errors, project: p };
 }
 
-Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, addPair, createProject, dancerById, pairOf, partnerOf, orderedDancers, removeDancer, removePair, carryPositionsForward, UNIT_STYLES, mergeKey, findMerge, addMerge, removeMerge, setMergeStyle, collapsePair, setCombined, applyFormationLayout, isCombined, addPairByIds, renameShortsByPair, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, validateProject });
+Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, addPair, createProject, dancerById, pairOf, partnerOf, orderedDancers, removeDancer, removePair, carryPositionsForward, UNIT_STYLES, mergeKey, findMerge, addMerge, removeMerge, setMergeStyle, collapsePair, applyFormationLayout, addPairByIds, renameShortsByPair, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, validateProject });
 })();
 
 /* ===== module: shapes ===== */
@@ -2875,7 +2849,7 @@ const { renderLibrary, showNewProjectModal, showRosterModal, toast, h } = FS.ui;
 /* import from player */
 /* import from export */
 /* import from ui */
-window.__MAIN_BUILD = 'build-17-merge-dwell-dblclick';
+window.__MAIN_BUILD = 'build-18-no-automerge-editlock';
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
@@ -3225,12 +3199,6 @@ function wireStageTools() {
   $('btn-edit-mode').addEventListener('click', () => store.setUI({ editMode: !store.getState().editMode }));
   $('btn-multi').addEventListener('click', () => store.setUI({ multiSelect: !store.getState().multiSelect }));
   // 当前队形的组队呈示切换（组队=菱形单元 / 拆开=独立圆点），含位置收拢/偏移与缺席顺延
-  $('btn-combined').addEventListener('click', () => {
-    const s = store.getState();
-    const f = s.project.formations[s.formationIndex];
-    const next = f.combined === false;
-    store.mutate(p => M.setCombined(p, s.formationIndex, next), next ? '队形组队呈示' : '队形拆开呈示');
-  });
   $('btn-add-formation').addEventListener('click', () => addFormation());
   $('btn-del-formation').addEventListener('click', () => deleteFormation());
   $('gen-kind').addEventListener('change', () => {
@@ -3354,7 +3322,7 @@ function applyGenerator(kind) {
     else ids = M.orderedDancers(p, unit);
     const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
     shapes.applySlots(f, ids, slots, { current: f.positions });
-    M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者 + 按组队/拆开呈示收拢或拆开
+    M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者位置（合并单元仅由手动操作创建）
   }, `生成队形(${kind})`);
 }
 
@@ -3789,9 +3757,6 @@ function render(state) {
   styleRefs.paths.checked = state.showPaths;
   styleRefs.grid.checked = state.showGrid;
   const curF = state.project?.formations[state.formationIndex];
-  const combinedNow = curF ? curF.combined !== false : true;
-  $('btn-combined').classList.toggle('toggled-on', combinedNow);
-  $('btn-combined').textContent = combinedNow ? '⛓ 组队' : '⇱ 拆开';
   // 组对/拆对按钮可用性（按原始选择）
   $('btn-pair-create').disabled = state.selection.length !== 2;
   $('btn-pair-split').disabled = !state.selection.some(id => M.pairOf(p, id));

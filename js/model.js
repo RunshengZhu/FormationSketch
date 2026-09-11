@@ -124,8 +124,10 @@ export function findMerge(formation, idA, idB) {
 export function addMerge(formation, idA, idB, style = 'capsule') {
   if (idA === idB || findMerge(formation, idA, idB)) return null;
   if (!UNIT_STYLES.includes(style)) style = 'capsule';
+  // 一名舞者同时只属于一个合并单元：先解除两人涉及的其他绑定（替换语义）
+  formation.merges = (formation.merges || []).filter(m => m.a !== idA && m.b !== idA && m.a !== idB && m.b !== idB);
   const m = { a: idA, b: idB, style };
-  (formation.merges = formation.merges || []).push(m);
+  formation.merges.push(m);
   return m;
 }
 export function removeMerge(formation, idA, idB) {
@@ -144,39 +146,12 @@ export function collapsePair(f, idA, idB) {
   const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
   a.x = b.x = mx; a.y = b.y = my;
 }
-// 切换队形帧的组队呈示状态：
-// 组队：名册舞对自动建合并单元并收拢；拆队：移除全部合并单元并按标准间距拆开
-export function setCombined(project, index, combined) {
-  const f = project.formations[index];
-  if (!f) return;
-  f.combined = !!combined;
-  applyFormationLayout(project, index);
-}
-// 帧布局归一：补齐缺席舞者 + 按组队状态收拢/拆开
+// 帧布局顺延：仅补齐缺席舞者位置；合并单元完全由手动操作创建（组队自动逻辑已移除）
 export function applyFormationLayout(project, index) {
   const f = project.formations[index];
   if (!f) return;
   carryPositionsForward(project, index);
-  if (f.combined !== false) {
-    for (const pair of project.pairs) {
-      if (!f.positions[pair.leader] || !f.positions[pair.follower]) continue;
-      if (!findMerge(f, pair.leader, pair.follower)) addMerge(f, pair.leader, pair.follower, 'capsule');
-    }
-    for (const m of f.merges || []) collapsePair(f, m.a, m.b);
-  } else {
-    for (const m of f.merges || []) {
-      const a = f.positions[m.a], b = f.positions[m.b];
-      if (!a || !b) continue;
-      const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
-      const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
-      a.x = Math.round((mx - 0.35) * 100) / 100; b.x = Math.round((mx + 0.35) * 100) / 100;
-      a.y = b.y = my;
-    }
-    f.merges = [];
-  }
 }
-// 帧的组队呈示状态（缺省视为组队）
-export function isCombined(formation) { return formation ? formation.combined !== false : true; }
 // 将两名已有舞者组成舞伴（两人都必须未配对）；对内编号取不冲突的最小号
 export function addPairByIds(project, leaderId, followerId) {
   if (!dancerById(project, leaderId) || !dancerById(project, followerId)) return null;

@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-17-merge-dwell-dblclick';
+window.__MAIN_BUILD = 'build-18-no-automerge-editlock';
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
@@ -358,12 +358,6 @@ function wireStageTools() {
   $('btn-edit-mode').addEventListener('click', () => store.setUI({ editMode: !store.getState().editMode }));
   $('btn-multi').addEventListener('click', () => store.setUI({ multiSelect: !store.getState().multiSelect }));
   // 当前队形的组队呈示切换（组队=菱形单元 / 拆开=独立圆点），含位置收拢/偏移与缺席顺延
-  $('btn-combined').addEventListener('click', () => {
-    const s = store.getState();
-    const f = s.project.formations[s.formationIndex];
-    const next = f.combined === false;
-    store.mutate(p => M.setCombined(p, s.formationIndex, next), next ? '队形组队呈示' : '队形拆开呈示');
-  });
   $('btn-add-formation').addEventListener('click', () => addFormation());
   $('btn-del-formation').addEventListener('click', () => deleteFormation());
   $('gen-kind').addEventListener('change', () => {
@@ -487,7 +481,7 @@ function applyGenerator(kind) {
     else ids = M.orderedDancers(p, unit);
     const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
     shapes.applySlots(f, ids, slots, { current: f.positions });
-    M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者 + 按组队/拆开呈示收拢或拆开
+    M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者位置（合并单元仅由手动操作创建）
   }, `生成队形(${kind})`);
 }
 
@@ -922,9 +916,6 @@ function render(state) {
   styleRefs.paths.checked = state.showPaths;
   styleRefs.grid.checked = state.showGrid;
   const curF = state.project?.formations[state.formationIndex];
-  const combinedNow = curF ? curF.combined !== false : true;
-  $('btn-combined').classList.toggle('toggled-on', combinedNow);
-  $('btn-combined').textContent = combinedNow ? '⛓ 组队' : '⇱ 拆开';
   // 组对/拆对按钮可用性（按原始选择）
   $('btn-pair-create').disabled = state.selection.length !== 2;
   $('btn-pair-split').disabled = !state.selection.some(id => M.pairOf(p, id));
