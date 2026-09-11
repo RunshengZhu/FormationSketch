@@ -243,11 +243,16 @@ function switchFormation(i) {
   player.pause(); // 无条件暂停（同时取消进行中的数拍入场）
   const s = store.getState();
   const changed = i !== s.formationIndex;
+  // DEFECT-L2-2：getState() 是活引用，setUI 会原地覆盖 formationIndex——动画端点必须
+  // 在 setUI 前暂存（from=切换前帧、to=目标帧，前后切换双向皆然），否则 from===to。
+  const fromF = s.project?.formations[s.formationIndex] || null;
+  const toF = s.project?.formations[i] || null;
+  const { previewOnSwitch: previewOn, editMode } = s;
   store.setUI({ formationIndex: i, selection: [] });
-  if (!s.editMode && player.beat > 0.001) player.seekFormation(i); // 查看模式：切换帧时播放头跟随所选队形
-  if (changed && s.previewOnSwitch) {
+  if (!editMode && player.beat > 0.001) player.seekFormation(i); // 查看模式：切换帧时播放头跟随所选队形
+  if (changed && previewOn) {
     // 双向过渡动画：从切换前的帧插值到目标帧（此前只有向后切才播动画）
-    stageView.startPositionsPreview(s.project.formations[s.formationIndex], s.project.formations[i], 700);
+    stageView.startPositionsPreview(fromF, toF, 700);
   }
 }
 async function addFormation(after = null) {

@@ -43,12 +43,13 @@ export async function runL1(opts = {}) {
     store.setUI({ selection: [], multiSelect: false, editMode: true, showFacingHandle: false });
     store.mutate(p => { p.stage.snap = false; }); // 无 label：不产生历史
     sv.resetView();
+    if (opts.setupView) { await opts.setupView(sv); } // L2·C-04 视图变换回归钩子：子动线重放前重加同一视图变换（不传=原行为）
     await raf2();
     const ids = M.orderedDancers(state().project, 'pair');
     const dancerOf = id => state().project.dancers.find(d => d.id === id);
     const posOf = id => ({ ...fmt().positions[id] });
     const ptOf = id => { const p = posOf(id); return ctx.toClient(p.x, p.y); };
-    const blank = ctx.toClient(5.85, 12.45); // 空白采样点（远离舞者/网格线/中心线）
+    const blank = ctx.toClient(5.7, 12.2); // 空白采样点（远离舞者/网格线/中心线；round5 起避开 0.5 网格 ±0.15m 内，小屏 scale 下 3×3 窗口不沾线）
     return {
       ids, dancerOf, posOf, ptOf, blank,
       base: mean3x3(cv, blank.x, blank.y),

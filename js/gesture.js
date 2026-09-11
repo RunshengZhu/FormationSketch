@@ -7,6 +7,9 @@
 //   IDLE  --down(舞者)--> PENDING   --位移>晋升阈值--> DRAG --up--> 提交"移动舞者"（落点重叠→合并确认浮窗）
 //                                    --按住长按时长且位移小--> MENU（单元浮窗）
 //                                    --up--> TAP（仅选择；落点重叠同样弹合并确认）
+//   徽标即单元：无修饰键直接抓取「未入选且已收拢同点呈示」的合并舞者时，拖拽快照扩为
+//   整单元（两人同步位移）；选择本身仍逐人（点选只选中被点中者），先点后拖/shift/多选
+//   抓取不扩展（保持单人拉伸与组拖语义）；分离呈示（>0 收拢间距）的合并舞者仅拖其一人。
 //   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空）
 //   IDLE  --down(空白·触摸)--> PAN  --位移>晋升阈值--> panBy；未晋升抬起=清空选择（点按）
 //   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
@@ -143,8 +146,18 @@ export function createGestureMachine(host) {
       if (!sel.includes(hit)) { host.select([hit], { add: !!(e.shift || host.multiSelect()) }); selectMod = true; }
       else if (e.shift) { host.select([hit], { add: true, toggleOff: true }); return; }
       const fmt = host.formation();
+      // 徽标即单元（DEFECT-L2-1）：无修饰键直接抓取「未入选且已收拢同点（collapsePair
+      // 后呈示为单个徽标）」的合并舞者 → 拖拽快照扩为整单元，拖动两人同步位移。
+      // 条件刻意收窄：选择语义不变（点选仍只选中被点中者）；已入选（先点后拖）/shift/
+      // 多选抓取不扩展；未收拢（分离呈示）的合并舞者仅拖其一人（单元拉伸语义）。
+      let startIds = host.selection();
+      if (selectMod && !e.shift && !host.multiSelect() && fmt) {
+        const m = (fmt.merges || []).find(x => x.a === hit || x.b === hit);
+        const pa = m && fmt.positions[m.a], pb = m && fmt.positions[m.b];
+        if (m && pa && pb && Math.hypot(pa.x - pb.x, pa.y - pb.y) < 1e-6) startIds = [m.a, m.b];
+      }
       const start = {};
-      for (const id of host.selection()) {
+      for (const id of startIds) {
         const p = fmt?.positions[id];
         if (p) start[id] = { x: p.x, y: p.y };
       }

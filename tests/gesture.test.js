@@ -491,3 +491,155 @@ test('37 左键空白拖动=框选（语义保持：不平移、矩形内全选�
   assert.deepEqual(w.selection.sort(), ['A', 'B']);
   assert.equal(w.log.boxes.at(-1), null);
 });
+
+// ---------- 徽标即单元（DEFECT-L2-1 回归，原 tests/gesture.unit2.test.mjs U1~U10 并入） ----------
+// 与主假世界的差异：支持「收拢同点呈示」布置；hitDancer 与 stage.js 一致——
+// 逆序遍历（视觉上层/后绘者优先）、距离严格更近才替换（收拢同点命中 B 而非 A）。
+function makeWorldU({ collapsed = true } = {}) {
+  const w = {
+    t: 0,
+    timers: [],
+    positions: {
+      A: { x: 1, y: 1, facing: 0 },
+      B: { x: collapsed ? 1 : 1.4, y: 1, facing: 0 }, // collapsed: collapsePair 后同点呈示
+      C: { x: 5, y: 5, facing: 0 },
+      D: { x: 5.4, y: 5, facing: 0 },
+      E: { x: 8, y: 2, facing: 0 },
+    },
+    merges: [{ a: 'A', b: 'B', style: 'capsule' }],
+    selection: [],
+    multi: false,
+    readOnly: false,
+    log: {
+      selects: [], applied: [], rolledBack: [], commits: [],
+      menus: [], hidden: 0, boxes: [], pans: [], zooms: [],
+    },
+  };
+  const host = {
+    readOnly: () => w.readOnly,
+    hitHandle: () => false,
+    hitDancer: (x, y) => {
+      const entries = Object.entries(w.positions);
+      let best = null, bd = Infinity;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [id, p] = entries[i];
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < 0.38 * 1.35 && d < bd) { bd = d; best = id; }
+      }
+      return best;
+    },
+    toStage: (px, py) => ({ x: px / 100, y: py / 100 }),
+    selection: () => [...w.selection],
+    multiSelect: () => w.multi,
+    formation: () => ({ positions: w.positions, merges: w.merges }),
+    fmtIndex: () => 0,
+    now: () => w.t,
+    stage: () => ({ widthM: 10, depthM: 6, snap: false, gridM: 0.5, backstageM: 1 }),
+    select: (ids, o = {}) => {
+      w.log.selects.push([ids, o]);
+      if (o.add && o.toggleOff) w.selection = w.selection.filter(i => !ids.includes(i));
+      else if (o.add) w.selection = [...new Set([...w.selection, ...ids])];
+      else w.selection = [...ids];
+    },
+    applyPositions: map => {
+      w.log.applied.push(map);
+      for (const [id, v] of Object.entries(map)) Object.assign(w.positions[id], v);
+    },
+    rollback: map => {
+      w.log.rolledBack.push(map);
+      for (const [id, v] of Object.entries(map)) Object.assign(w.positions[id], { x: v.x, y: v.y });
+    },
+    commit: label => w.log.commits.push(label),
+    showMenu: p => w.log.menus.push(p),
+    hideMenu: () => { w.log.hidden++; },
+    box: r => w.log.boxes.push(r),
+    panBy: (dx, dy) => w.log.pans.push([dx, dy]),
+    zoomAt: (...a) => w.log.zooms.push(a),
+    requestDraw: () => {},
+    setTimeout: (fn, ms) => { w.timers.push({ fn, due: w.t + ms }); return w.timers.length - 1; },
+    clearTimeout: id => { if (w.timers[id]) w.timers[id] = null; },
+  };
+  w.host = host;
+  w.machine = createGestureMachine(host);
+  const pid = { n: 0 };
+  w.down = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
+    w.machine.down({ pointerId: pointerId ?? ++pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
+  w.move = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
+    w.machine.move({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
+  w.up = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
+    w.machine.up({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
+  return w;
+}
+const atU = (w, id) => ({ x: w.positions[id].x, y: w.positions[id].y });
+
+test('U1 点选收拢徽标：仍单选被点中者（不扩成单元双人）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.down(1, 1); w.up(1, 1); // 徽标中点：命中视觉上层的 B
+  assert.deepEqual(w.selection, ['B']);
+  assert.deepEqual(w.log.commits, []);
+});
+test('U2 shift+点选收拢徽标：按单人追加（多选语义不被单元化）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.selection = ['E'];
+  w.down(1, 1, { shift: true }); w.up(1, 1, { shift: true });
+  assert.deepEqual(w.selection.sort(), ['B', 'E']);
+});
+test('U3 多选开：点选收拢徽标=单人追加（触摸多选入口语义保持）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.multi = true; w.selection = ['E'];
+  w.down(1, 1); w.up(1, 1);
+  assert.deepEqual(w.selection.sort(), ['B', 'E']);
+});
+test('U4 直接抓取收拢徽标拖动：整单元同步位移，恰一条历史', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.down(1, 1); w.move(2.2, 3.4); w.up(2.2, 3.4); // Δ=(+1.2,+2.4)，同 C-02 证据
+  assert.deepEqual(atU(w, 'A'), { x: 2.2, y: 3.4 });
+  assert.deepEqual(atU(w, 'B'), { x: 2.2, y: 3.4 });
+  assert.deepEqual(w.log.commits, ['移动舞者']);
+  assert.deepEqual(Object.keys(w.log.applied.at(-1)).sort(), ['A', 'B']);
+});
+test('U5 先点选（已入选）再拖拽收拢徽标：仅其一人位移（单元拉伸，C-05 P2）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.selection = ['B']; // 模拟先单击选中 B
+  w.down(1, 1); w.move(2, 1); w.up(2, 1);
+  assert.deepEqual(atU(w, 'B'), { x: 2, y: 1 });
+  assert.deepEqual(atU(w, 'A'), { x: 1, y: 1 }); // 单元被拉伸：另一人不动
+});
+test('U6 分离呈示（未收拢）的合并舞者拖拽：仅其一人位移', () => {
+  const w = makeWorldU({ collapsed: false }); // A(1,1) B(1.4,1)：0.4m 两圆+虚线呈示
+  w.down(1, 1); w.move(1.5, 1); w.up(1.5, 1);
+  assert.equal(w.positions.A.x, 1.5);
+  assert.equal(w.positions.B.x, 1.4); // 舞伴不联动（分离态=可拉伸）
+});
+test('U7 未合并舞者拖拽：仅自身位移（D-01/单人语义回归）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.down(8, 2); w.move(8.5, 2.5); w.up(8.5, 2.5);
+  assert.deepEqual(atU(w, 'E'), { x: 8.5, y: 2.5 });
+  assert.equal(w.positions.A.x, 1);
+  assert.equal(w.positions.C.x, 5);
+});
+test('U8 单元拖拽中 Escape：整单元回滚、零历史', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.down(1, 1); w.move(1.5, 1);
+  assert.equal(w.machine.cancel(), true);
+  assert.deepEqual(atU(w, 'A'), { x: 1, y: 1 });
+  assert.deepEqual(atU(w, 'B'), { x: 1, y: 1 });
+  assert.deepEqual(w.log.rolledBack, [{ A: { x: 1, y: 1 }, B: { x: 1, y: 1 } }]);
+  assert.deepEqual(w.log.commits, []);
+});
+test('U9 单元拖拽中第二指按下：整单元回滚（PINCH 中断）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.down(1, 1, { touch: true, pointerId: 1 });
+  w.move(1.5, 1, { touch: true, pointerId: 1 }); // 已转正 DRAG
+  w.down(2, 2, { touch: true, pointerId: 2 });   // 第二指 → 回滚
+  assert.deepEqual(atU(w, 'A'), { x: 1, y: 1 });
+  assert.deepEqual(atU(w, 'B'), { x: 1, y: 1 });
+  assert.deepEqual(w.log.commits, []);
+});
+test('U10 拖动收拢单元途中不误弹确认（成员间距 0，舞伴豁免）', () => {
+  const w = makeWorldU({ collapsed: true });
+  w.down(1, 1); w.move(2.2, 3.4); w.move(3, 4); w.up(3, 4);
+  assert.deepEqual(w.log.menus, []);
+  assert.deepEqual(atU(w, 'A'), { x: 3, y: 4 });
+  assert.deepEqual(atU(w, 'B'), { x: 3, y: 4 });
+});

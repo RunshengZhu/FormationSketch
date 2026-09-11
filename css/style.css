@@ -182,9 +182,13 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 }
 @media (max-width:1023.5px){
   #topbar{gap:4px;padding:0 6px}
+  /* DEFECT-L2-3：375px 顶栏放不下版本徽标（~90px），是页面级横向溢出的根源
+     （#btn-export right=405>375）；移动端隐藏后其余控件可全部收入视口。
+     桌面端（≥1024px）不受影响，G1 门禁的可见版本徽标断言在 1280 宽下照常通过。 */
+  #build-tag{display:none}
   .title-input{flex:1 1 40px;min-width:0;width:0;text-align:center;font-size:13px}
   .btn.small{padding:6px 10px} /* 触摸目标 */
-  #playbar{gap:5px;padding:0 6px}
+  #playbar{gap:5px;padding:0 6px;overflow-x:auto} /* DEFECT-L2-3：375px 下播放条固定内容(节拍器 ctl)右缘=419>375，收敛为内部滚动（同 #stage-tools 模式） */
   #pb-formation{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #stage-tools{gap:4px;padding:4px 6px;flex-wrap:nowrap;overflow-x:auto}
   .rot-ctl input[type=range]{width:64px}
