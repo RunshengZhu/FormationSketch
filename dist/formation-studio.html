@@ -2046,7 +2046,7 @@ class StageView {
       this._clearMergeHold();
       this.mergeHold = { other, start: performance.now() };
     }
-    if (performance.now() - this.mergeHold.start >= 2000) {
+    if (performance.now() - this.mergeHold.start >= 1200) {
       this.mergeHold.fired = true; // 一次性触发，避免 move 反复重建浮窗
       const rect = this.canvas.getBoundingClientRect();
       const mx = rect.left + this.view.ox + dragged.x * this.view.scale;
@@ -2102,6 +2102,7 @@ class StageView {
     }
     const scene = this.getScene();
     if (scene.readOnly) return;
+    this.lockedByLongPress = false; // 每次按下清长按锁定（残留会导致后续拖拽失效）
     if (this.anim) { this.anim = null; this.draw(); } // 动效中操作：立即跳到终态，不吞输入
     if (this.hitHandle(e.clientX, e.clientY)) {
       this.drag = { kind: 'face', id: [...scene.selection][0] };
@@ -2114,12 +2115,22 @@ class StageView {
       if (!scene.selection.has(hit)) this.hooks.select([hit], { add: e.shiftKey });
       else if (e.shiftKey) { this.hooks.select([hit], { add: true, toggleOff: true }); return; }
       // 记录拖拽起始快照（避免引用累加）
+      // 拖拽粒度按帧呈示状态：组队帧=整个合并单元（含舞伴）；拆开帧=单人
+      const fmtCombined = scene.formation ? scene.formation.combined !== false : true;
+      const dragSet = new Set(this.getScene().selection);
+      if (fmtCombined) {
+        const partner = (scene.formation.merges || []).find(m => m.a === hit || m.b === hit);
+        if (partner) {
+          const otherId = partner.a === hit ? partner.b : partner.a;
+          dragSet.add(otherId);
+        }
+      }
       const snap = {};
-      for (const id of this.getScene().selection) {
+      for (const id of dragSet) {
         const p = this.getScene().formation?.positions[id];
         if (p) snap[id] = { x: p.x, y: p.y };
       }
-      this.pendingDrag = { kind: 'dancer', id: hit, startS: s, start: snap, moved: false, downTime: performance.now() };
+      this.pendingDrag = { kind: 'dancer', moveSet: [...dragSet], startS: s, start: snap, moved: false, downTime: performance.now() };
     } else if (e.pointerType === 'mouse') {
       const r = this.canvas.getBoundingClientRect();
       this.box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top, startClientX: e.clientX, startClientY: e.clientY };
