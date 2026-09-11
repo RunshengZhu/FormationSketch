@@ -2046,8 +2046,8 @@ class StageView {
       this._clearMergeHold();
       this.mergeHold = { other, start: performance.now() };
     }
-    if (performance.now() - this.mergeHold.start >= 2000) {
-      this.mergePromptShown = true; // 一次性触发，避免 move 反复重建浮窗
+    if (performance.now() - this.mergeHold.start >= 1200) {
+      this.mergeHold.fired = true; // 一次性触发，避免 move 反复重建浮窗
       const rect = this.canvas.getBoundingClientRect();
       const mx = rect.left + this.view.ox + dragged.x * this.view.scale;
       const my = rect.top + this.view.oy + dragged.y * this.view.scale;
@@ -2061,11 +2061,14 @@ class StageView {
 
   // ---- 命中 ----
   // 始终按单个舞者命中（选择不含舞伴联动；共同移动仅来自框选/多选）
+  // 重合时优先命中后绘制的（视觉上层）
   hitDancer(sx, sy) {
     const scene = this.getScene();
     const positions = scene.playbackPos || scene.formation?.positions || {};
+    const entries = Object.entries(positions);
     let best = null, bd = Infinity;
-    for (const [id, p] of Object.entries(positions)) {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const [id, p] = entries[i];
       const d = Math.hypot(p.x - sx, p.y - sy);
       if (d < DANCER_R * 1.35 && d < bd) { bd = d; best = id; }
     }
@@ -2099,6 +2102,7 @@ class StageView {
     }
     const scene = this.getScene();
     if (scene.readOnly) return;
+    this.lockedByLongPress = false; // 每次按下清长按锁定（残留会导致后续拖拽失效）
     if (this.anim) { this.anim = null; this.draw(); } // 动效中操作：立即跳到终态，不吞输入
     if (this.hitHandle(e.clientX, e.clientY)) {
       this.drag = { kind: 'face', id: [...scene.selection][0] };
@@ -2110,7 +2114,7 @@ class StageView {
     if (hit) {
       if (!scene.selection.has(hit)) this.hooks.select([hit], { add: e.shiftKey });
       else if (e.shiftKey) { this.hooks.select([hit], { add: true, toggleOff: true }); return; }
-      // 记录拖拽起始快照（避免引用累加）
+      // 记录拖拽起始快照（避免引用累加）；只拖当前选择，不联动舞伴（共同移动仅来自框选/多选）
       const snap = {};
       for (const id of this.getScene().selection) {
         const p = this.getScene().formation?.positions[id];
@@ -2227,27 +2231,80 @@ class StageView {
     if (this.pointers.size < 2) this.pinch = null;
     this._clearMergeHold();
     this.lockedByLongPress = false;
-    this.pendingDrag = null; // 清残留待定拖拽，防止后续移动鼠标时粘黏光标
-    const drag = this.drag;
-    const scene = this.getScene();
-    if (drag?.kind === 'dancer' && drag.moved) {
-      this.hooks.commit('移动舞者');
-    } else if (this.box) {
-      const p1 = this.toStage(this.box.startClientX, this.box.startClientY);
+    // 先保存引用并立刻清掉手势状态：后续任何逻辑抛错都不会让拖拽粘黏光标
+    const drag = this.drag, pendingDrag = this.pendingDrag, box = this.box;
+    const scn = this.getScene();
+    this.drag = null; this.pendingDrag = null; this.box = null;
+    // 未转正的 pendingDrag：up 时目标与其他舞者重叠 → 弹合并确认（快速拖到重叠松手也触发）
+    if (pendingDrag && !drag) {
+      const f = scn.formation;
+      const draggedId = pendingDrag.id;
+      const draggedPos = f?.positions[draggedId];
+      if (draggedPos) {
+        let mergeOther = null;
+        for (const [id, q] of Object.entries(f.positions)) {
+          if (id === draggedId) continue;
+          if (Math.hypot(q.x - draggedPos.x, q.y - draggedPos.y) < 0.55) {
+            const already = (f.merges || []).some(m => (m.a === draggedId && m.b === id) || (m.a === id && m.b === draggedId));
+            if (!already) { mergeOther = id; break; }
+          }
+        }
+        if (mergeOther) {
+          this.lockedByLongPress = true;
+          this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, mergeOther], formationIndex: scn.formationIndex, screen: { x: e.clientX, y: e.clientY } });
+          this.requestDraw();
+        }
+      }
+    } else if (drag?.kind === 'dancer') {
+      const fmt = scn.formation;
+      const pos = fmt?.positions;
+      const draggedId = drag.id;
+      const draggedPos = pos?.[draggedId];
+      if (draggedPos) {
+        if (drag.moved) this.hooks.commit('移动舞者');
+        // up 时与其他舞者重叠（<0.55m）且尚未合并 → 弹合并确认浮窗
+        let mergeOther = null;
+        for (const [id, q] of Object.entries(pos)) {
+          if (id === draggedId) continue;
+          if (Math.hypot(q.x - draggedPos.x, q.y - draggedPos.y) < 0.55) {
+            const already = (fmt.merges || []).some(m => (m.a === draggedId && m.b === id) || (m.a === id && m.b === draggedId));
+            if (!already) { mergeOther = id; break; }
+          }
+        }
+        if (mergeOther) {
+          this.lockedByLongPress = true;
+          this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, mergeOther], formationIndex: scn.formationIndex, screen: { x: e.clientX, y: e.clientY } });
+          this.requestDraw();
+          return;
+        }
+        // 长按（按住 ≥500ms 未移动）且已合并 → 弹单元操作浮窗（拆开/切样式）
+        if (!drag.moved && drag.downTime && performance.now() - drag.downTime >= 500) {
+          const partner = (fmt.merges || []).find(m => m.a === draggedId || m.b === draggedId);
+          if (partner) {
+            const otherId = partner.a === draggedId ? partner.b : partner.a;
+            const pa = pos[partner.a], pb = pos[partner.b];
+            if (pa && pb && Math.hypot(pa.x - pb.x, pa.y - pb.y) <= MERGE_DIST) {
+              this.lockedByLongPress = true;
+              this.hooks.showUnitMenu({ mode: 'unit', ids: [draggedId, otherId], style: partner.style, formationIndex: scn.formationIndex, screen: { x: e.clientX, y: e.clientY } });
+              this.requestDraw();
+            }
+          }
+        }
+      }
+    } else if (box) {
+      const p1 = this.toStage(box.startClientX, box.startClientY);
       const r = this.canvas.getBoundingClientRect();
-      const p2 = this.toStage(this.box.x1 + r.left, this.box.y1 + r.top);
+      const p2 = this.toStage(box.x1 + r.left, box.y1 + r.top);
       const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
       const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
-      const positions = scene.formation?.positions || {};
+      const positions = scn.formation?.positions || {};
       const ids = Object.entries(positions)
         .filter(([, p]) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
         .map(([id]) => id);
-      const tiny = Math.abs(this.box.x1 - this.box.x0) < 6 && Math.abs(this.box.y1 - this.box.y0) < 6;
+      const tiny = Math.abs(box.x1 - box.x0) < 6 && Math.abs(box.y1 - box.y0) < 6;
       this.hooks.select(tiny ? [] : ids, { add: e.shiftKey });
-      this.box = null;
       this.requestDraw();
     }
-    this.drag = null;
   }
 }
 
@@ -3019,6 +3076,8 @@ const { renderLibrary, showNewProjectModal, showRosterModal, toast, h } = FS.ui;
 /* import from player */
 /* import from export */
 /* import from ui */
+window.__MAIN_BUILD = 'build-15-selection-fix';
+
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
 let player, stageView, leftStrip, musicTl;

@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-14-merges-popup';
+window.__MAIN_BUILD = 'build-15-selection-fix';
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
