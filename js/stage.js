@@ -1,5 +1,6 @@
-// 舞台画布：渲染 + 命中测试 + 拖拽（拖一带一）/框选/平移缩放/朝向把手
+// 舞台画布：渲染 + 命中测试；手势全部委托 gesture.js 纯状态机（本类是其薄客户端）
 import { faceAudience, partnerOf, posAt, computeSegments, easeInOut, lerpAngle } from './model.js';
+import { createGestureMachine } from './gesture.js';
 
 export const DANCER_R = 0.38; // 舞者圆点半径（米）
 
@@ -270,10 +271,8 @@ export class StageView {
     this.getScene = getScene;     // () => {project, positions, formation, selection:Set, showGhost, showPaths, playbackPos, readOnly}
     this.hooks = hooks;           // {select(ids,{add}), mutateLive(fn), commit(label), onStageClick()}
     this.view = null;
-    this.pointers = new Map();
-    this.drag = null;
     this.box = null;
-    this._rafPending = false;
+    this.gesture = createGestureMachine(this._makeGestureHost());
     this._bind();
     this._ro = new ResizeObserver(() => this.requestDraw());
     this._ro.observe(canvas.parentElement);
@@ -314,7 +313,7 @@ export class StageView {
       from: fromFormation.positions, to: toFormation.positions,
       t0: performance.now(), dur: Math.max(200, durationMs),
     };
-    this.drag = null;
+    this.gesture?.reset(); // 动效打断进行中的手势
     this.box = null;
     this._animTick();
   }
@@ -436,57 +435,6 @@ export class StageView {
     }
   }
 
-  // ---- 手势：长按合并单元弹浮窗；拖拽重叠 2s 弹合并确认 ----
-  _armLongPress(id) {
-    const scene = this.getScene();
-    const f = scene.formation;
-    if (!f) return;
-    const partner = (f.merges || []).find(m => m.a === id || m.b === id);
-    if (!partner) return; // 未合并的舞者不弹
-    const otherId = partner.a === id ? partner.b : partner.a;
-    const a = f.positions[id], b = f.positions[otherId];
-    if (!a || !b || Math.hypot(a.x - b.x, a.y - b.y) > MERGE_DIST) return;
-    const rect = this.canvas.getBoundingClientRect();
-    const px = rect.left + this.view.ox + ((a.x + b.x) / 2) * this.view.scale;
-    const py = rect.top + this.view.oy + ((a.y + b.y) / 2) * this.view.scale;
-    this.longPressTimer = setTimeout(() => {
-      this.longPressTimer = null;
-      this.drag = null; // 取消拖拽，锁定等待浮窗操作
-      this.lockedByLongPress = true;
-      this.hooks.showUnitMenu({ mode: 'unit', ids: [id, otherId], screen: { x: px, y: py } });
-    }, 500);
-  }
-  _checkMergeHold(draggedId) {
-    if (this.mergeHold && this.mergeHold.fired) return;
-    const scene = this.getScene();
-    const f = scene.formation;
-    if (!f) return;
-    const pos = f.positions;
-    const dragged = pos[draggedId];
-    if (!dragged) { this._clearMergeHold(); return; }
-    let other = null;
-    for (const [id, q] of Object.entries(pos)) {
-      if (id === draggedId) continue;
-      if (Math.hypot(q.x - dragged.x, q.y - dragged.y) < 0.6) { other = id; break; }
-    }
-    if (!other) { this._clearMergeHold(); return; }
-    if (!this.mergeHold || this.mergeHold.other !== other) {
-      this._clearMergeHold();
-      this.mergeHold = { other, start: performance.now() };
-    }
-    if (performance.now() - this.mergeHold.start >= 1200) {
-      this.mergeHold.fired = true; // 一次性触发，避免 move 反复重建浮窗
-      const rect = this.canvas.getBoundingClientRect();
-      const mx = rect.left + this.view.ox + dragged.x * this.view.scale;
-      const my = rect.top + this.view.oy + dragged.y * this.view.scale;
-      this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, other], formationIndex: scene.formationIndex, screen: { x: mx, y: my } });
-    }
-  }
-  _clearMergeHold() {
-    this.mergeHold = null;
-    this.mergePromptShown = false;
-  }
-
   // ---- 命中 ----
   // 始终按单个舞者命中（选择不含舞伴联动；共同移动仅来自框选/多选）
   // 重合时优先命中后绘制的（视觉上层）
@@ -507,231 +455,75 @@ export class StageView {
     return Math.hypot(px - this.handlePx.x, py - this.handlePx.y) < 16;
   }
 
+  // ---- 手势：委托 gesture.js 纯状态机；本类只做坐标换算、命令执行与渲染 ----
+  _makeGestureHost() {
+    return {
+      // 查询
+      readOnly: () => !!this.getScene().readOnly,
+      hitHandle: (px, py) => this.hitHandle(px, py),
+      hitDancer: (x, y) => this.hitDancer(x, y),
+      toStage: (px, py) => this.toStage(px, py),
+      selection: () => [...(this.getScene().selection || [])],
+      multiSelect: () => !!this.getScene().multiSelect,
+      formation: () => this.getScene().formation,
+      fmtIndex: () => this.getScene().formationIndex,
+      stage: () => this.getScene().project.stage,
+      // 命令
+      select: (ids, opts) => this.hooks.select(ids, opts || {}),
+      applyPositions: map => this.hooks.mutateLive(p => {
+        const f = p.formations[this.getScene().formationIndex];
+        for (const [id, v] of Object.entries(map)) {
+          const q = f.positions[id];
+          if (q) Object.assign(q, v);
+        }
+      }),
+      rollback: map => this.hooks.mutateLive(p => {
+        const f = p.formations[this.getScene().formationIndex];
+        for (const [id, v] of Object.entries(map)) {
+          const q = f.positions[id];
+          if (q) { q.x = v.x; q.y = v.y; }
+        }
+      }),
+      commit: label => this.hooks.commit(label),
+      showMenu: payload => {
+        const rect = this.canvas.getBoundingClientRect();
+        const v = this.view;
+        const at = payload.at || { x: 0, y: 0 };
+        this.hooks.showUnitMenu({ ...payload, screen: { x: rect.left + v.ox + at.x * v.scale, y: rect.top + v.oy + at.y * v.scale } });
+      },
+      hideMenu: () => this.hooks.hideUnitMenu?.(),
+      box: rect => {
+        if (!rect) { this.box = null; this.requestDraw(); return; }
+        const r = this.canvas.getBoundingClientRect(); // client px → 画布内像素（渲染用）
+        this.box = { x0: rect.x0 - r.left, y0: rect.y0 - r.top, x1: rect.x1 - r.left, y1: rect.y1 - r.top };
+        this.requestDraw();
+      },
+      panBy: (dx, dy) => {
+        this.ensureView();
+        this.view.ox += dx; this.view.oy += dy;
+        this.clampPan();
+        this.requestDraw();
+      },
+      zoomAt: (cx, cy, f) => this.zoomAt(cx, cy, f),
+      requestDraw: () => this.requestDraw(),
+    };
+  }
+
   _bind() {
     const cv = this.canvas;
-    cv.addEventListener('pointerdown', e => this._down(e));
-    cv.addEventListener('pointermove', e => this._move(e));
-    cv.addEventListener('pointerup', e => this._up(e));
-    cv.addEventListener('pointercancel', e => this._up(e));
+    const ev = e => ({ pointerId: e.pointerId, px: e.clientX, py: e.clientY, shift: e.shiftKey, touch: e.pointerType !== 'mouse' });
+    cv.addEventListener('pointerdown', e => {
+      try { cv.setPointerCapture(e.pointerId); } catch {} // 合成事件/已释放指针时可能抛错
+      this.gesture.down(ev(e));
+    });
+    cv.addEventListener('pointermove', e => this.gesture.move(ev(e)));
+    cv.addEventListener('pointerup', e => this.gesture.up(ev(e)));
+    cv.addEventListener('pointercancel', () => this.gesture.cancel());
     cv.addEventListener('wheel', e => {
       e.preventDefault();
       this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012));
     }, { passive: false });
   }
-  _down(e) {
-    try { this.canvas.setPointerCapture(e.pointerId); } catch {} // 合成事件/已释放指针时可能抛错
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (this.pointers.size === 2) { // 进入双指手势
-      this.drag = null; this.box = null;
-      const [a, b] = [...this.pointers.values()];
-      this.pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
-      this.requestDraw();
-      return;
-    }
-    const scene = this.getScene();
-    if (scene.readOnly) return;
-    this.lockedByLongPress = false; // 每次按下清长按锁定（残留会导致后续拖拽失效）
-    if (this.anim) { this.anim = null; this.draw(); } // 动效中操作：立即跳到终态，不吞输入
-    if (this.hitHandle(e.clientX, e.clientY)) {
-      this.drag = { kind: 'face', id: [...scene.selection][0] };
-      return;
-    }
-    const s = this.toStage(e.clientX, e.clientY);
-    this.hooks.hideUnitMenu?.();
-    const hit = this.hitDancer(s.x, s.y);
-    if (hit) {
-      if (!scene.selection.has(hit)) this.hooks.select([hit], { add: e.shiftKey });
-      else if (e.shiftKey) { this.hooks.select([hit], { add: true, toggleOff: true }); return; }
-      // 记录拖拽起始快照（避免引用累加）；只拖当前选择，不联动舞伴（共同移动仅来自框选/多选）
-      const snap = {};
-      for (const id of this.getScene().selection) {
-        const p = this.getScene().formation?.positions[id];
-        if (p) snap[id] = { x: p.x, y: p.y };
-      }
-      this.pendingDrag = { kind: 'dancer', id: hit, startS: s, start: snap, moved: false, downTime: performance.now() };
-    } else if (e.pointerType === 'mouse') {
-      const r = this.canvas.getBoundingClientRect();
-      this.box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top, startClientX: e.clientX, startClientY: e.clientY };
-    } else {
-      this.drag = { kind: 'pan', lastX: e.clientX, lastY: e.clientY };
-    }
-  }
-  _move(e) {
-    if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (this.pointers.size === 2 && this.pinch) {
-      const [a, b] = [...this.pointers.values()];
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-      if (this.pinch.dist > 8 && d > 0) this.zoomAt(cx, cy, d / this.pinch.dist); // 防零距离产生 Infinity
-      this.view.ox += cx - this.pinch.cx; this.view.oy += cy - this.pinch.cy;
-      this.pinch = { dist: d, cx, cy };
-      this.clampPan();
-      this.requestDraw();
-      return;
-    }
-    const scene = this.getScene();
-    if (this.longPressTimer && Math.hypot(e.clientX - (this._lpStart?.x ?? e.clientX), e.clientY - (this._lpStart?.y ?? e.clientY)) > 6) {
-      clearTimeout(this.longPressTimer); this.longPressTimer = null;
-    }
-    if (this.lockedByLongPress) return;
-    // 待定拖拽转正：位移超阈值才真正开始拖动（避免微动误触）；长按合并单元未动 600ms 弹浮窗
-    if (this.pendingDrag && !this.drag) {
-      const sNow = this.toStage(e.clientX, e.clientY);
-      const movedDist = Math.hypot(sNow.x - this.pendingDrag.startS.x, sNow.y - this.pendingDrag.startS.y);
-      if (movedDist > 0.06) {
-        this.drag = this.pendingDrag;
-        this.pendingDrag = null;
-      } else if (performance.now() - this.pendingDrag.downTime >= 600 && !this._longPressFired) {
-        this._longPressFired = true;
-        const f = scene.formation;
-        const partner = (f.merges || []).find(m => m.a === this.pendingDrag.id || m.b === this.pendingDrag.id);
-        if (partner) {
-          const otherId = partner.a === this.pendingDrag.id ? partner.b : partner.a;
-          const a = f.positions[partner.a], b2 = f.positions[partner.b];
-          const cvRect = this.canvas.getBoundingClientRect();
-          const px2 = cvRect.left + this.view.ox + ((a.x + b2.x) / 2) * this.view.scale;
-          const py2 = cvRect.top + this.view.oy + ((a.y + b2.y) / 2) * this.view.scale;
-          this.hooks.showUnitMenu({ mode: 'unit', ids: [partner.a, partner.b], style: partner.style, formationIndex: scene.formationIndex, screen: { x: px2, y: py2 } });
-          this.pendingDrag = null;
-          this.lockedByLongPress = true;
-          return;
-        }
-      }
-    }
-    const drag = this.drag;
-    if (drag?.kind === 'dancer') {
-      this._checkMergeHold(drag.id);
-      const s = this.toStage(e.clientX, e.clientY);
-      let dx = s.x - drag.startS.x, dy = s.y - drag.startS.y;
-      if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 0.02) drag.moved = true;
-      const stage = scene.project.stage;
-      if (stage.snap) {
-        const g = stage.gridM;
-        const baseId = Object.keys(drag.start)[0];
-        const base = drag.start[baseId];
-        if (base) {
-          dx = Math.round((base.x + dx) / g) * g - base.x;
-          dy = Math.round((base.y + dy) / g) * g - base.y;
-        }
-      }
-      const start = drag.start;
-      const bs = stage.backstageM ?? 0;
-      this.hooks.mutateLive(p => {
-        const f = p.formations[this._formationIndex()];
-        for (const [id, s0] of Object.entries(start)) {
-          const q = f.positions[id];
-          if (q) {
-            // 钳制在舞台+后台区范围内，防止拖丢
-            q.x = Math.min(stage.widthM + bs, Math.max(-bs, s0.x + dx));
-            q.y = Math.min(stage.depthM + bs, Math.max(-bs, s0.y + dy));
-          }
-        }
-      });
-      this.requestDraw();
-    } else if (drag?.kind === 'face') {
-      const s = this.toStage(e.clientX, e.clientY);
-      const f = scene.project.formations[this._formationIndex()];
-      const p = f.positions[drag.id];
-      if (p) {
-        const ang = Math.round(((Math.atan2(s.x - p.x, -(s.y - p.y)) * 180 / Math.PI) % 360 + 360) % 360);
-        this.hooks.mutateLive(proj => {
-          const ff = proj.formations[this._formationIndex()];
-          if (ff.positions[drag.id]) ff.positions[drag.id].facing = ang;
-        });
-        this.requestDraw();
-      }
-    } else if (drag?.kind === 'pan') {
-      this.ensureView();
-      this.view.ox += e.clientX - drag.lastX;
-      this.view.oy += e.clientY - drag.lastY;
-      drag.lastX = e.clientX; drag.lastY = e.clientY;
-      this.clampPan();
-      this.requestDraw();
-    } else if (this.box) {
-      const r = this.canvas.getBoundingClientRect();
-      this.box.x1 = e.clientX - r.left; this.box.y1 = e.clientY - r.top;
-      this.requestDraw();
-    }
-  }
-  _formationIndex() { return this.getScene().formationIndex; }
-  _up(e) {
-    this.pointers.delete(e.pointerId);
-    if (this.pointers.size < 2) this.pinch = null;
-    this._clearMergeHold();
-    this.lockedByLongPress = false;
-    // 先保存引用并立刻清掉手势状态：后续任何逻辑抛错都不会让拖拽粘黏光标
-    const drag = this.drag, pendingDrag = this.pendingDrag, box = this.box;
-    const scn = this.getScene();
-    this.drag = null; this.pendingDrag = null; this.box = null;
-    // 未转正的 pendingDrag：up 时目标与其他舞者重叠 → 弹合并确认（快速拖到重叠松手也触发）
-    if (pendingDrag && !drag) {
-      const f = scn.formation;
-      const draggedId = pendingDrag.id;
-      const draggedPos = f?.positions[draggedId];
-      if (draggedPos) {
-        let mergeOther = null;
-        for (const [id, q] of Object.entries(f.positions)) {
-          if (id === draggedId) continue;
-          if (Math.hypot(q.x - draggedPos.x, q.y - draggedPos.y) < 0.55) {
-            const already = (f.merges || []).some(m => (m.a === draggedId && m.b === id) || (m.a === id && m.b === draggedId));
-            if (!already) { mergeOther = id; break; }
-          }
-        }
-        if (mergeOther) {
-          this.lockedByLongPress = true;
-          this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, mergeOther], formationIndex: scn.formationIndex, screen: { x: e.clientX, y: e.clientY } });
-          this.requestDraw();
-        }
-      }
-    } else if (drag?.kind === 'dancer') {
-      const fmt = scn.formation;
-      const pos = fmt?.positions;
-      const draggedId = drag.id;
-      const draggedPos = pos?.[draggedId];
-      if (draggedPos) {
-        if (drag.moved) this.hooks.commit('移动舞者');
-        // up 时与其他舞者重叠（<0.55m）且尚未合并 → 弹合并确认浮窗
-        let mergeOther = null;
-        for (const [id, q] of Object.entries(pos)) {
-          if (id === draggedId) continue;
-          if (Math.hypot(q.x - draggedPos.x, q.y - draggedPos.y) < 0.55) {
-            const already = (fmt.merges || []).some(m => (m.a === draggedId && m.b === id) || (m.a === id && m.b === draggedId));
-            if (!already) { mergeOther = id; break; }
-          }
-        }
-        if (mergeOther) {
-          this.lockedByLongPress = true;
-          this.hooks.showUnitMenu({ mode: 'merge', ids: [draggedId, mergeOther], formationIndex: scn.formationIndex, screen: { x: e.clientX, y: e.clientY } });
-          this.requestDraw();
-          return;
-        }
-        // 长按（按住 ≥500ms 未移动）且已合并 → 弹单元操作浮窗（拆开/切样式）
-        if (!drag.moved && drag.downTime && performance.now() - drag.downTime >= 500) {
-          const partner = (fmt.merges || []).find(m => m.a === draggedId || m.b === draggedId);
-          if (partner) {
-            const otherId = partner.a === draggedId ? partner.b : partner.a;
-            const pa = pos[partner.a], pb = pos[partner.b];
-            if (pa && pb && Math.hypot(pa.x - pb.x, pa.y - pb.y) <= MERGE_DIST) {
-              this.lockedByLongPress = true;
-              this.hooks.showUnitMenu({ mode: 'unit', ids: [draggedId, otherId], style: partner.style, formationIndex: scn.formationIndex, screen: { x: e.clientX, y: e.clientY } });
-              this.requestDraw();
-            }
-          }
-        }
-      }
-    } else if (box) {
-      const p1 = this.toStage(box.startClientX, box.startClientY);
-      const r = this.canvas.getBoundingClientRect();
-      const p2 = this.toStage(box.x1 + r.left, box.y1 + r.top);
-      const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
-      const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
-      const positions = scn.formation?.positions || {};
-      const ids = Object.entries(positions)
-        .filter(([, p]) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
-        .map(([id]) => id);
-      const tiny = Math.abs(box.x1 - box.x0) < 6 && Math.abs(box.y1 - box.y0) < 6;
-      this.hooks.select(tiny ? [] : ids, { add: e.shiftKey });
-      this.requestDraw();
-    }
-  }
+  gestureCancel() { return this.gesture.cancel(); }
+  gestureMenuClosed() { this.gesture.reset(); } // 浮窗经由自身按钮/上层关闭时同步解锁
 }

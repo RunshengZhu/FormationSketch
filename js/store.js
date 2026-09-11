@@ -67,6 +67,7 @@ let state = {
   formationIndex: 0,
   selection: [],             // dancer ids
   editMode: true,            // 编辑开关（默认开）：舞台可拖动编辑；关闭为查看模式
+  multiSelect: false,        // 多选开关（触摸端多选入口）：开启后点按=追加选择
   theme: 'dark',             // dark | light（持久化到 localStorage）
   showFacingHandle: false,  // 朝向把手（样式类，默认隐藏）
   showGhost: true,

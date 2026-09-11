@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-15-selection-fix';
+window.__MAIN_BUILD = 'build-16-gesture-machine';
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
@@ -48,6 +48,7 @@ function stageScene() {
     merges: currentFormation()?.merges || [],
     formationIndex: s.formationIndex,
     selection: new Set(expandedSelection()),
+    multiSelect: s.multiSelect,
     singleSelected: s.selection.length === 1, // 朝向把手按原始选择判定（舞对联动会扩成 2 个）
     facingHandle: s.showFacingHandle,
     showGhost: s.showGhost,
@@ -65,9 +66,10 @@ let unitMenuEl = null;
 const UNIT_STYLE_LABEL = { capsule: '胶囊', diamond: '菱形', twin: '双圆' };
 function hideUnitMenu() {
   if (unitMenuEl) { unitMenuEl.remove(); unitMenuEl = null; }
+  stageView?.gestureMenuClosed?.(); // 让手势状态机知道浮窗已关（否则下次按下会被 MENU 态吞掉）
 }
 function showUnitMenu(payload) {
-  hideUnitMenu();
+  if (unitMenuEl) { unitMenuEl.remove(); unitMenuEl = null; } // 纯 DOM 替换，不通知状态机（弹出方是状态机自己）
   const wrap = document.getElementById('stage-wrap');
   if (!wrap) return;
   const el = document.createElement('div');
@@ -91,13 +93,13 @@ function showUnitMenu(payload) {
     b.addEventListener('click', () => {
       if (payload.mode === 'merge') {
         store.mutate(p => {
-          const f = p.formations[st.formationIndex];
+          const f = p.formations[store.getState().formationIndex];
           if (!f) return;
           M.addMerge(f, payload.ids[0], payload.ids[1], sty);
           M.collapsePair(f, payload.ids[0], payload.ids[1]);
         }, '合并单元');
       } else {
-        store.mutate(q => { M.setMergeStyle(q.formations[st.formationIndex], payload.ids[0], payload.ids[1], sty); }, '切换单元样式');
+        store.mutate(q => { M.setMergeStyle(q.formations[store.getState().formationIndex], payload.ids[0], payload.ids[1], sty); }, '切换单元样式');
       }
       hideUnitMenu();
     });
@@ -242,8 +244,9 @@ function switchFormation(i) {
   const changed = i !== s.formationIndex;
   store.setUI({ formationIndex: i, selection: [] });
   if (!s.editMode && player.beat > 0.001) player.seekFormation(i); // 查看模式：切换帧时播放头跟随所选队形
-  if (changed && s.previewOnSwitch && i > 0) {
-    stageView.startPositionsPreview(s.project.formations[i - 1], s.project.formations[i], 700);
+  if (changed && s.previewOnSwitch) {
+    // 双向过渡动画：从切换前的帧插值到目标帧（此前只有向后切才播动画）
+    stageView.startPositionsPreview(s.project.formations[s.formationIndex], s.project.formations[i], 700);
   }
 }
 async function addFormation(after = null) {
@@ -353,6 +356,7 @@ function renderUndoButtons() {
 // ---------- 舞台工具 ----------
 function wireStageTools() {
   $('btn-edit-mode').addEventListener('click', () => store.setUI({ editMode: !store.getState().editMode }));
+  $('btn-multi').addEventListener('click', () => store.setUI({ multiSelect: !store.getState().multiSelect }));
   // 当前队形的组队呈示切换（组队=菱形单元 / 拆开=独立圆点），含位置收拢/偏移与缺席顺延
   $('btn-combined').addEventListener('click', () => {
     const s = store.getState();
@@ -804,7 +808,7 @@ function wireKeyboard() {
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
-    if (e.key === 'Escape') { store.setUI({ selection: [] }); return; }
+    if (e.key === 'Escape') { if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return; // 其余单键快捷键不与浏览器/系统修饰键冲突
     if (e.key.toLowerCase() === 'e') { store.setUI({ editMode: !s.editMode }); return; } // 编辑开关
     if (!s.editMode) return; // 查看模式下禁用编辑类快捷键
@@ -907,6 +911,7 @@ function render(state) {
   renderUndoButtons();
   // 工具按钮状态
   $('btn-edit-mode').classList.toggle('toggled-on', state.editMode);
+  $('btn-multi').classList.toggle('toggled-on', state.multiSelect);
   $('btn-ghost').classList.toggle('toggled-on', state.showGhost);
   $('btn-paths').classList.toggle('toggled-on', state.showPaths);
   $('btn-switch-anim').classList.toggle('toggled-on', state.previewOnSwitch);
