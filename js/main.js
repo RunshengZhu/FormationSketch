@@ -796,7 +796,13 @@ function wireKeyboard() {
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (store.getState().view !== 'editor') return;
     const s = store.getState();
-    if (e.code === 'Space') { e.preventDefault(); togglePlay(); return; }
+    if (e.code === 'Space') {
+      // 空格按住=平移修饰键（空格+左键空白拖动=平移）；原"空格=播放/暂停"延迟到
+      // keyup：若按住期间空格参与了指针手势（平移），则不触发播放切换
+      e.preventDefault();
+      stageView.setSpaceHeld(true);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) store.redo(); else store.undo();
@@ -845,6 +851,17 @@ function wireKeyboard() {
       }, '微调位置');
     }
   });
+  // 空格 keyup：结束平移修饰键状态；按住期间未参与指针手势 → 维持原"空格=播放/暂停"
+  document.addEventListener('keyup', e => {
+    if (e.code !== 'Space') return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (store.getState().view !== 'editor') return;
+    if (!stageView?.spaceHeld) return;
+    const used = stageView.setSpaceHeld(false);
+    if (!used) togglePlay();
+  });
+  window.addEventListener('blur', () => stageView?.setSpaceHeld(false)); // 焦点丢失防修饰键卡住
 }
 
 // ---------- 移动端队形索引条 ----------

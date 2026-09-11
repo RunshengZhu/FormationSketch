@@ -83,12 +83,12 @@ function makeWorld(opts = {}) {
     w.t = end;
   };
   const pid = { n: 0 };
-  w.down = (x, y, { shift = false, touch = false, pointerId } = {}) =>
-    w.machine.down({ pointerId: pointerId ?? ++pid.n, px: x * 100, py: y * 100, shift, touch });
-  w.move = (x, y, { shift = false, touch = false, pointerId } = {}) =>
-    w.machine.move({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch });
-  w.up = (x, y, { shift = false, touch = false, pointerId } = {}) =>
-    w.machine.up({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch });
+  w.down = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
+    w.machine.down({ pointerId: pointerId ?? ++pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
+  w.move = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
+    w.machine.move({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
+  w.up = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
+    w.machine.up({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
   return w;
 }
 
@@ -406,4 +406,88 @@ test('29c 驻留后松手：不重复弹窗', () => {
   w.move(5.3, 5);        // 驻留触发 → MENU
   w.up(5.3, 5);          // 松手（MENU 态吞掉）
   assert.equal(w.log.menus.length, 1); // 仍是驻留那一次
+});
+
+// ---------- 空白手势语义补全（L1 D-11 桌面平移 / D-02 触摸点按清选） ----------
+// 语义裁定：左键空白拖动=框选（不变）；桌面平移=中键空白拖动 或 空格+左键空白拖动；
+// 触摸空白：位移<promoteM 抬起=清空选择，晋升后单指拖动=平移且不改选择。
+test('30 中键空白拖动=平移：panBy 序列，零选择/零框选/零历史', () => {
+  const w = makeWorld();
+  w.selection = ['E'];
+  w.down(0.25, 0.25, { button: 1, pointerId: 1 });
+  w.move(1.25, 0.75, { button: 1, pointerId: 1 });
+  w.move(2.25, 1.25, { button: 1, pointerId: 1 });
+  w.up(2.25, 1.25, { button: 1, pointerId: 1 });
+  assert.deepEqual(w.log.pans, [[100, 50], [100, 50]]);
+  assert.deepEqual(w.selection, ['E']);   // 平移全程不改选择
+  assert.deepEqual(w.log.boxes, []);      // 不走框选
+  assert.deepEqual(w.log.commits, []);    // 不产生历史
+  assert.equal(w.machine.state(), 'IDLE');
+});
+test('31 中键空白平移中途 Escape(cancel)：终止且零历史', () => {
+  const w = makeWorld();
+  w.down(0.25, 0.25, { button: 1, pointerId: 1 });
+  w.move(1.25, 0.75, { button: 1, pointerId: 1 });
+  assert.equal(w.machine.cancel(), true);
+  assert.deepEqual(w.selection, []);
+  assert.deepEqual(w.log.commits, []);
+});
+test('32 空格+左键空白拖动=平移（space 经事件对象传入，state 机不读 DOM）', () => {
+  const w = makeWorld();
+  w.selection = ['E'];
+  w.down(0.25, 0.25, { space: true, pointerId: 1 });
+  w.move(2.25, 1.25, { space: true, pointerId: 1 });
+  w.up(2.25, 1.25, { space: true, pointerId: 1 });
+  assert.deepEqual(w.log.pans, [[200, 100]]);
+  assert.deepEqual(w.selection, ['E']);
+  assert.deepEqual(w.log.boxes, []);
+});
+test('33 空格+左键按在舞者上：不平移不选择不拖拽（平移仅空白起手）', () => {
+  const w = makeWorld();
+  w.down(1, 1, { space: true, pointerId: 1 });
+  w.move(2, 2, { space: true, pointerId: 1 });
+  w.up(2, 2, { space: true, pointerId: 1 });
+  assert.deepEqual(w.log.pans, []);
+  assert.deepEqual(w.selection, []);
+  assert.deepEqual(w.log.applied, []);
+  assert.deepEqual(w.log.selects, []);
+});
+test('34 中键按在舞者上：同 33（不误启动编辑手势）', () => {
+  const w = makeWorld();
+  w.down(1, 1, { button: 1, pointerId: 1 });
+  w.move(2, 2, { button: 1, pointerId: 1 });
+  w.up(2, 2, { button: 1, pointerId: 1 });
+  assert.deepEqual(w.log.pans, []);
+  assert.deepEqual(w.selection, []);
+  assert.deepEqual(w.log.applied, []);
+});
+test('35 触摸空白点按（无晋升位移）抬起：清空选择且零平移', () => {
+  const w = makeWorld();
+  w.selection = ['E'];
+  w.down(0.25, 0.25, { touch: true, pointerId: 91 });
+  w.up(0.26, 0.26, { touch: true, pointerId: 91 }); // 无 move 事件 → 未晋升
+  assert.deepEqual(w.selection, []);
+  assert.deepEqual(w.log.pans, []);
+});
+test('36 触摸空白小抖动（<promoteM）不平移；晋升后补齐平移且全程不碰选择', () => {
+  const w = makeWorld();
+  w.selection = ['E'];
+  w.down(0.25, 0.25, { touch: true, pointerId: 91 });
+  w.move(0.3, 0.25, { touch: true, pointerId: 91 }); // 5px < 6px（promoteM×100px/m）
+  assert.deepEqual(w.log.pans, []);
+  w.move(2.25, 2.25, { touch: true, pointerId: 91 }); // 晋升：一次性补齐自按下起的位移
+  assert.deepEqual(w.log.pans, [[200, 200]]);
+  w.up(2.25, 2.25, { touch: true, pointerId: 91 });
+  assert.deepEqual(w.selection, ['E']);    // 平移不改选择
+  assert.deepEqual(w.log.selects, []);     // select 全程未被调用
+});
+test('37 左键空白拖动=框选（语义保持：不平移、矩形内全选）', () => {
+  const w = makeWorld();
+  w.selection = ['E'];
+  w.down(0.2, 0.2, { button: 0, pointerId: 1 });
+  w.move(2, 2, { button: 0, pointerId: 1 });
+  assert.deepEqual(w.log.pans, []); // 左键拖动不平移
+  w.up(2, 2, { button: 0, pointerId: 1 });
+  assert.deepEqual(w.selection.sort(), ['A', 'B']);
+  assert.equal(w.log.boxes.at(-1), null);
 });

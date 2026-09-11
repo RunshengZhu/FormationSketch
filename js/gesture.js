@@ -7,8 +7,9 @@
 //   IDLE  --down(舞者)--> PENDING   --位移>晋升阈值--> DRAG --up--> 提交"移动舞者"（落点重叠→合并确认浮窗）
 //                                    --按住长按时长且位移小--> MENU（单元浮窗）
 //                                    --up--> TAP（仅选择；落点重叠同样弹合并确认）
-//   IDLE  --down(空白·鼠标)--> BOX  --up--> 框内全选（<最小边长视为点击=清空）
-//   IDLE  --down(空白·触摸)--> PAN  --move--> panBy
+//   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空）
+//   IDLE  --down(空白·触摸)--> PAN  --位移>晋升阈值--> panBy；未晋升抬起=清空选择（点按）
+//   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
 //   任意  --第二指按下--> PINCH（进行中的 DRAG 立即回滚）
 //   MENU  --任意按下--> 退出浮窗并吞掉该次按下（点外部=取消）
 //   DRAG/PENDING --Escape(cancel)--> 回滚到按下前快照，不产生历史
@@ -115,15 +116,20 @@ export function createGestureMachine(host) {
     g = null; state = 'PINCH';
   }
 
-  // e = { pointerId, px, py, shift, touch }（px/py 为 client 坐标）
+  // e = { pointerId, px, py, shift, touch, button, space }（px/py 为 client 坐标；
+  //      button=按下时的 PointerEvent.button，space=宿主跟踪的空格按住状态——桌面平移修饰键）
   function down(e) {
     if (state === 'MENU') { exitMenu(); return; } // 点外部=取消，并吞掉这次按下
     pointers.set(e.pointerId, { x: e.px, y: e.py });
     if (pointers.size === 2) { abortToPinch(); return; }
     if (pointers.size > 2) return;
     if (host.readOnly()) return;
+    // 桌面平移修饰键：中键（button=1）或空格按住+左键。仅在空白起手=平移；
+    // 命中把手/舞者时不启动任何编辑手势（平移意图优先，宁可不动作也不误编辑）。
+    const panMod = e.button === 1 || !!e.space;
     // 命中优先级：朝向把手 > 舞者 > 空白
     if (host.hitHandle(e.px, e.py)) {
+      if (panMod) return;
       g = { kind: 'FACE', id: host.selection()[0], changed: false };
       state = 'FACE';
       return;
@@ -131,6 +137,7 @@ export function createGestureMachine(host) {
     const s = host.toStage(e.px, e.py);
     const hit = host.hitDancer(s.x, s.y);
     if (hit) {
+      if (panMod) return;
       const sel = host.selection();
       let selectMod = false;
       if (!sel.includes(hit)) { host.select([hit], { add: !!(e.shift || host.multiSelect()) }); selectMod = true; }
@@ -144,12 +151,16 @@ export function createGestureMachine(host) {
       g = { kind: 'PENDING', id: hit, startS: s, startPx: { x: e.px, y: e.py }, start, selectMod };
       state = 'PENDING';
       if (e.touch) armLP(); // 长按仅触摸端；桌面端用双击
+    } else if (panMod) {
+      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: false, promoted: true };
+      state = 'PAN';
     } else if (!e.touch) {
       g = { kind: 'BOX', x0: e.px, y0: e.py, x1: e.px, y1: e.py };
       state = 'BOX';
       host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 });
     } else {
-      g = { kind: 'PAN', lastX: e.px, lastY: e.py };
+      // 触摸空白：先以点按待定，位移超过晋升阈值才转平移；未晋升抬起=清空选择
+      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: true, promoted: false, startS: s };
       state = 'PAN';
     }
   }
@@ -201,6 +212,12 @@ export function createGestureMachine(host) {
       return;
     }
     if (g.kind === 'PAN') {
+      if (!g.promoted) {
+        // 触摸空白：位移超过晋升阈值才转平移（阈值与拖拽晋升一致）
+        const sNow = host.toStage(e.px, e.py);
+        if (Math.hypot(sNow.x - g.startS.x, sNow.y - g.startS.y) <= TH.promoteM) return;
+        g.promoted = true; // 晋升当次即补齐自按下起的全部位移（平移量=手指位移，无滞后）
+      }
       host.panBy(e.px - g.lastX, e.py - g.lastY);
       g.lastX = e.px; g.lastY = e.py;
       return;
@@ -278,7 +295,13 @@ export function createGestureMachine(host) {
       endGesture();
       return;
     }
-    if (state === 'PAN' || state === 'PINCH') { endGesture(); return; }
+    if (state === 'PAN') {
+      // 触摸空白未晋升抬起 = 点按语义：清空选择（平移本身永不改选择）
+      if (g && g.touch && !g.promoted) host.select([]);
+      endGesture();
+      return;
+    }
+    if (state === 'PINCH') { endGesture(); return; }
   }
 
   // Escape / pointercancel：进行中手势取消；DRAG 回滚到按下前快照。

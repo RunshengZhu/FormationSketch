@@ -272,6 +272,8 @@ export class StageView {
     this.hooks = hooks;           // {select(ids,{add}), mutateLive(fn), commit(label), onStageClick()}
     this.view = null;
     this.box = null;
+    this._spaceHeld = false;   // 空格（平移修饰键）按住状态，由 main.js 键盘接线驱动
+    this._spaceGesture = false; // 本次按住空格期间是否发生过指针手势
     this.gesture = createGestureMachine(this._makeGestureHost());
     this._bind();
     this._ro = new ResizeObserver(() => this.requestDraw());
@@ -516,18 +518,33 @@ export class StageView {
 
   _bind() {
     const cv = this.canvas;
-    const ev = e => ({ pointerId: e.pointerId, px: e.clientX, py: e.clientY, shift: e.shiftKey, touch: e.pointerType !== 'mouse' });
+    // 事件翻译：button=按下键位（1=中键）、space=空格按住状态（main.js 键盘接线跟踪，
+    // 经事件对象传给手势机——手势机保持纯函数、不读 DOM）
+    const ev = e => ({ pointerId: e.pointerId, px: e.clientX, py: e.clientY, shift: e.shiftKey, touch: e.pointerType !== 'mouse', button: e.button, space: this._spaceHeld });
     cv.addEventListener('pointerdown', e => {
+      if (e.button === 1) e.preventDefault(); // 中键按下：防浏览器自动滚动
+      if (this._spaceHeld) this._spaceGesture = true; // 本次按住空格期间发生了指针手势
       try { cv.setPointerCapture(e.pointerId); } catch {} // 合成事件/已释放指针时可能抛错
       this.gesture.down(ev(e));
     });
     cv.addEventListener('pointermove', e => this.gesture.move(ev(e)));
     cv.addEventListener('pointerup', e => this.gesture.up(ev(e)));
     cv.addEventListener('pointercancel', () => this.gesture.cancel());
+    // 中键的兼容鼠标事件默认行为（自动滚动）同样拦掉
+    cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     cv.addEventListener('wheel', e => {
       e.preventDefault();
       this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012));
     }, { passive: false });
+  }
+  // ---- 空格平移修饰键（main.js 驱动）----
+  get spaceHeld() { return this._spaceHeld; }
+  setSpaceHeld(on) {
+    const was = this._spaceHeld;
+    this._spaceHeld = !!on;
+    if (this._spaceHeld && !was) this._spaceGesture = false; // 新一次按住：重置"已参与手势"标记
+    if (!this._spaceHeld && was) { const used = this._spaceGesture; this._spaceGesture = false; return used; }
+    return false; // 松开时返回按住期间是否参与过指针手势（供上层决定是否触发原空格快捷键）
   }
   gestureCancel() { return this.gesture.cancel(); }
   gestureMenuClosed() { this.gesture.reset(); } // 浮窗经由自身按钮/上层关闭时同步解锁
