@@ -5,17 +5,19 @@
 // 状态转移总览：
 //   IDLE  --down(把手)--> FACE      --up(有变化)--> 提交"调整朝向"
 //   IDLE  --down(舞者)--> PENDING   --位移>晋升阈值--> DRAG --up--> 提交"移动舞者"（落点重叠→合并确认浮窗）
-//                                    --按住长按时长且位移小--> MENU（单元浮窗）
+//                                    --按住长按时长且位移小--> MENU（合并=单元浮窗；未合并=删除菜单）
 //                                    --up--> TAP（仅选择；落点重叠同样弹合并确认）
-//   徽标即单元：无修饰键直接抓取「未入选且已收拢同点呈示」的合并舞者时，拖拽快照扩为
-//   整单元（两人同步位移）；选择本身仍逐人（点选只选中被点中者），先点后拖/shift/多选
-//   抓取不扩展（保持单人拉伸与组拖语义）；分离呈示（>0 收拢间距）的合并舞者仅拖其一人。
-//   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空）
+//   单元原子性：合并单元是一切操作的原子——点选/shift/多选/框选命中任一成员=整单元
+//   （两名成员）入选或移出；拖动任一成员=整单元同步位移（不存在单人拉伸/拆分拖拽路径，
+//   分离呈示不可经拖拽产生）；仅当整单元已在多选中时才随整组选择一起拖（组拖路径）。
+//   Escape/双指中断=整单元回滚。
+//   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空；命中单元成员=整单元入选）
 //   IDLE  --down(空白·触摸)--> PAN  --位移>晋升阈值--> panBy；未晋升抬起=清空选择（点按）
 //   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
+//   IDLE  --contextmenu(右键·stage 层翻译进来)--> MENU（命中合并=单元菜单/未合并=删除菜单；仅 IDLE 响应）
 //   任意  --第二指按下--> PINCH（进行中的 DRAG 立即回滚）
 //   MENU  --任意按下--> 退出浮窗并吞掉该次按下（点外部=取消）
-//   DRAG/PENDING --Escape(cancel)--> 回滚到按下前快照，不产生历史
+//   DRAG/PENDING --Escape(cancel)--> 回滚到按下前快照（整单元），不产生历史
 
 // 所有手势阈值唯一出处（单位：米 / 毫秒 / client 像素）
 export const TH = {
@@ -47,6 +49,20 @@ export function createGestureMachine(host) {
   let lastTap = null;        // {id,t} 双击检测
 
   const firstTwo = () => [...pointers.values()].slice(0, 2);
+  // id 所属合并单元（单元原子性唯一出处）：合并成员=两人，否则=其一人
+  function unitOf(fmt, id) {
+    const m = fmt && (fmt.merges || []).find(x => x.a === id || x.b === id);
+    return m ? [m.a, m.b] : [id];
+  }
+  // 单元浮窗统一载荷：收拢同点呈示时锚定中点，分离呈示时锚定首成员
+  function unitMenuPayload(fmt, m) {
+    const a = fmt.positions[m.a], b = fmt.positions[m.b];
+    return {
+      mode: 'unit', ids: [m.a, m.b], style: m.style,
+      at: a && b && Math.hypot(a.x - b.x, a.y - b.y) <= TH.showM ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
+      formationIndex: host.fmtIndex(),
+    };
+  }
   function armLP() {
     clearT(lpTimer); lpTimer = null;
     lpTimer = setT(() => {
@@ -54,13 +70,9 @@ export function createGestureMachine(host) {
       if (state !== 'PENDING' || !g) return;
       const fmt = host.formation();
       const m = fmt && (fmt.merges || []).find(x => x.a === g.id || x.b === g.id);
-      if (!m) return; // 未合并舞者长按：无动作，保持等待拖动/单击
-      const a = fmt.positions[m.a], b = fmt.positions[m.b];
-      enterMenu({
-        mode: 'unit', ids: [m.a, m.b], style: m.style,
-        at: a && b && Math.hypot(a.x - b.x, a.y - b.y) <= TH.showM ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
-        formationIndex: host.fmtIndex(),
-      });
+      if (m) { enterMenu(unitMenuPayload(fmt, m)); return; } // 合并成员长按：单元浮窗
+      // 未合并舞者长按：同款上下文菜单（仅「删除」入口）
+      enterMenu({ mode: 'context', ids: [g.id], at: fmt?.positions[g.id] || { x: 0, y: 0 }, formationIndex: host.fmtIndex() });
     }, TH.lpMs);
   }
   function disarmLP() { if (lpTimer) { clearT(lpTimer); lpTimer = null; } }
@@ -123,6 +135,7 @@ export function createGestureMachine(host) {
   //      button=按下时的 PointerEvent.button，space=宿主跟踪的空格按住状态——桌面平移修饰键）
   function down(e) {
     if (state === 'MENU') { exitMenu(); return; } // 点外部=取消，并吞掉这次按下
+    if (e.button === 2) return; // 右键：交给 contextmenu 事件（仅 IDLE 响应），不启动任何手势
     pointers.set(e.pointerId, { x: e.px, y: e.py });
     if (pointers.size === 2) { abortToPinch(); return; }
     if (pointers.size > 2) return;
@@ -141,29 +154,24 @@ export function createGestureMachine(host) {
     const hit = host.hitDancer(s.x, s.y);
     if (hit) {
       if (panMod) return;
-      const sel = host.selection();
-      let selectMod = false;
-      if (!sel.includes(hit)) { host.select([hit], { add: !!(e.shift || host.multiSelect()) }); selectMod = true; }
-      else if (e.shift) { host.select([hit], { add: true, toggleOff: true }); return; }
       const fmt = host.formation();
-      // 徽标即单元（DEFECT-L2-1）：无修饰键直接抓取「未入选且已收拢同点（collapsePair
-      // 后呈示为单个徽标）」的合并舞者 → 拖拽快照扩为整单元，拖动两人同步位移。
-      // 条件刻意收窄：选择语义不变（点选仍只选中被点中者）；已入选（先点后拖）/shift/
-      // 多选抓取不扩展；未收拢（分离呈示）的合并舞者仅拖其一人（单元拉伸语义）。
-      let startIds = host.selection();
-      if (selectMod && !e.shift && !host.multiSelect() && fmt) {
-        const m = (fmt.merges || []).find(x => x.a === hit || x.b === hit);
-        const pa = m && fmt.positions[m.a], pb = m && fmt.positions[m.b];
-        if (m && pa && pb && Math.hypot(pa.x - pb.x, pa.y - pb.y) < 1e-6) startIds = [m.a, m.b];
-      }
+      // 单元原子性：命中合并成员即视作整单元——点选/shift/多选一律以两名成员为单位
+      // 加入或移出；拖拽快照同样恒为整单元（不存在单人拉伸路径）。仅当整单元本就
+      // 在选择中（多选组拖场景）时保持现有组拖语义：快照=整个选择。
+      const unit = unitOf(fmt, hit);
+      const sel = host.selection();
+      const unitInSel = unit.every(id => sel.includes(id));
+      let selectMod = false;
+      if (!unitInSel) { host.select(unit, { add: !!(e.shift || host.multiSelect()) }); selectMod = true; }
+      else if (e.shift) { host.select(unit, { add: true, toggleOff: true }); return; } // 原子移出整单元，不进入拖拽
       const start = {};
-      for (const id of startIds) {
+      for (const id of host.selection()) {
         const p = fmt?.positions[id];
         if (p) start[id] = { x: p.x, y: p.y };
       }
       g = { kind: 'PENDING', id: hit, startS: s, startPx: { x: e.px, y: e.py }, start, selectMod };
       state = 'PENDING';
-      if (e.touch) armLP(); // 长按仅触摸端；桌面端用双击
+      if (e.touch) armLP(); // 长按仅触摸端；桌面端用双击/右键
     } else if (panMod) {
       g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: false, promoted: true };
       state = 'PAN';
@@ -251,9 +259,12 @@ export function createGestureMachine(host) {
       // 静止队形里本就相邻的两个未组队舞者，点击不应误弹合并确认
       const sel = host.selection();
       if (!g.selectMod && !host.multiSelect() && sel.length > 1 && sel.includes(g.id)) {
-        host.select([g.id]); // 多选中单击其一（未拖动、按下时未改选择）：收拢为单人
+        // 多选中单击其一（未拖动、按下时未改选择）：单元感知收拢——目标是整单元而非单人；
+        // 选择已恰为整单元时不重发 select（无闪烁，选择零抖动）
+        const unit = unitOf(host.formation(), g.id);
+        if (unit.length !== sel.length || !unit.every(id => sel.includes(id))) host.select(unit);
       }
-      // 双击（tapMs 内二次单击同一舞者）：已合并 → 单元浮窗（桌面端替代长按）
+      // 双击（tapMs 内二次单击同一舞者）：已合并 → 单元浮窗（桌面端替代长按/右键）
       const t = host.now();
       const dbl = lastTap && lastTap.id === g.id && (t - lastTap.t) <= TH.tapMs;
       lastTap = dbl ? null : { id: g.id, t };
@@ -261,13 +272,8 @@ export function createGestureMachine(host) {
         const fmt = host.formation();
         const m = fmt && (fmt.merges || []).find(x => x.a === g.id || x.b === g.id);
         if (m) {
-          const a = fmt.positions[m.a], b = fmt.positions[m.b];
           endGesture();
-          enterMenu({
-            mode: 'unit', ids: [m.a, m.b], style: m.style,
-            at: a && b && Math.hypot(a.x - b.x, a.y - b.y) <= TH.showM ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
-            formationIndex: host.fmtIndex(),
-          });
+          enterMenu(unitMenuPayload(fmt, m));
           return;
         }
       }
@@ -299,9 +305,16 @@ export function createGestureMachine(host) {
         const p1 = host.toStage(ctx.x0, ctx.y0), p2 = host.toStage(ctx.x1, ctx.y1);
         const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
         const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
-        ids = Object.entries(host.formation()?.positions || {})
+        const found = Object.entries(host.formation()?.positions || {})
           .filter(([, p]) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
           .map(([id]) => id);
+        // 框选原子性：矩形命中合并单元任一成员 → 整单元入选
+        const seen = new Set();
+        for (const id of found) {
+          for (const uid of unitOf(host.formation(), id)) {
+            if (!seen.has(uid)) { seen.add(uid); ids.push(uid); }
+          }
+        }
       }
       host.select(ids, { add: !!e.shift });
       host.box(null);
@@ -315,6 +328,21 @@ export function createGestureMachine(host) {
       return;
     }
     if (state === 'PINCH') { endGesture(); return; }
+  }
+
+  // 鼠标右键（stage 层把 contextmenu 事件翻译进来）：与触摸/笔长按同款上下文菜单——
+  // 命中合并单元=单元浮窗；未合并舞者=仅「删除」菜单。仅手势机 IDLE 且非只读时响应。
+  // 返回 true 表示已弹出（调用方可据此忽略后续处理）。
+  function contextMenu(e) {
+    if (state !== 'IDLE' || host.readOnly()) return false;
+    const s = host.toStage(e.px, e.py);
+    const hit = host.hitDancer(s.x, s.y);
+    if (!hit) return false;
+    const fmt = host.formation();
+    const m = fmt && (fmt.merges || []).find(x => x.a === hit || x.b === hit);
+    if (m) enterMenu(unitMenuPayload(fmt, m));
+    else enterMenu({ mode: 'context', ids: [hit], at: fmt?.positions[hit] || { x: s.x, y: s.y }, formationIndex: host.fmtIndex() });
+    return true;
   }
 
   // Escape / pointercancel：进行中手势取消；DRAG 回滚到按下前快照。
@@ -334,7 +362,7 @@ export function createGestureMachine(host) {
   }
 
   return {
-    down, move, up, cancel, reset,
+    down, move, up, cancel, reset, contextMenu,
     state: () => state,
     debugPointers: () => [...pointers.keys()], // 调试钩子：当前机器内的活跃指针
   };

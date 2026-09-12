@@ -96,7 +96,14 @@ export function orderedDancers(project, unit = 'pair') {
 export function removeDancer(project, dancerId) {
   project.dancers = project.dancers.filter(d => d.id !== dancerId);
   project.pairs = project.pairs.filter(p => p.leader !== dancerId && p.follower !== dancerId);
-  for (const f of project.formations) delete f.positions[dancerId];
+  for (const f of project.formations) {
+    delete f.positions[dancerId];
+    // 帧内合并单元引用一并清理（保证 positions 键 === dancers id、merges 不悬挂）
+    if (f.merges) {
+      f.merges = f.merges.filter(m => m.a !== dancerId && m.b !== dancerId);
+      if (!f.merges.length) delete f.merges;
+    }
+  }
 }
 export function removePair(project, pairId) { project.pairs = project.pairs.filter(p => p.id !== pairId); }
 // 从更早的队形顺延缺失舞者的位置（查不到则放舞台中心附近）

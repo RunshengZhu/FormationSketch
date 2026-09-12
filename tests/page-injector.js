@@ -116,6 +116,21 @@ async function press(x, y, ms, opt = {}) { // 长按：按住 ms 后抬起
   await sleep(ms);
   await pup(x, y, opt);
 }
+// 右键（Chrome 桌面序列）：pointerdown(button=2) → mousedown(button=2) → contextmenu →
+// pointerup/mouseup(button=2) + auxclick。应用在 canvas 上拦 contextmenu 弹上下文菜单；
+// 手势机对 button=2 的 down 早退（不进 pointers），故该链不会启动任何手势。
+async function contextMenu(x, y, opt = {}) {
+  const id = await pdown(x, y, { ...opt, button: 2 });
+  await sleep(opt.holdMs ?? 40);
+  fire(hit(x, y), 'contextmenu', MouseEvent, { button: 2, buttons: 2, clientX: x, clientY: y });
+  await sleep(opt.holdMs ?? 40);
+  await pup(x, y, { ...opt, button: 2, pid: id });
+  return id;
+}
+function contextEvent(x, y) { // 仅派发 contextmenu 事件（无按键链）——「左键手势进行中」子情形专用：
+  // 真实鼠标同 pointerId 复用会污染进行中的左键拖拽记录，此处只送菜单事件本身。
+  fire(hit(x, y), 'contextmenu', MouseEvent, { button: 2, buttons: 2, clientX: x, clientY: y });
+}
 async function drag(points, { hw = 'mouse', dwellMs = 0, stepMs = 30, shift = false, button = 0 } = {}) {
   if (!points.length) return;
   const pid = await pdown(points[0].x, points[0].y, { hw, shift, button });
@@ -169,6 +184,6 @@ function reset() {
 window.__input = {
   get activeCount() { return state.active.size; },
   down: pdown, move: pmove, up: pup, cancel: pcancel,
-  click, dblclick, press, drag, pinch, wheel, key, keyUp, reset, hit,
+  click, dblclick, press, drag, pinch, wheel, key, keyUp, contextMenu, contextEvent, reset, hit,
   sleep,
 };

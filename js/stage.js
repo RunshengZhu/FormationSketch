@@ -439,7 +439,8 @@ export class StageView {
   }
 
   // ---- 命中 ----
-  // 始终按单个舞者命中（选择不含舞伴联动；共同移动仅来自框选/多选）
+  // 始终按单个舞者命中（返回被点中的那一个 id）；合并单元的原子展开（整单元选择/拖拽）
+  // 由 gesture.js 状态机基于 merges 完成
   // 重合时优先命中后绘制的（视觉上层）
   hitDancer(sx, sy) {
     const scene = this.getScene();
@@ -530,6 +531,12 @@ export class StageView {
     cv.addEventListener('pointermove', e => this.gesture.move(ev(e)));
     cv.addEventListener('pointerup', e => this.gesture.up(ev(e)));
     cv.addEventListener('pointercancel', () => this.gesture.cancel());
+    // 右键上下文菜单：拦掉浏览器默认菜单；命中舞者且手势机 IDLE 时弹出
+    // （合并=单元菜单/未合并=删除菜单，与触摸长按共用同一浮窗与关闭路径）
+    cv.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      this.gesture.contextMenu({ px: e.clientX, py: e.clientY });
+    });
     // 中键的兼容鼠标事件默认行为（自动滚动）同样拦掉
     cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     cv.addEventListener('wheel', e => {

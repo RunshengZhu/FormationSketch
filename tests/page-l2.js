@@ -533,7 +533,7 @@ async function runDesktop(opts) {
 
     // ---------- C-05 编辑锁穿越 ----------
     {
-      id: 'C-05', name: '编辑锁穿越：关锁负断言集{D-01点击/D-06拖拽/D-08框选/D-04双击弹窗/D-11中键平移}→开锁正断言重放',
+      id: 'C-05', name: '编辑锁穿越（单元语义 v2）：关锁负断言集{点击/拖拽/框选/双击弹窗/中键平移}→开锁正断言重放{P1=点选原子两人 P2=整单元同步位移 P3=框选原子 P4=浮窗锚定新位置}',
       async run(t, { step }) {
         const A = t.ids[0], B = t.ids[1];
         const { mid } = await setupMergeT(t, 'capsule');
@@ -576,27 +576,30 @@ async function runDesktop(opts) {
         step('[PIXEL] 锁下位图不变', dist(postCA, preCA) < 8, `A 圆心色变 ${dist(postCA, preCA).toFixed(1)} < 8`, 'PIXEL');
         cmpStep(step, r);
 
-        // ---- 开锁正断言重放 ----
+        // ---- 开锁正断言重放（单元语义 v2：P1=点选原子两人 / P2=整单元同步位移 / P4=浮窗锚定随单元新位置）----
         await clickBtn('btn-edit-mode');
         step('[STATE] 解锁（editMode=true）', state().editMode === true, '');
         await inp.click(t.ptOf(B).x, t.ptOf(B).y, { hw: 'mouse' });
         await raf2();
         const hlB = ringMinDist(cv, t.ptOf(B).x, t.ptOf(B).y, t.rpx, HL);
-        step('[STATE][P1·D-01] 解锁后点击选中', JSON.stringify(t.sel()) === JSON.stringify([B]), `selection=[${t.sel().map(i => i.slice(0, 8))}]`);
+        step('[STATE][P1·D-01] 解锁后点选收拢徽标=整单元两人入选（selection==[A,B]）', sortedEq(t.sel(), [A, B]), `selection=[${t.sel().map(i => i.slice(0, 8))}]`);
         step('[PIXEL][P1·D-01] 选中高亮出现', hlB.d < TH_HL, `色距 ${hlB.d.toFixed(1)} < ${TH_HL}`, 'PIXEL');
         const dragTarget = { x: t.posOf(B).x + 1.0, y: t.posOf(B).y - 2.0 };
         await dragPts(t.ptOf(B), ctx.toClient(dragTarget.x, dragTarget.y));
         await raf2();
         r = await cmpShot('c05-p2-drag');
-        step('[STATE][P2·D-06] 解锁后拖拽精确位移（单元拉伸语义）', eq(t.posOf(B), dragTarget) && store.undoLabel() === '移动舞者', `B=(${t.posOf(B).x.toFixed(6)},${t.posOf(B).y.toFixed(6)}) ${t.hist()}`);
+        step('[STATE][P2·D-06] 解锁后拖拽=整单元同步位移（单元原子；单人拉伸语义已退役）',
+          eq(t.posOf(A), dragTarget) && eq(t.posOf(B), dragTarget) && store.undoLabel() === '移动舞者',
+          `A=(${t.posOf(A).x.toFixed(6)},${t.posOf(A).y.toFixed(6)}) B=(${t.posOf(B).x.toFixed(6)},${t.posOf(B).y.toFixed(6)}) ｜ 期望两者均=(${dragTarget.x.toFixed(6)},${dragTarget.y.toFixed(6)}) ${t.hist()}`);
         cmpStep(step, r);
         await dragPts(ctx.toClient(1.6, 4.4), ctx.toClient(4.9, 7.9));
         await raf2();
-        step('[STATE][P3·D-08] 解锁后框选 [A,B]', sortedEq(t.sel(), [A, B]), `selection=[${t.sel().map(i => i.slice(6, 10))}]`);
-        await inp.dblclick(mid.x, mid.y, { hw: 'mouse' });
+        step('[STATE][P3·D-08] 解锁后框选 [A,B]（单元在框内→整单元原子入选）', sortedEq(t.sel(), [A, B]), `selection=[${t.sel().map(i => i.slice(6, 10))}]`);
+        const mid2 = t.mergePt(A, B); // 拖拽后单元新位置（旧 mid 已失效——整单元随拖同步位移）
+        await inp.dblclick(mid2.x, mid2.y, { hw: 'mouse' });
         await raf2();
         const m = menu();
-        const dRect = m ? Math.hypot(Math.max(m.rect.left - mid.x, 0, mid.x - m.rect.right), Math.max(m.rect.top - mid.y, 0, mid.y - m.rect.bottom)) : Infinity;
+        const dRect = m ? Math.hypot(Math.max(m.rect.left - mid2.x, 0, mid2.x - m.rect.right), Math.max(m.rect.top - mid2.y, 0, mid2.y - m.rect.bottom)) : Infinity;
         let border = null;
         if (m) {
           const rm = await cmpShot('c05-p4-menu', inflate(m.rect));

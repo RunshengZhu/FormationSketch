@@ -17,7 +17,9 @@ let player, stageView, leftStrip, musicTl;
 let propsKey = '', audioPanelBuilt = false;
 
 // ---------- 选择 ----------
-// 选择只作用于被点中的舞者本身；共同移动仅来自框选/多选
+// 单元原子性：点选/shift/多选/框选命中合并单元任一成员 = 整单元（两名成员）入选或移出；
+// 拖动任一成员 = 整单元同步位移（仅当整单元已在多选中时才随整组选择一起拖）。
+// 未合并舞者行为不变：选择只作用于其本身；共同移动仅来自框选/多选。
 function expandedSelection() {
   return [...store.getState().selection];
 }
@@ -75,11 +77,44 @@ function showUnitMenu(payload) {
   if (!wrap) return;
   const el = document.createElement('div');
   el.className = 'unit-menu';
+  // 删除（拆分/删除唯一入口之一）：复用名册删除的同一模型层逻辑 M.removeDancer——
+  // 从 dancers/pairs/所有队形 positions 与 merges 中移除，经 store.mutate 提交可 undo。
+  const mkDeleteBtn = () => {
+    const b = document.createElement('button');
+    b.className = 'um-btn';
+    b.textContent = '删除';
+    b.style.color = '#ef4444'; // 危险动作着色（内联样式，避免动样式表）
+    b.addEventListener('click', () => {
+      const label = payload.mode === 'unit' ? '删除单元（两名舞者）' : '删除舞者';
+      store.mutate(p => { for (const id of payload.ids) M.removeDancer(p, id); }, label);
+      store.setUI({ selection: store.getState().selection.filter(id => !payload.ids.includes(id)) });
+      hideUnitMenu();
+    });
+    return b;
+  };
+  // DEFECT-R-1：context 载荷按有无 merge 分流菜单构成。状态机（gesture.js）对合并成员
+  // 本就直接发 unit 载荷；此处再按 ids[0] 是否在当前队形 merges 中兜底，保证
+  // 「context+无 merge=仅删除 / context+有 merge=单元按钮组」与合并状态一致。
+  const ctxMerge = payload.mode === 'context'
+    ? (currentFormation()?.merges || []).find(x => x.a === payload.ids[0] || x.b === payload.ids[0]) || null
+    : null;
+  if (ctxMerge && payload.ids.length < 2) {
+    payload.ids = [ctxMerge.a, ctxMerge.b]; // 补全伴侣 id：样式/拆开按钮的模型操作需要两人
+    payload.style = ctxMerge.style;         // 当前样式高亮与 unit 菜单一致
+  }
   if (payload.mode === 'merge') {
     const title = document.createElement('div');
     title.className = 'um-title';
     title.textContent = '合并为单元';
     el.append(title);
+  } else if (payload.mode === 'context' && !ctxMerge) {
+    // 未合并舞者的上下文菜单（触摸/笔长按、鼠标右键共用）：仅「删除」
+    const d = M.dancerById(store.getState().project, payload.ids[0]);
+    const title = document.createElement('div');
+    title.className = 'um-title';
+    title.textContent = `舞者 · ${d ? d.name : '?'}`;
+    el.append(title);
+    el.append(mkDeleteBtn());
   } else {
     const title = document.createElement('div');
     title.className = 'um-title';
@@ -106,19 +141,33 @@ function showUnitMenu(payload) {
     });
     return b;
   };
-  if (payload.mode === 'merge') {
-    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
-  } else {
-    // 拆开按钮
+  // 拆分按钮（即既有「拆开」入口，规格 #9：移除 merge 记录、两人原地保留）：
+  // 按钮文案保持「拆开」——L2 仪器 page-l2 以文本匹配点击该按钮，改名留给 reviewer 同步
+  const mkUntieBtn = () => {
     const untie = document.createElement('button');
     untie.className = 'um-btn';
     untie.textContent = '✂ 拆开';
     untie.addEventListener('click', () => {
       store.mutate(q => { M.removeMerge(q.formations[store.getState().formationIndex], payload.ids[0], payload.ids[1]); }, '拆开单元');
+      // 拆开后两人成为独立舞者：清掉原单元选择，避免下一次拖动走组拖路径（拆开→各自拖动）
+      store.setUI({ selection: store.getState().selection.filter(id => !payload.ids.includes(id)) });
       hideUnitMenu();
     });
-    el.append(untie);
+    return untie;
+  };
+  // 按钮区按 mode 分支（DEFECT-R-1 根因：原 else 同时覆盖 context 与 unit 两种 mode）：
+  // merge → 样式×3；unit → 拆开+样式×3+删除（既有顺序不变）；context+有 merge → 样式×3+拆开+删除；
+  // context+无 merge → 标题分支已加「删除」，此处不追加。✕ 取消按钮在下方对所有形态统一追加。
+  if (payload.mode === 'merge') {
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+  } else if (payload.mode === 'unit') {
+    el.append(mkUntieBtn());
+    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+    el.append(mkDeleteBtn()); // 删除单元 = 两名成员一并从队形与名册移除
+  } else if (ctxMerge) {
+    for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
+    el.append(mkUntieBtn());
+    el.append(mkDeleteBtn());
   }
   const cancel = document.createElement('button');
   cancel.className = 'um-btn um-cancel';
