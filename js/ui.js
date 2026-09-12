@@ -43,10 +43,73 @@ export function fmtDate(iso) {
   catch { return ''; }
 }
 
+// ---------- F-04（UX-04）：history 哨兵决策机（纯逻辑，node 可测；main.js 负责接线） ----------
+// 语义（与「‹ 项目库」按钮严格一致）：进编辑器压入恰一条哨兵条目；浏览器后退到哨兵
+// → 应用内回库（等价点「‹ 项目库」），再次返回才真正离开；应用内回库（按钮路径）时
+// 主动弹掉哨兵并吞掉随之而来的 popstate；前进到哨兵（曾后退过）=重开该项目；
+// 哨兵消费/覆盖式重压 → 库⇄编辑器往返不堆积。
+export function createHistorySentinel(io = {}) {
+  const marked = () => !!(io.state && io.state() && io.state().fs === 'editor');
+  let suppress = 0; // 自驱 history.back() 引发的 popstate 需吞掉的次数
+  return {
+    enter() { if (!marked()) io.push(); },                 // 进编辑器：无哨兵才压入（恢复/重载场景防重复）
+    exitUi() { if (marked()) { suppress++; io.back(); } }, // 应用内回库（按钮路径）：弹掉哨兵条目
+    onPop(st, view) {
+      if (suppress > 0) { suppress--; return { action: 'none' }; }
+      if (view === 'editor' && !(st && st.fs === 'editor')) return { action: 'toLibrary' };
+      if (view === 'library' && st && st.fs === 'editor') return { action: 'reopen', pid: st.pid };
+      return { action: 'none' }; // 已在库且无哨兵标记 → 再次后退由浏览器真实离开（不拦截）
+    },
+  };
+}
+
+// ---------- F-09（UX-09）：项目库卡片右键自定义菜单（隐藏手势显性化） ----------
+// 原行为：卡片 contextmenu=preventDefault+静默复制项目（用户想调浏览器菜单时误复制）。
+// 现行为：弹出与画布 .unit-menu 同风格的显式菜单 [打开/复制/删除]；左键行为不变。
+let libMenuEl = null;
+let libMenuDismiss = null;
+let libMenuKeyClose = null; // DEFECT-R21-1：Esc 关闭监听（随菜单开合同生命周期，杜绝重复绑定/泄漏）
+export function closeLibCardMenu() {
+  if (libMenuEl) { libMenuEl.remove(); libMenuEl = null; }
+  if (libMenuDismiss) { document.removeEventListener('pointerdown', libMenuDismiss, true); libMenuDismiss = null; }
+  if (libMenuKeyClose) { document.removeEventListener('keydown', libMenuKeyClose, true); libMenuKeyClose = null; }
+}
+export function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, onDelete}（export 供 node 单测驱动真实监听路径）
+  closeLibCardMenu();
+  const mk = (label, fn, extra = {}) => {
+    const b = h('button', { class: 'um-btn' + (extra.cls ? ' ' + extra.cls : '') }, label);
+    if (extra.style) b.style.cssText = extra.style;
+    b.addEventListener('click', () => { closeLibCardMenu(); fn(); });
+    return b;
+  };
+  const menu = h('div', { class: 'unit-menu', id: 'lib-card-menu' },
+    h('div', { class: 'um-title' }, `项目 · ${p.meta.title || '未命名'}`),
+    mk('打开', () => acts.onOpen(p)),
+    mk('复制', () => acts.onDuplicate(p)),
+    mk('删除', () => acts.onDelete(p), { style: 'color:#ef4444' }),
+    mk('✕', () => {}, { cls: 'um-cancel' }));
+  menu.style.position = 'fixed'; // 覆盖 .unit-menu 的 absolute（相对卡片无意义，按光标定位）
+  menu.style.zIndex = '150';
+  libMenuDismiss = ev => { if (!menu.contains(ev.target)) closeLibCardMenu(); };
+  document.addEventListener('pointerdown', libMenuDismiss, true);
+  // DEFECT-R21-1：Esc 关闭，与编辑器 .unit-menu（gesture MENU 态 Esc=关菜单）行为对齐。
+  // 一次性语义：绑定只发生在本函数（入口先 closeLibCardMenu 保证旧监听先解绑），所有关闭
+  // 路径（Esc / 点外部 / 菜单项 / 重渲染清扫）统一经 closeLibCardMenu 解绑——多次开合监听数不增长。
+  // 库视图下 wireKeyboard 早退（view!=='editor'），Escape 别无处理方，无需 preventDefault/stopPropagation。
+  libMenuKeyClose = ev => { if (ev.key === 'Escape') closeLibCardMenu(); };
+  document.addEventListener('keydown', libMenuKeyClose, true);
+  document.body.append(menu);
+  libMenuEl = menu;
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
+}
+
 // ---------- 项目库 ----------
 export function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplicate }) {
   const grid = document.getElementById('library-grid');
   const empty = document.getElementById('library-empty');
+  closeLibCardMenu(); // 重渲染（打开/复制/删除后）时收走残留菜单
   grid.innerHTML = '';
   empty.hidden = projects.length > 0;
   for (const p of projects) {
@@ -64,7 +127,10 @@ export function renderLibrary(container, { projects, onOpen, onNew, onDelete, on
           h('span', {}, p.audio?.name ? '🎵 ' + p.audio.name : '无音乐'),
           h('button', { class: 'lc-del', title: '删除项目', onclick: e => { e.stopPropagation(); onDelete(p); } }, '🗑'))));
     card.addEventListener('click', () => onOpen(p));
-    card.addEventListener('contextmenu', e => { e.preventDefault(); onDuplicate(p); });
+    card.addEventListener('contextmenu', e => {
+      e.preventDefault(); // 原生菜单不再静默复制：隐藏手势并入显式菜单（左键打开不变）
+      showLibCardMenu(e.clientX, e.clientY, p, { onOpen, onDuplicate, onDelete });
+    });
     grid.append(card);
   }
 }

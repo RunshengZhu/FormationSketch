@@ -7,8 +7,8 @@ import { EditStrip, MusicTimeline } from './timeline.js';
 import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
-import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-20-pwa';
+import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
+window.__MAIN_BUILD = 'build-21-uxfix';
 const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);
@@ -182,6 +182,44 @@ function showUnitMenu(payload) {
   el.style.top = Math.max(4, Math.min(payload.screen.y + 10, wr.height - el.offsetHeight - 4)) + 'px';
 }
 
+// ---------- history 哨兵（F-04 / UX-04） + 右键策略（F-08 / UX-08） ----------
+// 哨兵：进编辑器 pushState 恰一条（决策机在 ui.js，node 可测）；popstate 在编辑器内发生
+// =应用内回库（与点「‹ 项目库」完全同语义：stop+closeProject），再次返回才真正离开；
+// 前进到哨兵=重开该项目；应用内回库时决策机弹掉哨兵 → 库⇄编辑器往返不堆积条目。
+const sentinel = createHistorySentinel({
+  push: () => history.pushState({ fs: 'editor', pid: store.getState().projectId }, ''),
+  back: () => history.back(),
+  state: () => history.state,
+});
+let sentinelView = null;
+function trackViewForSentinel(view) {
+  if (view === sentinelView) return;
+  const prev = sentinelView;
+  sentinelView = view;
+  if (view === 'editor' && prev !== 'editor') sentinel.enter();
+  else if (view === 'library' && prev === 'editor') sentinel.exitUi();
+}
+function wireHistory() {
+  window.addEventListener('popstate', e => {
+    const act = sentinel.onPop(e.state, store.getState().view);
+    if (act.action === 'toLibrary') { player?.stop(); store.closeProject(); }
+    else if (act.action === 'reopen' && act.pid) {
+      store.openProject(act.pid).then(ok => { if (!ok) history.replaceState(null, ''); }); // 项目已被删：摘掉标记防卡死条目
+    }
+  });
+}
+// 右键策略：编辑器视图内统一拦截浏览器原生菜单（与画布自定义菜单同一防御面，
+// 消除时间轴/播放条/面板的漏拦拼盘）；输入框/文本域/下拉与名册表格豁免（保留系统
+// 粘贴/拼写菜单）。项目库视图不在此拦（卡片右键有自己的显性菜单，见 ui.js F-09）。
+function wireContextMenu() {
+  document.addEventListener('contextmenu', e => {
+    if (store.getState().view !== 'editor') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, .roster-table')) return;
+    e.preventDefault();
+  });
+}
+
 // ---------- 启动 ----------
 async function boot() {
   buildStage();
@@ -195,6 +233,8 @@ async function boot() {
   wireLibrary();
   wireOfflineNote();
   wireKeyboard();
+  wireHistory();
+  wireContextMenu();
   try {
     applyTheme(store.getState().theme);
     await store.init(localStorage.getItem('fs.lastProject') || undefined);
@@ -883,7 +923,7 @@ function buildGroupsPanel() {
   host.append(
     h('div', { class: 'prop-group' },
       h('div', { class: 'pg-title' }, `编组（${groups.length}）`),
-      h('div', { class: 'dim' }, '编组只是快速选择辅助：1..9 选中、Shift+1..9 追加、Ctrl+1..9 把当前选择存入对应编号（覆盖）。可与合并交叉叠加，删除组不删除舞者。'),
+      h('div', { class: 'dim' }, '编组只是快速选择辅助：1..9 选中、Shift+1..9 追加、Ctrl+1..9 把当前选择存入对应编号（覆盖）。可与合并交叉叠加，删除组不删除舞者。Safari 请用编组选项卡：Cmd+1..9 被浏览器保留用于切换标签页（事件不到页面），请改用本面板「选择」按钮。'),
       ...groups.map((g, i) => {
         const row = h('div', { class: 'grp-row', title: '点击选中该组（成员若在合并单元中会展开为整单元）' },
           h('span', { class: 'grp-name' }, `${i + 1}. ${g.name}`),
@@ -1072,6 +1112,7 @@ function renderFormationIndex(state) {
 // ---------- 总渲染 ----------
 let audioVals = {};
 function render(state) {
+  trackViewForSentinel(state.view); // F-04：视图迁移驱动哨兵压入/弹出（含按钮与 popstate 双路径）
   const isLib = state.view === 'library';
   $('library-view').hidden = isLib ? false : true;
   $('editor-view').hidden = isLib ? true : false;

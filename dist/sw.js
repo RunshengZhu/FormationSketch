@@ -1,7 +1,7 @@
 /* 舞阵 WuZhen Service Worker —— 由 scripts/build-single.mjs 生成，勿手改。
    缓存名随应用 build 号换版：发新版 → 新 sw.js 字节 → 安装预缓存新 HTML →
    skipWaiting + clients.claim 立即接管 → activate 清理旧缓存。缓存对象只有页面自身。 */
-const CACHE = 'wuzhen-build-20-pwa';
+const CACHE = 'wuzhen-build-21-uxfix';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./'])).then(() => self.skipWaiting()));

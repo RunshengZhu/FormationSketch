@@ -298,6 +298,10 @@ export class MusicTimeline {
     cv.addEventListener('pointerdown', e => this._down(e));
     cv.addEventListener('pointermove', e => this._move(e));
     window.addEventListener('pointerup', e => this._up(e), { passive: true });
+    // F-02（UX-02）：浏览器中途接管（滚动接管/来电横幅/系统手势）会发 pointercancel 而后续
+    // pointerup 不再来——不置 drag=null 则拖拽状态卡死，之后无按键的鼠标 hover 路过即持续
+    // 改写块时长（数据损坏链）。即使 touch-action 已阻断滚动接管，其他接管源仍需此兜底。
+    cv.addEventListener('pointercancel', () => { this.drag = null; });
     this.scroll.addEventListener('wheel', e => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();

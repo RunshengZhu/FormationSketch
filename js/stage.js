@@ -558,9 +558,23 @@ export class StageView {
     // 中键的兼容鼠标事件默认行为（自动滚动）同样拦掉
     cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     cv.addEventListener('wheel', e => {
+      // F-07（UX-07）：一律 preventDefault（阻断触控板双指横滑触发的历史导航）。
+      // 横向主导（触控板双指横滑；Shift+滚轮在 Chrome 换轴后也以 deltaX 到达）=舞台水平平移；
+      // 纵向/捏合（ctrl+wheel）维持缩放语义不变。
       e.preventDefault();
+      if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        this.panView(-e.deltaX, 0);
+        return;
+      }
       this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012));
     }, { passive: false });
+  }
+  // 平移（像素）：wheel 横滑等桌面输入通道用（触摸/指针手势经手势机 host.panBy 走同一钳制）
+  panView(dx, dy) {
+    this.ensureView();
+    this.view.ox += dx; this.view.oy += dy;
+    this.clampPan();
+    this.requestDraw();
   }
   // ---- 空格平移修饰键（main.js 驱动）----
   get spaceHeld() { return this._spaceHeld; }

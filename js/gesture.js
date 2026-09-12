@@ -378,6 +378,10 @@ export function createGestureMachine(host) {
   // 返回 true 表示消费了该次取消（调用方可据此决定是否再清空选择）。
   function cancel() {
     disarmLP();
+    // F-01（UX-01）：cancel 后浏览器接管，该批指针不会再有 pointerup——pointers 表若不清，
+    // 脏残留会让下一次单指按下凑成 size===2 被误判 PINCH（以脏坐标跳变缩放，且不自愈）。
+    // 全清是安全保守解：cancel 语义=整批指针作废；pinch 上下文一并作废。
+    pointers.clear(); pinch = null;
     if (state === 'DRAG' && g) { host.rollback(g.start); host.requestDraw(); endGesture(); return true; }
     if (state === 'BOX') host.box(null);
     if (state === 'MENU') { exitMenu(); return true; }

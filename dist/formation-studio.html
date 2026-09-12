@@ -21,10 +21,17 @@
   --toast-bg:#0b1220ee; --stage-chrome:#0b1220;
 }
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+/* F-03（UX-03）：根滚动器禁用 overscroll 效应——y 向堵 Chrome Android 顶部下拉刷新（PTR=整页重载），
+   x 向连带堵触控板/边缘横滑到底的历史导航（M-4）。应用无页面级滚动需求，内部滚容器
+   （#formation-list/#props-page/#tl-scroll/弹窗）的自身滚动不受影响。 */
+html{overscroll-behavior:none}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;overflow:hidden}
 #app,.view{height:100%}
 button{font:inherit;color:inherit;cursor:pointer}
+/* F-06（UX-06）：按钮/chip/tab 类禁用浏览器双击缩放（manipulation 保留平移/双指缩放 a11y），
+   快速连点 ＋/−、移动 Tab、fi-chip 等不再有双击缩放误触面 */
+button,.btn,.ptab,#mobile-tabs button,.fi-chip,.es-chip,.um-btn{touch-action:manipulation}
 input,select{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:3px 6px}
 input:focus,select:focus{outline:1px solid var(--acc)}
 .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,Consolas,monospace}
@@ -95,6 +102,12 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 #stage-canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
 #countin-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:120px;font-weight:800;color:var(--acc);text-shadow:0 4px 30px rgba(0,0,0,.6);pointer-events:none}
 
+/* F-11（UX-11/16）：iOS 长按 loupe/文本放大镜与 Android 长按呼出显式抑制；
+   编辑面禁文本选择（拖拽跨面零泄露、双击面板不再误选文字），输入控件显式豁免（保留拖选/复制） */
+#stage-canvas,#stage-wrap{-webkit-touch-callout:none}
+#editor-view{user-select:none;-webkit-user-select:none}
+#editor-view input,#editor-view textarea,#editor-view select{user-select:text;-webkit-user-select:text}
+
 #right-panel{display:none;flex-direction:column;width:250px;border-left:1px solid var(--line);background:var(--bg2);flex:none;min-height:0}
 .panel-tabs{display:flex;border-bottom:1px solid var(--line)}
 .ptab{flex:1;background:none;border:0;padding:9px;color:var(--dim);border-bottom:2px solid transparent}
@@ -133,6 +146,9 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 #tl-scroll{overflow-x:auto;height:150px;position:relative}
 #tl-inner{position:relative;height:100%}
 #tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
+/* F-02（UX-02）：时间轴画布禁浏览器手势接管——pan-x 会让块边缘横向拖拽仍被滚动接管
+   （横拖主导轴判定），none 才能让 scrub/块拖在触摸端可用；容器横滚改由滚轮/按钮/缩放承担 */
+#tl-canvas{touch-action:none}
 #tl-overlay{pointer-events:none}
 
 /* ---- 移动端队形索引条 ---- */
@@ -336,7 +352,7 @@ body[data-mtab="formations"] #tl-scroll{display:none}
         </div>
         <div id="formation-index"></div>
         <div id="stage-wrap">
-          <canvas id="stage-canvas" title="空白拖动=框选 ｜ 中键拖动或空格+左键拖动=平移（触控板/无中键鼠标无法产生中键时，请用空格+拖动） ｜ 触屏·笔长按空白=框选"></canvas>
+          <canvas id="stage-canvas" title="空白拖动=框选 ｜ 中键拖动或空格+左键拖动=平移（触控板/无中键鼠标无法产生中键时，请用空格+拖动） ｜ 触屏·笔长按空白=框选 ｜ 横向滚轮/触控板横滑=水平平移 ｜ Safari 提示：Cmd+1..9 编组快捷键被浏览器保留，请用右侧编组选项卡"></canvas>
           <div id="countin-overlay" hidden></div>
         </div>
       </div>
@@ -2019,6 +2035,10 @@ function createGestureMachine(host) {
   // 返回 true 表示消费了该次取消（调用方可据此决定是否再清空选择）。
   function cancel() {
     disarmLP();
+    // F-01（UX-01）：cancel 后浏览器接管，该批指针不会再有 pointerup——pointers 表若不清，
+    // 脏残留会让下一次单指按下凑成 size===2 被误判 PINCH（以脏坐标跳变缩放，且不自愈）。
+    // 全清是安全保守解：cancel 语义=整批指针作废；pinch 上下文一并作废。
+    pointers.clear(); pinch = null;
     if (state === 'DRAG' && g) { host.rollback(g.start); host.requestDraw(); endGesture(); return true; }
     if (state === 'BOX') host.box(null);
     if (state === 'MENU') { exitMenu(); return true; }
@@ -2607,9 +2627,23 @@ class StageView {
     // 中键的兼容鼠标事件默认行为（自动滚动）同样拦掉
     cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     cv.addEventListener('wheel', e => {
+      // F-07（UX-07）：一律 preventDefault（阻断触控板双指横滑触发的历史导航）。
+      // 横向主导（触控板双指横滑；Shift+滚轮在 Chrome 换轴后也以 deltaX 到达）=舞台水平平移；
+      // 纵向/捏合（ctrl+wheel）维持缩放语义不变。
       e.preventDefault();
+      if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        this.panView(-e.deltaX, 0);
+        return;
+      }
       this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012));
     }, { passive: false });
+  }
+  // 平移（像素）：wheel 横滑等桌面输入通道用（触摸/指针手势经手势机 host.panBy 走同一钳制）
+  panView(dx, dy) {
+    this.ensureView();
+    this.view.ox += dx; this.view.oy += dy;
+    this.clampPan();
+    this.requestDraw();
   }
   // ---- 空格平移修饰键（main.js 驱动）----
   get spaceHeld() { return this._spaceHeld; }
@@ -2933,6 +2967,10 @@ class MusicTimeline {
     cv.addEventListener('pointerdown', e => this._down(e));
     cv.addEventListener('pointermove', e => this._move(e));
     window.addEventListener('pointerup', e => this._up(e), { passive: true });
+    // F-02（UX-02）：浏览器中途接管（滚动接管/来电横幅/系统手势）会发 pointercancel 而后续
+    // pointerup 不再来——不置 drag=null 则拖拽状态卡死，之后无按键的鼠标 hover 路过即持续
+    // 改写块时长（数据损坏链）。即使 touch-action 已阻断滚动接管，其他接管源仍需此兜底。
+    cv.addEventListener('pointercancel', () => { this.drag = null; });
     this.scroll.addEventListener('wheel', e => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
@@ -3230,10 +3268,73 @@ function fmtDate(iso) {
   catch { return ''; }
 }
 
+// ---------- F-04（UX-04）：history 哨兵决策机（纯逻辑，node 可测；main.js 负责接线） ----------
+// 语义（与「‹ 项目库」按钮严格一致）：进编辑器压入恰一条哨兵条目；浏览器后退到哨兵
+// → 应用内回库（等价点「‹ 项目库」），再次返回才真正离开；应用内回库（按钮路径）时
+// 主动弹掉哨兵并吞掉随之而来的 popstate；前进到哨兵（曾后退过）=重开该项目；
+// 哨兵消费/覆盖式重压 → 库⇄编辑器往返不堆积。
+function createHistorySentinel(io = {}) {
+  const marked = () => !!(io.state && io.state() && io.state().fs === 'editor');
+  let suppress = 0; // 自驱 history.back() 引发的 popstate 需吞掉的次数
+  return {
+    enter() { if (!marked()) io.push(); },                 // 进编辑器：无哨兵才压入（恢复/重载场景防重复）
+    exitUi() { if (marked()) { suppress++; io.back(); } }, // 应用内回库（按钮路径）：弹掉哨兵条目
+    onPop(st, view) {
+      if (suppress > 0) { suppress--; return { action: 'none' }; }
+      if (view === 'editor' && !(st && st.fs === 'editor')) return { action: 'toLibrary' };
+      if (view === 'library' && st && st.fs === 'editor') return { action: 'reopen', pid: st.pid };
+      return { action: 'none' }; // 已在库且无哨兵标记 → 再次后退由浏览器真实离开（不拦截）
+    },
+  };
+}
+
+// ---------- F-09（UX-09）：项目库卡片右键自定义菜单（隐藏手势显性化） ----------
+// 原行为：卡片 contextmenu=preventDefault+静默复制项目（用户想调浏览器菜单时误复制）。
+// 现行为：弹出与画布 .unit-menu 同风格的显式菜单 [打开/复制/删除]；左键行为不变。
+let libMenuEl = null;
+let libMenuDismiss = null;
+let libMenuKeyClose = null; // DEFECT-R21-1：Esc 关闭监听（随菜单开合同生命周期，杜绝重复绑定/泄漏）
+function closeLibCardMenu() {
+  if (libMenuEl) { libMenuEl.remove(); libMenuEl = null; }
+  if (libMenuDismiss) { document.removeEventListener('pointerdown', libMenuDismiss, true); libMenuDismiss = null; }
+  if (libMenuKeyClose) { document.removeEventListener('keydown', libMenuKeyClose, true); libMenuKeyClose = null; }
+}
+function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, onDelete}（export 供 node 单测驱动真实监听路径）
+  closeLibCardMenu();
+  const mk = (label, fn, extra = {}) => {
+    const b = h('button', { class: 'um-btn' + (extra.cls ? ' ' + extra.cls : '') }, label);
+    if (extra.style) b.style.cssText = extra.style;
+    b.addEventListener('click', () => { closeLibCardMenu(); fn(); });
+    return b;
+  };
+  const menu = h('div', { class: 'unit-menu', id: 'lib-card-menu' },
+    h('div', { class: 'um-title' }, `项目 · ${p.meta.title || '未命名'}`),
+    mk('打开', () => acts.onOpen(p)),
+    mk('复制', () => acts.onDuplicate(p)),
+    mk('删除', () => acts.onDelete(p), { style: 'color:#ef4444' }),
+    mk('✕', () => {}, { cls: 'um-cancel' }));
+  menu.style.position = 'fixed'; // 覆盖 .unit-menu 的 absolute（相对卡片无意义，按光标定位）
+  menu.style.zIndex = '150';
+  libMenuDismiss = ev => { if (!menu.contains(ev.target)) closeLibCardMenu(); };
+  document.addEventListener('pointerdown', libMenuDismiss, true);
+  // DEFECT-R21-1：Esc 关闭，与编辑器 .unit-menu（gesture MENU 态 Esc=关菜单）行为对齐。
+  // 一次性语义：绑定只发生在本函数（入口先 closeLibCardMenu 保证旧监听先解绑），所有关闭
+  // 路径（Esc / 点外部 / 菜单项 / 重渲染清扫）统一经 closeLibCardMenu 解绑——多次开合监听数不增长。
+  // 库视图下 wireKeyboard 早退（view!=='editor'），Escape 别无处理方，无需 preventDefault/stopPropagation。
+  libMenuKeyClose = ev => { if (ev.key === 'Escape') closeLibCardMenu(); };
+  document.addEventListener('keydown', libMenuKeyClose, true);
+  document.body.append(menu);
+  libMenuEl = menu;
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
+}
+
 // ---------- 项目库 ----------
 function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplicate }) {
   const grid = document.getElementById('library-grid');
   const empty = document.getElementById('library-empty');
+  closeLibCardMenu(); // 重渲染（打开/复制/删除后）时收走残留菜单
   grid.innerHTML = '';
   empty.hidden = projects.length > 0;
   for (const p of projects) {
@@ -3251,7 +3352,10 @@ function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplica
           h('span', {}, p.audio?.name ? '🎵 ' + p.audio.name : '无音乐'),
           h('button', { class: 'lc-del', title: '删除项目', onclick: e => { e.stopPropagation(); onDelete(p); } }, '🗑'))));
     card.addEventListener('click', () => onOpen(p));
-    card.addEventListener('contextmenu', e => { e.preventDefault(); onDuplicate(p); });
+    card.addEventListener('contextmenu', e => {
+      e.preventDefault(); // 原生菜单不再静默复制：隐藏手势并入显式菜单（左键打开不变）
+      showLibCardMenu(e.clientX, e.clientY, p, { onOpen, onDuplicate, onDelete });
+    });
     grid.append(card);
   }
 }
@@ -3353,7 +3457,7 @@ function showRosterModal({ mutate, toast: t, getProject }) {
   return m;
 }
 
-Object.assign(FS.ui, { h, toast, modal, fmtDate, renderLibrary, showNewProjectModal, showRosterModal });
+Object.assign(FS.ui, { h, toast, modal, fmtDate, createHistorySentinel, closeLibCardMenu, showLibCardMenu, renderLibrary, showNewProjectModal, showRosterModal });
 })();
 
 /* ===== module: main ===== */
@@ -3369,7 +3473,7 @@ const { StageView, drawScene } = FS.stage;
 const { EditStrip, MusicTimeline } = FS.timeline;
 const { AudioController } = FS.audio;
 const { Player } = FS.player;
-const { renderLibrary, showNewProjectModal, showRosterModal, toast, h } = FS.ui;
+const { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } = FS.ui;
 // 应用编排：视图路由、状态订阅渲染、交互接线、快捷键
 /* import from store */
 /* import from model */
@@ -3380,7 +3484,7 @@ const { renderLibrary, showNewProjectModal, showRosterModal, toast, h } = FS.ui;
 /* import from player */
 /* import from export */
 /* import from ui */
-window.__MAIN_BUILD = 'build-20-pwa';
+window.__MAIN_BUILD = 'build-21-uxfix';
 const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);
@@ -3554,6 +3658,44 @@ function showUnitMenu(payload) {
   el.style.top = Math.max(4, Math.min(payload.screen.y + 10, wr.height - el.offsetHeight - 4)) + 'px';
 }
 
+// ---------- history 哨兵（F-04 / UX-04） + 右键策略（F-08 / UX-08） ----------
+// 哨兵：进编辑器 pushState 恰一条（决策机在 ui.js，node 可测）；popstate 在编辑器内发生
+// =应用内回库（与点「‹ 项目库」完全同语义：stop+closeProject），再次返回才真正离开；
+// 前进到哨兵=重开该项目；应用内回库时决策机弹掉哨兵 → 库⇄编辑器往返不堆积条目。
+const sentinel = createHistorySentinel({
+  push: () => history.pushState({ fs: 'editor', pid: store.getState().projectId }, ''),
+  back: () => history.back(),
+  state: () => history.state,
+});
+let sentinelView = null;
+function trackViewForSentinel(view) {
+  if (view === sentinelView) return;
+  const prev = sentinelView;
+  sentinelView = view;
+  if (view === 'editor' && prev !== 'editor') sentinel.enter();
+  else if (view === 'library' && prev === 'editor') sentinel.exitUi();
+}
+function wireHistory() {
+  window.addEventListener('popstate', e => {
+    const act = sentinel.onPop(e.state, store.getState().view);
+    if (act.action === 'toLibrary') { player?.stop(); store.closeProject(); }
+    else if (act.action === 'reopen' && act.pid) {
+      store.openProject(act.pid).then(ok => { if (!ok) history.replaceState(null, ''); }); // 项目已被删：摘掉标记防卡死条目
+    }
+  });
+}
+// 右键策略：编辑器视图内统一拦截浏览器原生菜单（与画布自定义菜单同一防御面，
+// 消除时间轴/播放条/面板的漏拦拼盘）；输入框/文本域/下拉与名册表格豁免（保留系统
+// 粘贴/拼写菜单）。项目库视图不在此拦（卡片右键有自己的显性菜单，见 ui.js F-09）。
+function wireContextMenu() {
+  document.addEventListener('contextmenu', e => {
+    if (store.getState().view !== 'editor') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, .roster-table')) return;
+    e.preventDefault();
+  });
+}
+
 // ---------- 启动 ----------
 async function boot() {
   buildStage();
@@ -3567,6 +3709,8 @@ async function boot() {
   wireLibrary();
   wireOfflineNote();
   wireKeyboard();
+  wireHistory();
+  wireContextMenu();
   try {
     applyTheme(store.getState().theme);
     await store.init(localStorage.getItem('fs.lastProject') || undefined);
@@ -4255,7 +4399,7 @@ function buildGroupsPanel() {
   host.append(
     h('div', { class: 'prop-group' },
       h('div', { class: 'pg-title' }, `编组（${groups.length}）`),
-      h('div', { class: 'dim' }, '编组只是快速选择辅助：1..9 选中、Shift+1..9 追加、Ctrl+1..9 把当前选择存入对应编号（覆盖）。可与合并交叉叠加，删除组不删除舞者。'),
+      h('div', { class: 'dim' }, '编组只是快速选择辅助：1..9 选中、Shift+1..9 追加、Ctrl+1..9 把当前选择存入对应编号（覆盖）。可与合并交叉叠加，删除组不删除舞者。Safari 请用编组选项卡：Cmd+1..9 被浏览器保留用于切换标签页（事件不到页面），请改用本面板「选择」按钮。'),
       ...groups.map((g, i) => {
         const row = h('div', { class: 'grp-row', title: '点击选中该组（成员若在合并单元中会展开为整单元）' },
           h('span', { class: 'grp-name' }, `${i + 1}. ${g.name}`),
@@ -4444,6 +4588,7 @@ function renderFormationIndex(state) {
 // ---------- 总渲染 ----------
 let audioVals = {};
 function render(state) {
+  trackViewForSentinel(state.view); // F-04：视图迁移驱动哨兵压入/弹出（含按钮与 popstate 双路径）
   const isLib = state.view === 'library';
   $('library-view').hidden = isLib ? false : true;
   $('editor-view').hidden = isLib ? true : false;
