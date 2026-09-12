@@ -19,7 +19,7 @@ let propsKey = '', audioPanelBuilt = false;
 // ---------- 选择 ----------
 // 单元原子性：点选/shift/多选/框选命中合并单元任一成员 = 整单元（两名成员）入选或移出；
 // 拖动任一成员 = 整单元同步位移（仅当整单元已在多选中时才随整组选择一起拖）。
-// 未合并舞者行为不变：选择只作用于其本身；共同移动仅来自框选/多选。
+// 未合并舞者行为不变：选择只作用于其本身；共同移动仅来自框选/多选/编组。
 function expandedSelection() {
   return [...store.getState().selection];
 }
@@ -52,7 +52,7 @@ function stageScene() {
     formationIndex: s.formationIndex,
     selection: new Set(expandedSelection()),
     multiSelect: s.multiSelect,
-    singleSelected: s.selection.length === 1, // 朝向把手按原始选择判定（舞对联动会扩成 2 个）
+    singleSelected: s.selection.length === 1, // 朝向把手按原始选择判定（单元联动会扩成 2 个）
     facingHandle: s.showFacingHandle,
     showGhost: s.showGhost,
     showPaths: s.showPaths,
@@ -66,7 +66,7 @@ function stageScene() {
 
 // ---------- 单元浮窗（合并确认 / 单元操作） ----------
 let unitMenuEl = null;
-const UNIT_STYLE_LABEL = { capsule: '胶囊', diamond: '菱形', twin: '双圆' };
+const UNIT_STYLE_LABEL = { capsule: '胶囊', single: '单编号' };
 function hideUnitMenu() {
   if (unitMenuEl) { unitMenuEl.remove(); unitMenuEl = null; }
   stageView?.gestureMenuClosed?.(); // 让手势状态机知道浮窗已关（否则下次按下会被 MENU 态吞掉）
@@ -78,7 +78,7 @@ function showUnitMenu(payload) {
   const el = document.createElement('div');
   el.className = 'unit-menu';
   // 删除（拆分/删除唯一入口之一）：复用名册删除的同一模型层逻辑 M.removeDancer——
-  // 从 dancers/pairs/所有队形 positions 与 merges 中移除，经 store.mutate 提交可 undo。
+  // 从 dancers/groups/所有队形 positions 与 merges 中移除，经 store.mutate 提交可 undo。
   const mkDeleteBtn = () => {
     const b = document.createElement('button');
     b.className = 'um-btn';
@@ -99,7 +99,7 @@ function showUnitMenu(payload) {
     ? (currentFormation()?.merges || []).find(x => x.a === payload.ids[0] || x.b === payload.ids[0]) || null
     : null;
   if (ctxMerge && payload.ids.length < 2) {
-    payload.ids = [ctxMerge.a, ctxMerge.b]; // 补全伴侣 id：样式/拆开按钮的模型操作需要两人
+    payload.ids = [ctxMerge.a, ctxMerge.b]; // 补全另一成员 id：样式/拆开按钮的模型操作需要两人
     payload.style = ctxMerge.style;         // 当前样式高亮与 unit 菜单一致
   }
   if (payload.mode === 'merge') {
@@ -118,7 +118,7 @@ function showUnitMenu(payload) {
   } else {
     const title = document.createElement('div');
     title.className = 'um-title';
-    title.textContent = '舞对单元';
+    title.textContent = '合并单元';
     el.append(title);
   }
   // 样式按钮（合并确认时点击即以该样式创建；单元操作时切换样式）
@@ -132,7 +132,7 @@ function showUnitMenu(payload) {
           const f = p.formations[store.getState().formationIndex];
           if (!f) return;
           M.addMerge(f, payload.ids[0], payload.ids[1], sty);
-          M.collapsePair(f, payload.ids[0], payload.ids[1]);
+          M.collapseUnit(f, payload.ids[0], payload.ids[1]);
         }, '合并单元');
       } else {
         store.mutate(q => { M.setMergeStyle(q.formations[store.getState().formationIndex], payload.ids[0], payload.ids[1], sty); }, '切换单元样式');
@@ -156,7 +156,7 @@ function showUnitMenu(payload) {
     return untie;
   };
   // 按钮区按 mode 分支（DEFECT-R-1 根因：原 else 同时覆盖 context 与 unit 两种 mode）：
-  // merge → 样式×3；unit → 拆开+样式×3+删除（既有顺序不变）；context+有 merge → 样式×3+拆开+删除；
+  // merge → 样式×2；unit → 拆开+样式×2+删除（既有顺序不变）；context+有 merge → 样式×2+拆开+删除；
   // context+无 merge → 标题分支已加「删除」，此处不追加。✕ 取消按钮在下方对所有形态统一追加。
   if (payload.mode === 'merge') {
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
@@ -330,12 +330,13 @@ function deleteFormation() {
 function wireTopbar() {
   $('btn-back').addEventListener('click', async () => { player?.stop(); await store.closeProject(); });
   $('proj-title').addEventListener('change', () => store.mutate(p => { p.meta.title = $('proj-title').value || '未命名'; }, '重命名项目'));
-  // 右面板 Tab 切换（队形/舞台）
+  // 右面板 Tab 切换（队形/舞台/样式/编组）
   document.querySelectorAll('.ptab').forEach(b => b.addEventListener('click', () => {
     document.querySelectorAll('.ptab').forEach(x => x.classList.toggle('active', x === b));
     $('props-formation').hidden = b.dataset.tab !== 'formation';
     $('props-stage').hidden = b.dataset.tab !== 'stage';
     $('props-style').hidden = b.dataset.tab !== 'style';
+    $('props-groups').hidden = b.dataset.tab !== 'groups';
   }));
   $('btn-theme').addEventListener('click', () => {
     const next = store.getState().theme === 'light' ? 'dark' : 'light';
@@ -412,7 +413,7 @@ function renderUndoButtons() {
 function wireStageTools() {
   $('btn-edit-mode').addEventListener('click', () => store.setUI({ editMode: !store.getState().editMode }));
   $('btn-multi').addEventListener('click', () => store.setUI({ multiSelect: !store.getState().multiSelect }));
-  // 当前队形的组队呈示切换（组队=菱形单元 / 拆开=独立圆点），含位置收拢/偏移与缺席顺延
+  // 当前队形的合并单元呈示切换（胶囊/单编号样式切换经单元浮窗），含位置收拢/偏移与缺席顺延
   $('btn-add-formation').addEventListener('click', () => addFormation());
   $('btn-del-formation').addEventListener('click', () => deleteFormation());
   $('gen-kind').addEventListener('change', () => {
@@ -458,18 +459,19 @@ function wireStageTools() {
     toast('均布方向：' + (store.getState().distributeAxis === 'y' ? '纵向' : '横向') + '（右键切换）');
   });
   $('btn-swap').addEventListener('click', () => {
-    // 单元换位：把所选按"舞对/单人"分组，恰好 2 个单元时对调位置
+    // 单元换位：把所选按"合并单元或单人"分组，恰好 2 个单元时对调位置
     const s = store.getState();
+    const merges = s.project.formations[s.formationIndex]?.merges || [];
     const units = [];
     const used = new Set();
     for (const id of s.selection) {
       if (used.has(id)) continue;
-      const partner = M.partnerOf(s.project, id);
-      if (partner && s.selection.includes(partner)) { units.push([id, partner]); used.add(partner); }
-      else units.push([id]);
-      used.add(id);
+      const m = merges.find(x => x.a === id || x.b === id);
+      const unit = m ? [m.a, m.b] : [id];
+      unit.forEach(u => used.add(u));
+      units.push(unit);
     }
-    if (units.length !== 2) { toast('请选中两个单元（两名单人或两对舞伴）'); return; }
+    if (units.length !== 2) { toast('请选中两个单元（合并单元或单人）'); return; }
     store.mutate(p => {
       const f = p.formations[s.formationIndex];
       const [u1, u2] = units;
@@ -481,27 +483,35 @@ function wireStageTools() {
       });
     }, '单元换位');
   });
-  // 组对 / 拆对（原始选择，不受舞对联动扩展影响）
-  $('btn-pair-create').addEventListener('click', () => {
+  // 合并为单元 / 取消合并（与右键/长按浮窗同语义；原始选择，不受单元联动扩展影响）
+  $('btn-merge-create').addEventListener('click', () => {
     const sel = store.getState().selection;
     if (sel.length !== 2) { toast('请先选中恰好 2 名舞者'); return; }
     const [a, b] = sel;
-    if (M.pairOf(store.getState().project, a) || M.pairOf(store.getState().project, b)) { toast('所选舞者已有舞伴，请先拆对'); return; }
-    const da = M.dancerById(store.getState().project, a), db = M.dancerById(store.getState().project, b);
-    const leader = da.role === 'M' ? a : (db.role === 'M' ? b : a);
-    const follower = leader === a ? b : a;
-    store.mutate(p => { M.addPairByIds(p, leader, follower); }, '组成舞对');
-    toast(`已组成舞伴：${da.name} × ${db.name}`);
-  });
-  $('btn-pair-split').addEventListener('click', () => {
-    const s = store.getState();
-    const targets = [...new Set(s.selection.map(id => M.pairOf(s.project, id)).filter(Boolean))];
-    if (!targets.length) { toast('所选舞者没有舞伴绑定'); return; }
+    const f = currentFormation();
+    if (f && (f.merges || []).some(m => (m.a === a && m.b === b) || (m.a === b && m.b === a))) { toast('所选两人已是一个单元'); return; }
     store.mutate(p => {
-      const ids = new Set(targets.map(t => t.id));
-      p.pairs = p.pairs.filter(x => !ids.has(x.id));
-    }, '拆开舞伴');
-    toast(targets.length > 1 ? `已拆开 ${targets.length} 对舞伴` : '已拆开舞伴（两人保留在队形中）');
+      const ff = p.formations[store.getState().formationIndex];
+      M.addMerge(ff, a, b, 'capsule');
+      M.collapseUnit(ff, a, b);
+    }, '合并单元');
+    const da = M.dancerById(store.getState().project, a), db = M.dancerById(store.getState().project, b);
+    toast(`已合并为单元：${da?.name || '?'} + ${db?.name || '?'}`);
+  });
+  $('btn-merge-cancel').addEventListener('click', () => {
+    const s = store.getState();
+    const f = s.project.formations[s.formationIndex];
+    const targets = [];
+    for (const id of s.selection) {
+      const m = (f?.merges || []).find(x => x.a === id || x.b === id);
+      if (m && !targets.some(t => t === m)) targets.push(m);
+    }
+    if (!targets.length) { toast('所选舞者不在任何合并单元中'); return; }
+    store.mutate(p => {
+      const ff = p.formations[s.formationIndex];
+      for (const m of targets) M.removeMerge(ff, m.a, m.b);
+    }, '取消合并');
+    toast(targets.length > 1 ? `已取消 ${targets.length} 个单元（成员原地保留）` : '已取消合并（两人保留在队形中）');
   });
   $('face-target').addEventListener('change', () => {
     const t = $('face-target').value;
@@ -510,7 +520,7 @@ function wireStageTools() {
     const ids = sel.length ? expandedSelection() : [...currentFormation().positions.keys()];
     store.mutate(p => {
       const f = p.formations[store.getState().formationIndex];
-      shapes.faceAll(f.positions, ids, t === 'partner' ? 'partner' : t, { stage: p.stage, project: p });
+      shapes.faceAll(f.positions, ids, t, { stage: p.stage });
     }, '统一朝向');
     $('face-target').value = '';
   });
@@ -533,7 +543,7 @@ function applyGenerator(kind) {
     let ids;
     if (unit === 'men') ids = p.dancers.filter(d => d.role === 'M').map(d => d.id);
     else if (unit === 'women') ids = p.dancers.filter(d => d.role === 'F').map(d => d.id);
-    else ids = M.orderedDancers(p, unit);
+    else ids = M.orderedDancers(p);
     const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
     shapes.applySlots(f, ids, slots, { current: f.positions });
     M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者位置（合并单元仅由手动操作创建）
@@ -800,7 +810,7 @@ function selectionProps(f, s) {
   const group = h('div', { class: 'prop-group' });
   group.append(h('div', { class: 'pg-title' }, `选中 ${sel.length} 人`));
   if (!sel.length) {
-    group.append(h('div', { class: 'dim' }, '点击/框选舞者进行编辑；舞对锁定时自动带上舞伴。'));
+    group.append(h('div', { class: 'dim' }, '点击/框选舞者进行编辑；合并单元成员自动整单元入选。'));
     return group;
   }
   for (const id of sel.slice(0, 8)) {
@@ -814,6 +824,72 @@ function selectionProps(f, s) {
   }
   if (sel.length > 8) group.append(h('div', { class: 'dim' }, `…等 ${sel.length} 人`));
   return group;
+}
+
+// ---------- 编组（RTS 式：纯选择辅助，唯一用途=快速选中一组人一起移动/编辑/删除） ----------
+// 组选择遵循轮4单元原子规则：组成员若在合并单元中，展开为整单元两人
+function groupSelect(memberIds, { add = false } = {}) {
+  const ids = M.expandUnits(currentFormation(), memberIds || []);
+  selectIds(ids, { add });
+}
+function selectGroupN(n, { add = false } = {}) {
+  const p = store.getState().project;
+  const g = (p.groups || [])[n - 1];
+  if (g) groupSelect(g.memberIds, { add });
+}
+function saveSelectionAsGroupN(n = null) {
+  const s = store.getState();
+  if (!s.editMode) return;
+  const sel = [...s.selection];
+  if (!sel.length) { toast('请先选中要存为编组的舞者'); return; }
+  store.mutate(p => {
+    p.groups = p.groups || [];
+    const g = n != null ? p.groups[n - 1] : null;
+    if (g) {
+      g.memberIds = [...sel]; // Ctrl+N：覆盖第 N 组
+      toast(`编组 ${n}（${g.name}）已更新为 ${sel.length} 人`);
+    } else {
+      const ng = M.createGroup(p, sel);
+      toast(`已存为编组「${ng.name}」(${sel.length} 人)`);
+    }
+  }, n != null ? `覆盖编组 ${n}` : '存为编组');
+}
+let groupsKey = '';
+function buildGroupsPanel() {
+  const s = store.getState();
+  const p = s.project;
+  const host = $('props-groups');
+  if (!host || !p) return;
+  const groups = p.groups || [];
+  const key = JSON.stringify(groups) + '|' + s.selection.join(',') + '|' + s.formationIndex;
+  if (key === groupsKey) return;
+  groupsKey = key;
+  host.innerHTML = '';
+  host.append(
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, `编组（${groups.length}）`),
+      h('div', { class: 'dim' }, '编组只是快速选择辅助：1..9 选中、Shift+1..9 追加、Ctrl+1..9 把当前选择存入对应编号（覆盖）。可与合并交叉叠加，删除组不删除舞者。'),
+      ...groups.map((g, i) => {
+        const row = h('div', { class: 'grp-row', title: '点击选中该组（成员若在合并单元中会展开为整单元）' },
+          h('span', { class: 'grp-name' }, `${i + 1}. ${g.name}`),
+          h('span', { class: 'dim' }, `${g.memberIds.length}人`),
+          h('span', { class: 'grp-ops' },
+            h('button', { class: 'btn small', title: '选中该组成员', onclick: e => { e.stopPropagation(); selectGroupN(i + 1); } }, '选择'),
+            h('button', { class: 'btn small', title: '重命名', onclick: e => {
+              e.stopPropagation();
+              const nn = prompt('新组名', g.name);
+              if (nn && nn.trim()) store.mutate(p2 => { M.renameGroup(p2, g.id, nn); }, '重命名编组');
+            } }, '重命名'),
+            h('button', { class: 'btn small danger', title: '删除组（不影响舞者）', onclick: e => {
+              e.stopPropagation();
+              store.mutate(p2 => { M.removeGroup(p2, g.id); }, '删除编组');
+            } }, '删除')));
+        row.addEventListener('click', () => selectGroupN(i + 1));
+        return row;
+      }),
+      !groups.length ? h('div', { class: 'dim' }, '暂无编组：框选舞者后点「＋ 存为编组」，或按 Ctrl+1..9 保存。') : null,
+      h('div', { style: 'display:flex;gap:6px;margin-top:4px' },
+        h('button', { class: 'btn small', disabled: !s.selection.length, title: '把当前选择捕获为新编组（自动命名）', onclick: () => saveSelectionAsGroupN() }, '＋ 存为编组'))));
 }
 
 // ---------- 样式面板 ----------
@@ -864,7 +940,22 @@ function wireKeyboard() {
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
     if (e.key === 'Escape') { if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return; }
+    // RTS 编组快捷键：Ctrl/Cmd+1..9 = 把当前选择存为编组 N（覆盖）——先于其余修饰键放行
+    const digit = /^Digit([1-9])$/.exec(e.code || '');
+    if (digit && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (!s.editMode) return;
+      e.preventDefault();
+      saveSelectionAsGroupN(+digit[1]);
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return; // 其余单键快捷键不与浏览器/系统修饰键冲突
+    // 1..9 = 快速选中编组 N；Shift+1..9 = 追加选择编组 N（e.code 判定兼容 Shift 产生的 !@# 等字符）
+    if (digit && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!s.editMode) return;
+      e.preventDefault();
+      selectGroupN(+digit[1], { add: e.shiftKey });
+      return;
+    }
     if (e.key.toLowerCase() === 'e') { store.setUI({ editMode: !s.editMode }); return; } // 编辑开关
     if (!s.editMode) return; // 查看模式下禁用编辑类快捷键
     if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -943,7 +1034,7 @@ function renderFormationIndex(state) {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       cv.width = 128 * dpr; cv.height = 72 * dpr;
       cv.style.width = '64px'; cv.style.height = '36px';
-      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], pairLines: false, view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
+      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
       const label = document.createElement('span');
       label.className = 'fi-label';
       label.textContent = (i + 1) + ' ' + f.name;
@@ -988,14 +1079,16 @@ function render(state) {
   styleRefs.paths.checked = state.showPaths;
   styleRefs.grid.checked = state.showGrid;
   const curF = state.project?.formations[state.formationIndex];
-  // 组对/拆对按钮可用性（按原始选择）
-  $('btn-pair-create').disabled = state.selection.length !== 2;
-  $('btn-pair-split').disabled = !state.selection.some(id => M.pairOf(p, id));
+  // 合并/取消合并按钮可用性（按原始选择与当前帧 merges）
+  const curMerges = curF?.merges || [];
+  $('btn-merge-create').disabled = state.selection.length !== 2;
+  $('btn-merge-cancel').disabled = !state.selection.some(id => curMerges.some(m => m.a === id || m.b === id));
   $('formation-count').textContent = `${p.formations.length}`;
   renderFormationIndex(state);
   // 面板（统一时间线：编队条 + 波形时间线常驻）
   leftStrip.render();
   buildProps();
+  buildGroupsPanel();
   musicTl.render();
   // 音频面板
   if (document.activeElement !== $('bpm-input')) $('bpm-input').value = Math.round(p.audio.bpm);
@@ -1051,7 +1144,7 @@ window.__fs = {
     return {
       view: s.view, formationIndex: s.formationIndex,
       selection: s.selection,
-      dancers: s.project?.dancers.length, pairs: s.project?.pairs.length,
+      dancers: s.project?.dancers.length, groups: (s.project?.groups || []).length,
       formations: s.project?.formations.map(f => ({ name: f.name, n: Object.keys(f.positions).length })),
       positions: currentFormation()?.positions,
       blocks: s.project?.timeline.blocks,

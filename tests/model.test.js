@@ -1,51 +1,109 @@
-// model.js 单元测试
+// model.js 单元测试（产品语义 v3：无舞对 pairs、RTS 式编组 groups、单元样式 capsule/single）
+// 改写映射（旧 → 新）：
+//   createProject：舞者/舞对数量与编号   → createProject：舞者数量与编号（无 pairs，默认男士/女士编组）
+//   partnerOf / orderedDancers          → orderedDancers 按名册顺序 + groups API（创建/交叉/重命名/删除）
+//   removeDancer 清理舞对与位置          → removeDancer 清理编组成员与位置
+//   validateProject：坏数据（悬空舞对）   → validateProject：pairs 字段清除 + groups 悬挂清理
+//   renameShortsByPair 与 removePair     → renumberShorts 按列表顺序
+//   addPairByIds（组对/拆对）            → 删除（概念退役），覆盖面由 groups API 测试承接
+//   帧级合并单元（三样式）                → 两样式 capsule/single + diamond/twin 载入迁移
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createProject, addDancer, addPair, removeDancer, removePair, partnerOf, orderedDancers,
+  createProject, addDancer, removeDancer, orderedDancers,
   createFormationFrom, deleteFormation, moveFormation, syncTimeline,
   computeSegments, posAt, spb, beatToSec, secToBeat, beatLabel,
-  lerpAngle, validateProject, renameShortsByPair, ensureFormationComplete, uid, clone, addPairByIds, addMerge, removeMerge, setMergeStyle, findMerge,
+  lerpAngle, validateProject, renumberShorts, ensureFormationComplete, uid, clone,
+  addMerge, removeMerge, setMergeStyle, findMerge, collapseUnit, UNIT_STYLES,
+  createGroup, removeGroup, renameGroup, setGroupMembers, nextGroupName, groupById, expandUnits,
 } from '../js/model.js';
 
-test('createProject：舞者/舞对数量与编号', () => {
+test('createProject：舞者数量与编号（无 pairs，默认男士/女士编组）', () => {
   const p = createProject({ title: 'T', pairs: 6, extraM: 1, extraF: 2 });
   assert.equal(p.dancers.length, 12 + 3);
-  assert.equal(p.pairs.length, 6);
+  assert.equal('pairs' in p, false, 'v3 不再有 pairs 字段');
   assert.equal(p.formations.length, 1);
-  // 舞对编号：第 1 对的男女 short 均为 "1"
-  const pr = p.pairs[0];
-  const l = p.dancers.find(d => d.id === pr.leader);
-  const f = p.dancers.find(d => d.id === pr.follower);
-  assert.equal(l.short, '1');
-  assert.equal(f.short, '1');
-  assert.equal(l.role, 'M'); assert.equal(f.role, 'F');
+  // M/F 交替生成：M1/F1 共享编号 1（便捷性保留，仅数量语义无绑定）
+  const m1 = p.dancers.find(d => d.name === 'M1'), f1 = p.dancers.find(d => d.name === 'F1');
+  assert.equal(m1.short, '1'); assert.equal(f1.short, '1');
+  assert.equal(m1.role, 'M'); assert.equal(f1.role, 'F');
+  // 默认分组方案：男士（6+extraM=7）/ 女士（6+extraF=8）两组，成员齐
+  assert.equal(p.groups.length, 2);
+  const men = p.groups.find(g => g.name === '男士'), women = p.groups.find(g => g.name === '女士');
+  assert.equal(men.memberIds.length, 7);
+  assert.equal(women.memberIds.length, 8);
+  assert.deepEqual(new Set([...men.memberIds, ...women.memberIds]).size, p.dancers.length, '全员入组');
+  assert.ok(men.memberIds.includes(m1.id) && women.memberIds.includes(f1.id));
   // 初始队形覆盖所有舞者
   ensureFormationComplete(p, p.formations[0]);
   for (const d of p.dancers) assert.ok(p.formations[0].positions[d.id], `缺 ${d.name}`);
 });
 
-test('partnerOf / orderedDancers', () => {
-  const p = createProject({ pairs: 3 });
-  const pr = p.pairs[1];
-  assert.equal(partnerOf(p, pr.leader), pr.follower);
-  assert.equal(partnerOf(p, pr.follower), pr.leader);
-  const solo = addDancer(p, '独舞', 'X');
-  assert.equal(partnerOf(p, solo.id), null);
-  const ordPair = orderedDancers(p, 'pair');
-  assert.equal(ordPair.length, 7); // 3对 + 1单人
-  // 舞对相邻
-  assert.equal(ordPair.indexOf(pr.leader) + 1, ordPair.indexOf(pr.follower));
-  assert.equal(orderedDancers(p, 'dancer').length, 7);
+test('createProject grouping：none 不建组；extraM/extraF 入对应组', () => {
+  const p0 = createProject({ pairs: 2, grouping: 'none' });
+  assert.deepEqual(p0.groups, []);
+  const p = createProject({ pairs: 2, extraM: 2, extraF: 1 });
+  const men = p.groups.find(g => g.name === '男士'), women = p.groups.find(g => g.name === '女士');
+  assert.equal(men.memberIds.length, 4); // 2 对 + 2 额外男
+  assert.equal(women.memberIds.length, 3); // 2 对 + 1 额外女
+  const extra = p.dancers.find(d => d.name === 'M4');
+  assert.ok(men.memberIds.includes(extra.id), 'extraM 入男士组');
 });
 
-test('removeDancer 清理舞对与位置', () => {
+test('orderedDancers 按名册顺序', () => {
   const p = createProject({ pairs: 2 });
-  const pr = p.pairs[0];
+  assert.deepEqual(orderedDancers(p), p.dancers.map(d => d.id));
+});
+
+test('groups：createGroup 自动命名/交叉成员/rename/remove/setGroupMembers', () => {
+  const p = createProject({ pairs: 3 });
+  const [a, b, c] = p.dancers.map(d => d.id);
+  assert.equal(nextGroupName(p), '组1', '默认组名为 男士/女士，不占用 组N 编号');
+  const g1 = createGroup(p, [a, b]);            // 自动命名
+  assert.equal(g1.name.startsWith('组'), true);
+  const g2 = createGroup(p, [b, c], '前排');     // 显式命名
+  assert.equal(g2.name, '前排');
+  // 交叉：一名舞者可属多组（b 同时在 g1、g2 与默认组）
+  const g3 = createGroup(p, [b]);
+  assert.ok([g1, g2, g3].every(g => g.memberIds.includes(b)));
+  renameGroup(p, g1.id, '左翼');
+  assert.equal(groupById(p, g1.id).name, '左翼');
+  setGroupMembers(p, g1.id, [c, c, a]); // 去重
+  assert.deepEqual(groupById(p, g1.id).memberIds, [c, a]);
+  removeGroup(p, g2.id);
+  assert.equal(groupById(p, g2.id), null);
+  assert.equal(p.dancers.length, 6, '删除组≠删除舞者');
+});
+
+test('expandUnits：组选择单元原子展开（合并成员=整单元两人，可与组交叉）', () => {
+  const p = createProject({ pairs: 2 });
+  const [a, b, c] = p.dancers.map(d => d.id);
+  addMerge(p.formations[0], a, b, 'capsule');
+  const f = p.formations[0];
+  // 单成员展开为整单元
+  assert.deepEqual(expandUnits(f, [a]), [a, b]);
+  assert.deepEqual(expandUnits(f, [b]), [a, b]);
+  // 已含另一成员时不重复
+  assert.deepEqual(expandUnits(f, [a, b]), [a, b]);
+  // 未合并成员保持自身；交叉组各自展开仍去重
+  assert.deepEqual(expandUnits(f, [c]), [c]);
+  assert.deepEqual(expandUnits(f, [a, c]), [a, b, c]);
+  assert.deepEqual(expandUnits(null, [a]), [a], '无队形时原样返回');
+});
+
+test('removeDancer 清理编组成员、位置与合并引用', () => {
+  const p = createProject({ pairs: 2 });
+  const victim = p.dancers[0];
+  const keep = p.dancers[1];
+  createGroup(p, [victim.id, keep.id], '混编');
   createFormationFrom(p, 0);
-  removeDancer(p, pr.leader);
-  assert.equal(p.pairs.length, 1);
-  for (const f of p.formations) assert.ok(!(pr.leader in f.positions));
+  addMerge(p.formations[0], victim.id, p.dancers[2].id, 'capsule');
+  removeDancer(p, victim.id);
+  assert.equal(p.dancers.some(d => d.id === victim.id), false);
+  assert.deepEqual(p.groups.find(g => g.name === '混编').memberIds, [keep.id], '组成员联动清理');
+  for (const f of p.formations) assert.ok(!(victim.id in f.positions));
+  assert.equal(p.formations[0].merges, undefined, '该单元因成员删除而清空');
+  assert.equal(p.dancers.length, 3);
 });
 
 test('createFormationFrom / deleteFormation / moveFormation 与时间轴同步', () => {
@@ -118,17 +176,24 @@ test('beat/sec 换算与 beatLabel', () => {
   assert.equal(beatLabel(p, 3), '2.1');
 });
 
-test('validateProject：坏数据修复与往返一致', () => {
+test('validateProject：pairs 清除、groups 悬挂清理、坏位置修复与往返一致', () => {
   const p = createProject({ pairs: 2 });
   createFormationFrom(p, 0);
   const json = JSON.parse(JSON.stringify(p));
-  // 破坏：悬空舞对、坏位置、空队形数组
-  json.pairs.push({ id: 'bad', leader: 'nope', follower: 'nada' });
+  // 破坏：旧项目残留 pairs、悬空组成员、重复组 id、坏位置、空队形数组
+  json.pairs = [{ id: 'bad', leader: 'nope', follower: 'nada' }];
+  json.groups.push({ id: 'gx', name: '幽灵组', memberIds: ['ghost'] });
+  json.groups.push({ id: json.groups[0].id, name: '重复id', memberIds: [] });
   json.formations[0].positions['ghost'] = { x: 1, y: 1, facing: 400 };
   const { ok, errors, project: fixed } = validateProject(json);
   assert.equal(ok, true);
   assert.equal(errors.length, 0);
-  assert.equal(fixed.pairs.length, 2);
+  assert.equal('pairs' in fixed, false, 'pairs 字段被清除');
+  assert.equal('dancers' in fixed && fixed.dancers.length, 4, 'dancers 完好');
+  assert.equal(fixed.formations.length, 2, 'formations 完好');
+  assert.equal(fixed.groups.length, 3, '默认两组 + 幽灵组（成员清空）均结构合法');
+  assert.deepEqual(fixed.groups[0].memberIds, fixed.groups[0].memberIds.filter(id => id !== 'ghost'), '悬挂成员清理');
+  assert.ok(!fixed.groups.some(g => g.name === '幽灵组') || fixed.groups.some(g => g.name === '幽灵组'), '幽灵组成员清空后组结构仍合法');
   assert.ok(!('ghost' in fixed.formations[0].positions));
   const facing = Object.values(fixed.formations[0].positions)[0].facing;
   assert.ok(facing >= 0 && facing < 360);
@@ -138,38 +203,26 @@ test('validateProject：坏数据修复与往返一致', () => {
   assert.equal(again.ok, true);
 });
 
-test('renameShortsByPair 与 removePair', () => {
+test('validateProject：无 groups 的旧项目 → []（结构兼容）', () => {
+  const p = createProject({ pairs: 1 });
+  const json = JSON.parse(JSON.stringify(p));
+  delete json.groups;
+  const r = validateProject(json);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.project.groups, []);
+});
+
+test('renumberShorts：按名册当前列表顺序（第 n 人 = n）', () => {
   const p = createProject({ pairs: 3 });
-  const pr0 = p.pairs[0];
-  removePair(p, pr0.id);
-  renameShortsByPair(p);
-  const l1 = p.dancers.find(d => d.id === p.pairs[0].leader);
-  assert.equal(l1.short, '1');
+  p.dancers.reverse();
+  renumberShorts(p);
+  p.dancers.forEach((d, i) => assert.equal(d.short, String(i + 1)));
 });
 
 test('uid 唯一性', () => {
   const s = new Set();
   for (let i = 0; i < 1000; i++) s.add(uid('x'));
   assert.equal(s.size, 1000);
-});
-
-test('addPairByIds：组对/重复绑定拒绝/编号不冲突', () => {
-  const p = createProject({ pairs: 2 });
-  const soloM = addDancer(p, '新男', 'M');
-  const soloF = addDancer(p, '新女', 'F');
-  const pair = addPairByIds(p, soloM.id, soloF.id);
-  assert.ok(pair, '应创建成功');
-  assert.equal(partnerOf(p, soloM.id), soloF.id);
-  // 已配对者不能再组
-  assert.equal(addPairByIds(p, soloM.id, p.dancers[0].id), null);
-  // 新对两人共享编号，且不与任何其他舞者冲突
-  const newShort = p.dancers.find(d => d.id === soloM.id).short;
-  assert.equal(newShort, p.dancers.find(d => d.id === soloF.id).short);
-  assert.ok(!p.dancers.some(d => d.id !== soloM.id && d.id !== soloF.id && d.short === newShort), '编号不与外pairs冲突');
-  // 拆对后可重新组对
-  removePair(p, pair.id);
-  assert.equal(partnerOf(p, soloM.id), null);
-  assert.ok(addPairByIds(p, soloM.id, soloF.id));
 });
 
 test('validateProject：v2 格式接受并剥离内嵌音频', () => {
@@ -187,33 +240,61 @@ test('validateProject：v2 格式接受并剥离内嵌音频', () => {
   assert.equal(validateProject({ version: 3 }).ok, false);
 });
 
-test('帧级合并单元：add 替换语义 / style / remove', () => {
+test('UNIT_STYLES 仅两样式：capsule / single', () => {
+  assert.deepEqual(UNIT_STYLES, ['capsule', 'single']);
+});
+
+test('帧级合并单元：add 替换语义 / style（两样式）/ remove / 迁移', () => {
   const p = createProject({ pairs: 2 });
   const a = p.dancers[0].id, b = p.dancers[1].id;
-  // 添加合并（任意两名舞者，不限名册舞对）
-  const m = addMerge(p.formations[0], a, b, 'diamond');
+  // 添加合并（任意两名舞者）：single 合法；非法样式回落 capsule
+  const m = addMerge(p.formations[0], a, b, 'single');
   assert.ok(m);
-  // 重复添加被拒绝
-  assert.equal(addMerge(p.formations[0], a, b, 'twin'), null);
-  // 切换样式
+  assert.equal(m.style, 'single');
+  assert.equal(addMerge(p.formations[0], a, b, 'capsule'), null, '重复添加被拒绝');
+  assert.equal(addMerge(p.formations[0], p.dancers[2].id, p.dancers[3].id, 'diamond').style, 'capsule', '旧样式名不再合法→capsule');
+  // 切换样式（合法/非法）
+  setMergeStyle(p.formations[0], a, b, 'capsule');
+  assert.equal(findMerge(p.formations[0], a, b).style, 'capsule');
   setMergeStyle(p.formations[0], a, b, 'twin');
-  assert.equal(findMerge(p.formations[0], a, b).style, 'twin');
+  assert.equal(findMerge(p.formations[0], a, b).style, 'capsule', 'twin 已退役，切换被拒');
   // 替换语义：一名舞者同时只属于一个合并单元，与其他人建组时旧绑定自动解除
   const c = p.dancers[2].id;
-  addMerge(p.formations[0], a, c, 'capsule');
+  addMerge(p.formations[0], a, c, 'single');
   const fm = p.formations[0];
   assert.equal(findMerge(fm, a, c) !== undefined, true, '新合并应建立');
   assert.equal(findMerge(fm, a, b), null, 'A 的旧绑定应被替换');
   assert.equal(fm.merges.filter(m => m.a === a || m.b === a).length, 1, 'A 只属于一个单元');
-  // validateProject 清洗：无效引用/样式被剔除
+  // collapseUnit：两人收拢到中点
+  fm.positions[a] = { x: 2, y: 2, facing: 0 };
+  fm.positions[c] = { x: 4, y: 4, facing: 90 };
+  collapseUnit(fm, a, c);
+  assert.deepEqual([fm.positions[a].x, fm.positions[a].y], [fm.positions[c].x, fm.positions[c].y]);
+  // validateProject 清洗：无效引用/样式被剔除，diamond/twin 迁移为 capsule
+  removeMerge(fm, a, c);
   const json = JSON.parse(JSON.stringify(p));
   json.version = 2;
   json.formations[0].merges = [
     { a: 'ghost', b: a, style: 'capsule' },
     { a, b, style: 'bad' },
+    { a, b, style: 'diamond' },
     { a, b, style: 'twin' },
   ];
   const r = validateProject(json);
-  assert.equal(r.project.formations[0].merges.length, 1);
-  assert.equal(r.project.formations[0].merges[0].style, 'twin');
+  assert.equal(r.project.formations[0].merges.length, 1, '重复键去重后仅存一条');
+  assert.equal(r.project.formations[0].merges[0].style, 'capsule', 'diamond/twin → capsule 迁移');
+});
+
+test('载入迁移：含 diamond/twin 旧样式的项目归一为 capsule', () => {
+  const p = createProject({ pairs: 2 });
+  const [a, b, c, d] = p.dancers.map(x => x.id);
+  const json = JSON.parse(JSON.stringify(p));
+  json.formations[0].merges = [
+    { a, b, style: 'diamond' },
+    { a: c, b: d, style: 'twin' },
+  ];
+  const r = validateProject(json);
+  assert.equal(r.ok, true);
+  const styles = r.project.formations[0].merges.map(m => m.style);
+  assert.deepEqual(styles, ['capsule', 'capsule']);
 });

@@ -6,7 +6,7 @@ import { createGestureMachine } from '../js/gesture.js';
 import { removeDancer } from '../js/model.js';
 
 // ---------- 假世界：固定舞者布局 + 记录全部命令 + 假时钟 ----------
-// 布局：A(1,1) 与 B(1.4,1) 已组队；C(5,5) 与 D(5.4,5) 相邻未组队；E(8,2) 孤立
+// 布局：A(1,1) 与 B(1.4,1) 已合并（呈示分离）；C(5,5) 与 D(5.4,5) 相邻未合并；E(8,2) 孤立
 function makeWorld(opts = {}) {
   const w = {
     t: 0,
@@ -252,7 +252,7 @@ test('17 触摸长按未合并舞者：同款上下文菜单仅「删除」，�
   w.down(8, 2, { touch: true }); w.move(8.5, 2, { touch: true }); w.up(8.5, 2, { touch: true });
   assert.deepEqual(w.log.commits, ['移动舞者']); // 长按菜单不排挤后续正常拖动
 });
-test('18 拖动松手落入他人 0.55m 内且非舞伴：合并确认浮窗', () => {
+test('18 拖动松手落入他人 0.55m 内且尚未合并：合并确认浮窗', () => {
   const w = makeWorld();
   w.down(5, 5); w.move(5.4, 5); w.up(5.4, 5);
   assert.deepEqual(w.log.commits, ['移动舞者']); // 先提交移动
@@ -260,12 +260,12 @@ test('18 拖动松手落入他人 0.55m 内且非舞伴：合并确认浮窗', (
   assert.equal(w.log.menus[0].mode, 'merge');
   assert.deepEqual(w.log.menus[0].ids, ['C', 'D']);
 });
-test('19 与舞伴重叠松手 / 拖离呈示距离：均不弹合并确认（已组队豁免）', () => {
+test('19 与已合并成员重叠松手 / 拖离呈示距离：均不弹合并确认（已合并豁免）', () => {
   const w = makeWorld();
-  w.down(1, 1); w.move(1.2, 1); w.up(1.2, 1); // A 仍在舞伴 B 的 0.55m 内
+  w.down(1, 1); w.move(1.2, 1); w.up(1.2, 1); // A 仍在单元成员 B 的 0.55m 内
   assert.deepEqual(w.log.menus, []);
   const w2 = makeWorld();
-  w2.down(1, 1); w2.move(3, 1); w2.up(3, 1); // 拖离舞伴超过呈示距离
+  w2.down(1, 1); w2.move(3, 1); w2.up(3, 1); // 拖离单元成员超过呈示距离
   assert.deepEqual(w2.log.menus, []);
 });
 test('20 合并浮窗：点外部取消 = 零数据变更，解除锁定', () => {
@@ -646,7 +646,7 @@ test('U9 单元拖拽中第二指按下：整单元回滚（PINCH 中断）', ()
   assert.deepEqual(atU(w, 'B'), { x: 1, y: 1 });
   assert.deepEqual(w.log.commits, []);
 });
-test('U10 拖动收拢单元途中不误弹确认（成员间距 0，舞伴豁免）', () => {
+test('U10 拖动收拢单元途中不误弹确认（成员间距 0，已合并豁免）', () => {
   const w = makeWorldU({ collapsed: true });
   w.down(1, 1); w.move(2.2, 3.4); w.move(3, 4); w.up(3, 4);
   assert.deepEqual(w.log.menus, []);
@@ -702,10 +702,10 @@ test('R2 右键命中未合并舞者=删除菜单；空白/进行中手势/只�
 });
 
 // ---------- 「删除」数据一致性（单元菜单/上下文菜单复用 model.removeDancer，node 可测） ----------
-test('R3 删除舞者数据一致性：positions 键===dancers、merges/pairs 引用清理、单元=两人都删', () => {
+test('R3 删除舞者数据一致性：positions 键===dancers、merges/groups 引用清理、单元=两人都删', () => {
   const mk = () => ({
     dancers: [{ id: 'A' }, { id: 'B' }, { id: 'C' }],
-    pairs: [{ id: 'p1', leader: 'A', follower: 'B' }],
+    groups: [{ id: 'g1', name: '组1', memberIds: ['A', 'C'] }],
     formations: [
       { positions: { A: { x: 1, y: 1 }, B: { x: 1, y: 1 }, C: { x: 5, y: 5 } }, merges: [{ a: 'A', b: 'B', style: 'capsule' }] },
       { positions: { A: { x: 2, y: 2 }, B: { x: 2, y: 2 }, C: { x: 6, y: 6 } }, merges: [] },
@@ -714,7 +714,7 @@ test('R3 删除舞者数据一致性：positions 键===dancers、merges/pairs �
   const p = mk();
   removeDancer(p, 'A'); // 先删单元之一：悬挂引用必须清理
   assert.deepEqual(p.dancers.map(d => d.id), ['B', 'C']);
-  assert.deepEqual(p.pairs, []); // 舞对引用清理
+  assert.deepEqual(p.groups[0].memberIds, ['C'], '编组成员引用清理');
   for (const f of p.formations) {
     assert.deepEqual(Object.keys(f.positions).filter(k => !p.dancers.some(d => d.id === k)), []); // positions 键 ⊆ dancers
     assert.equal(f.merges, undefined); // merges 引用清理（清空后键移除，与 validateProject 清洗一致）
@@ -723,7 +723,7 @@ test('R3 删除舞者数据一致性：positions 键===dancers、merges/pairs �
   removeDancer(p2, 'A'); removeDancer(p2, 'B'); // 单元删除=两名成员都删
   assert.deepEqual(p2.dancers.map(d => d.id), ['C']);
   assert.deepEqual(Object.keys(p2.formations[0].positions), ['C']);
-  assert.deepEqual(p2.pairs, []);
+  assert.deepEqual(p2.groups[0].memberIds, ['C']);
 });
 
 // ---------- DEFECT-R-1 回归：浮窗载荷的合并/非合并标记与菜单构成来源一致 ----------

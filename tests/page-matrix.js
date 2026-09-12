@@ -1,3 +1,10 @@
+// ⚠️ 已废弃归档（v1 仪器，round14-v3 起）——reviewer 裁定：本文件不再执行、仅作历史存档。
+// 废弃原因：① v1 场景用「改名键」布置（A/B/C…非真实 dancer id），违反现行 G2 红线
+//   （positions 键必须 === dancers id）；② 断言与场景读取已退役的 proj.pairs 舞伴语义，
+//   在产品语义 v3（pairs 删除、groups 编组、单元样式 capsule/single）下必然抛错/误判。
+// 后继者：L0 职责 → tests/page-l0.js；L1 动线 → tests/page-l1.js；R 组 → tests/page-r.js；
+//   GR 编组 → tests/page-gr.js；L2 组合 → tests/page-l2.js。权威计划：tests/e2e-matrix.md（v3）。
+//
 // 全操作动线矩阵（浏览器端执行）：每条动线 = 硬件类别 + 注入器步骤 + 检查点。
 // 运行：await import('/tests/page-matrix.js') → await window.__runMatrix()
 // 结果：[{ id, hw, name, ok, detail }]

@@ -51,7 +51,7 @@ export class EditStrip {
       const dpr = window.devicePixelRatio || 1;
       if (cv.width !== 120 * dpr) { cv.width = 120 * dpr; cv.height = 68 * dpr; }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (f) drawScene(ctx, { x: 0, y: 0, w: 120, h: 68 }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], pairLines: false });
+      if (f) drawScene(ctx, { x: 0, y: 0, w: 120, h: 68 }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [] });
     });
   }
 }

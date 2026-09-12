@@ -1,5 +1,5 @@
 // 集中状态树 + 撤销/重做 + IndexedDB 持久化（Node 环境自动降级为内存存储）
-import { createProject, clone, uid, renameShortsByPair } from './model.js';
+import { createProject, clone, uid } from './model.js';
 
 // ---------- 存储（IndexedDB / 内存回退） ----------
 const memory = { projects: new Map(), audio: new Map() };

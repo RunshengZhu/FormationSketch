@@ -1,8 +1,11 @@
-// R 组测试仪器：单元语义 v2 动线 R-01~R-07（权威计划 tests/e2e-matrix.md §3.5）。
-// 背景：合并单元语义简化为「单元原子化 + 右键/长按统一上下文菜单」——本组专测该语义；
+// R 组测试仪器：单元语义动线 R-01~R-07（权威计划 tests/e2e-matrix.md §3.5）。
+// 背景：合并单元语义 =「单元原子化 + 右键/长按统一上下文菜单」——本组专测该语义；
 // 结构复用 page-l1 的纪律：每条动线独立场景（真实 id / 12 人两行 / snap 关 / 视图 fit）、
 // 先执行后断言、失败即停、每动线后泄漏断言（page-kit.runCases 内置）。
 // 纪律：本文件属测试仪器，被测应用代码（js/*、index.html、css/*）零改动；场景搭建只走 store/M 公共 API。
+// v3（round14）：pairs 退役——共享不变式改为 positions 键===dancers + merges 引用有效 + groups 引用有效
+//   （原 proj.pairs.every 不变式废止）；浮窗标题「舞对单元」→「合并单元」；样式按钮 胶囊/单编号 两枚；
+//   collapsePair→collapseUnit、orderedDancers 无 unit 参数。
 // 运行前提：window.__fs、window.__input（page-injector.js，含 contextMenu/contextEvent 原语）、
 //       window.__l1Shot（lab 驱动注入；page-kit 的 shotFn 兼容 __l0Shot 兜底）。
 // 入口：await import('/tests/page-r.js') → await runR({ phase: 'M'|'T'|'P', only?: 'R-05' })
@@ -48,7 +51,7 @@ export async function runR(opts = {}) {
     store.mutate(p => { p.stage.snap = false; });
     sv.resetView();
     await raf2();
-    const ids = M.orderedDancers(state().project, 'pair');
+    const ids = M.orderedDancers(state().project); // 真实 dancer id（名册顺序，v3 无 unit 参数）
     const dancerOf = id => state().project.dancers.find(d => d.id === id);
     const posOf = id => ({ ...fmt().positions[id] });
     const ptOf = id => { const p = posOf(id); return ctx.toClient(p.x, p.y); };
@@ -135,7 +138,7 @@ export async function runR(opts = {}) {
     store.mutate(p => {
       const f = p.formations[state().formationIndex];
       M.addMerge(f, idA, idB, style);
-      M.collapsePair(f, idA, idB);
+      M.collapseUnit(f, idA, idB);
     }, label || undefined);
     await raf2();
     return { idA, idB, mid: t.mergePt(idA, idB) };
@@ -150,15 +153,15 @@ export async function runR(opts = {}) {
       sB: minDistOver((x, y) => mean3x3(cv, x, y), colB, regB),
     };
   }
-  // 数据不变式：positions 键===dancers id（全部队形）+ merges/pairs 引用有效
+  // 数据不变式（v3）：positions 键===dancers id（全部队形）+ merges/groups 引用有效（pairs 不变式已随退役废止）
   function invariants(t) {
     const proj = state().project;
     const ids = proj.dancers.map(d => d.id).sort();
     const keyOK = proj.formations.every(f => JSON.stringify(Object.keys(f.positions).sort()) === JSON.stringify(ids));
     const mergeOK = proj.formations.every(f => (f.merges || []).every(m =>
       ids.includes(m.a) && ids.includes(m.b) && m.a !== m.b));
-    const pairOK = proj.pairs.every(p => ids.includes(p.leader) && ids.includes(p.follower));
-    return { keyOK, mergeOK, pairOK };
+    const groupsOK = (proj.groups || []).every(g => (g.memberIds || []).every(id => ids.includes(id)));
+    return { keyOK, mergeOK, groupsOK };
   }
 
   // =====================================================================
@@ -175,14 +178,14 @@ export async function runR(opts = {}) {
         const styleOf = () => (fmt().merges || [])[0]?.style;
         const btnWrap = document.getElementById('stage-wrap').getBoundingClientRect();
 
-        // ---- 子1 右键 → 结构+定位断言 → 点「菱形」 ----
+        // ---- 子1 右键 → 结构+定位断言 → 点「单编号」 ----
         await inp.contextMenu(mid.x, mid.y, { hw: 'mouse' });
         await raf2();
         const m1 = menu();
         let border = null, r1 = null;
         if (m1) { r1 = await cmpShot('r01-menu', inflate(m1.rect)); border = await menuBorder(r1.b64, m1); }
-        step('[DOM] 右键徽标弹单元菜单（title=舞对单元）', !!m1 && m1.title === '舞对单元', m1 ? `title="${m1.title}" btns=[${m1.btns}]` : '无 .unit-menu', 'DOM');
-        step('[DOM] 按钮齐备（✂ 拆开/胶囊/菱形/双圆/删除/✕）', !!m1 && ['✂ 拆开', '胶囊', '菱形', '双圆', '删除'].every(x => m1.btns.includes(x)) && m1.btns.includes('✕'),
+        step('[DOM] 右键徽标弹单元菜单（v3 title=合并单元）', !!m1 && m1.title === '合并单元', m1 ? `title="${m1.title}" btns=[${m1.btns}]` : '无 .unit-menu', 'DOM');
+        step('[DOM] 按钮齐备（✂ 拆开/胶囊/单编号/删除/✕）', !!m1 && ['✂ 拆开', '胶囊', '单编号', '删除'].every(x => m1.btns.includes(x)) && m1.btns.includes('✕'),
           m1 ? `btns=[${m1.btns}]` : '—', 'DOM');
         if (m1) {
           // 定位钳制断言：应用公式（main.js showUnitMenu）= left=max(4,min(screen.x-40, wrapW-w-4))，
@@ -199,8 +202,8 @@ export async function runR(opts = {}) {
         if (m1) cmpStep(step, r1);
         if (m1) step('[SCREEN] 浮窗边框色可检出（≈#38bdf8）', border.d < 140, `最小单像素色距 ${border.d.toFixed(1)}@${JSON.stringify(border.at)}`, 'SCREEN');
         const style0 = styleOf();
-        const clickedStyle = await clickMenuBtn(m1, '菱形');
-        step('[STATE] 操作①样式：菱形可点 → style 变更 + 历史「切换单元样式」+ 菜单关闭', clickedStyle && styleOf() === 'diamond' && style0 === 'capsule' && store.undoLabel() === '切换单元样式' && !menu(),
+        const clickedStyle = await clickMenuBtn(m1, '单编号');
+        step('[STATE] 操作①样式：单编号可点 → style 变更 + 历史「切换单元样式」+ 菜单关闭', clickedStyle && styleOf() === 'single' && style0 === 'capsule' && store.undoLabel() === '切换单元样式' && !menu(),
           `style ${style0}→${styleOf()} ${t.hist()}`);
 
         // ---- 子2 重建单元 → 右键 → 点「✂ 拆开」 ----
@@ -224,7 +227,7 @@ export async function runR(opts = {}) {
         const inv3 = invariants(t);
         step('[STATE] 操作③删除：可点 → 两人移除、菜单关闭、不变式成立', clickedDel &&
           state().project.dancers.length === n0 - 2 && !state().project.dancers.some(d => d.id === A || d.id === B) && !menu() &&
-          inv3.keyOK && inv3.mergeOK && inv3.pairOK, `dancers ${n0}→${state().project.dancers.length} ${t.hist()}`);
+          inv3.keyOK && inv3.mergeOK && inv3.groupsOK, `dancers ${n0}→${state().project.dancers.length} ${t.hist()}`);
       },
     },
 
@@ -248,7 +251,7 @@ export async function runR(opts = {}) {
         await raf2();
         const inv = invariants(t);
         const delOK = clicked && state().project.dancers.length === n0 - 1 && !state().project.dancers.some(d => d.id === E) &&
-          !(E in fmt().positions) && inv.keyOK && inv.mergeOK && inv.pairOK && store.undoLabel() === '删除舞者';
+          !(E in fmt().positions) && inv.keyOK && inv.mergeOK && inv.groupsOK && store.undoLabel() === '删除舞者';
         step('[STATE] 点删除：该舞者移除、不变式成立、历史=「删除舞者」', delOK, `dancers ${n0}→${state().project.dancers.length} ${t.hist()}`);
         store.undo(); await raf2();
         const backOK = state().project.dancers.length === n0 && state().project.dancers.some(d => d.id === E) && E in fmt().positions;
@@ -352,15 +355,15 @@ export async function runR(opts = {}) {
         // ---- 呼出单元菜单（M=右键 / T/P=长按）→ 点「删除」 ----
         await openCtxMenu(mid);
         const m = menu();
-        step('[DOM] 单元菜单呼出（title=舞对单元，含「删除」）', !!m && m.title === '舞对单元' && m.btns.includes('删除'), m ? `title="${m.title}" btns=[${m.btns}]` : '无 .unit-menu', 'DOM');
+        step('[DOM] 单元菜单呼出（v3 title=合并单元，含「删除」）', !!m && m.title === '合并单元' && m.btns.includes('删除'), m ? `title="${m.title}" btns=[${m.btns}]` : '无 .unit-menu', 'DOM');
         const clicked = await clickMenuBtn(m, '删除');
         await raf2();
         const inv = invariants(t);
         const goneOK = clicked && state().project.dancers.length === n0 - 2 &&
           !state().project.dancers.some(d => d.id === A || d.id === B) &&
           !(A in fmt().positions) && !(B in fmt().positions) &&
-          inv.keyOK && inv.mergeOK && inv.pairOK && !menu();
-        step('[STATE] 删除：两名成员移除、全帧 positions 键===dancers id、merges/pairs 引用清理、菜单关闭', goneOK,
+          inv.keyOK && inv.mergeOK && inv.groupsOK && !menu();
+        step('[STATE] 删除：两名成员移除、全帧 positions 键===dancers id、merges/groups 引用清理、菜单关闭', goneOK,
           `dancers ${n0}→${state().project.dancers.length} merges=${JSON.stringify(fmt().merges || [])} ${t.hist()}`);
         step('[STATE] 历史=「删除单元（两名舞者）」叠于「合并单元」之上且可 undo', store.canUndo() && store.undoLabel() === '删除单元（两名舞者）' && hist0.includes('label="合并单元"'),
           `before=${hist0} after=${t.hist()}`);
@@ -375,7 +378,7 @@ export async function runR(opts = {}) {
         const backOK = store.undoLabel() === '合并单元' && state().project.dancers.length === n0 &&
           state().project.dancers.some(d => d.id === A) && state().project.dancers.some(d => d.id === B) &&
           Math.abs(t.posOf(A).x - midStage.x) < 1e-9 && Math.abs(t.posOf(A).y - midStage.y) < 1e-9 &&
-          Math.abs(t.posOf(B).x - midStage.x) < 1e-9 && Math.abs(t.posOf(B).y - midStage.y) < 1e-9 && invU.keyOK && invU.mergeOK && invU.pairOK;
+          Math.abs(t.posOf(B).x - midStage.x) < 1e-9 && Math.abs(t.posOf(B).y - midStage.y) < 1e-9 && invU.keyOK && invU.mergeOK && invU.groupsOK;
         const halves = badgeHalves(t, t.mergePt(A, B), t.col(A), t.col(B));
         const r2 = await cmpShot('r05-undone');
         step('[STATE] undo：两人还原（同 id、收拢位不变、merges/pairs 复原，恢复点=「合并单元」提交）', backOK, `dancers=${state().project.dancers.length} ${t.hist()}`);
@@ -384,7 +387,7 @@ export async function runR(opts = {}) {
         // ---- redo：再次删除 ----
         store.redo(); await raf2();
         const invR = invariants(t);
-        step('[STATE] redo：重放删除（两人再移除、不变式成立）', state().project.dancers.length === n0 - 2 && invR.keyOK && invR.mergeOK && invR.pairOK && !store.canRedo(),
+        step('[STATE] redo：重放删除（两人再移除、不变式成立）', state().project.dancers.length === n0 - 2 && invR.keyOK && invR.mergeOK && invR.groupsOK && !store.canRedo(),
           `dancers=${state().project.dancers.length} ${t.hist()}`);
       },
     },
@@ -407,7 +410,7 @@ export async function runR(opts = {}) {
         const m = menu();
         const clicked = await clickMenuBtn(m, '拆开');
         await raf2();
-        step('[DOM] 上下文菜单点「✂ 拆开」（右键入口）', !!m && m.title === '舞对单元' && clicked, m ? `title="${m.title}"` : '无 .unit-menu', 'DOM');
+        step('[DOM] 上下文菜单点「✂ 拆开」（右键入口，v3 title=合并单元）', !!m && m.title === '合并单元' && clicked, m ? `title="${m.title}"` : '无 .unit-menu', 'DOM');
         step('[STATE] 拆开后 selection 清空（规格外补充：防原子选择残留）', clicked && t.sel().length === 0 && (fmt().merges || []).length === 0,
           `selection=[${t.sel().map(i => i.slice(0, 8))}] merges=${(fmt().merges || []).length} ${t.hist()}`);
         step('[STATE] 拆开位置不变（仍重叠于收拢点）', Math.abs(t.posOf(A).x - midStage.x) < 1e-9 && Math.abs(t.posOf(B).x - midStage.x) < 1e-9 && Math.abs(t.posOf(A).y - midStage.y) < 1e-9,

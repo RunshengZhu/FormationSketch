@@ -27,31 +27,30 @@ function nextShort(project, role) {
   while (used.has(String(n))) n++;
   return String(n);
 }
-export function addPair(project, leaderName, followerName) {
-  const n = project.pairs.length + 1 + project.dancers.length; // 保证 short 唯一的简单策略
-  // 舞对编号 = 现有舞对数 + 1，但需避免与已有 short 冲突
-  let num = project.pairs.length + 1;
-  const used = new Set(project.dancers.map(d => d.short));
-  while (used.has(String(num))) num++;
-  const leader = addDancer(project, leaderName, 'M', String(num));
-  const follower = addDancer(project, followerName, 'F', String(num));
-  const pair = { id: uid('p'), leader: leader.id, follower: follower.id };
-  project.pairs.push(pair);
-  return pair;
-}
-export function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, extraF = 0 } = {}) {
+// createProject：pairs=「对数」（M/F 交替生成的数量语义，无任何绑定）；grouping=预定义编组方案
+//   'gender'（默认）→ 建「男士」「女士」两组；'none' → 不建组
+export function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, extraF = 0, grouping = 'gender' } = {}) {
   const project = {
     version: 1,
     meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     stage: { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null },
     audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
-    dancers: [], pairs: [], formations: [],
+    dancers: [], groups: [], formations: [],
     timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1 },
   };
-  for (let i = 1; i <= pairs; i++) addPair(project, `M${i}`, `F${i}`);
+  for (let i = 1; i <= pairs; i++) {
+    addDancer(project, `M${i}`, 'M', String(i));
+    addDancer(project, `F${i}`, 'F', String(i));
+  }
   for (let i = 1; i <= extraM; i++) addDancer(project, `M${pairs + i}`, 'M');
   for (let i = 1; i <= extraF; i++) addDancer(project, `F${pairs + i}`, 'F');
-  // 初始队形：双横排（以舞对为单位）
+  if (grouping === 'gender') {
+    const men = project.dancers.filter(d => d.role === 'M').map(d => d.id);
+    const women = project.dancers.filter(d => d.role === 'F').map(d => d.id);
+    if (men.length) project.groups.push({ id: uid('g'), name: '男士', memberIds: men });
+    if (women.length) project.groups.push({ id: uid('g'), name: '女士', memberIds: women });
+  }
+  // 初始队形：双横排
   const f = { id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {} };
   project.formations.push(f);
   genDefaultRows(project, f);
@@ -59,7 +58,7 @@ export function createProject({ title = '未命名队列舞', pairs = 6, extraM 
   return project;
 }
 function genDefaultRows(project, f) {
-  const ids = orderedDancers(project, 'pair');
+  const ids = orderedDancers(project);
   const { widthM: W, depthM: H } = project.stage;
   const n = ids.length, rows = n <= 4 ? 1 : 2, m = 1.5;
   const per = Math.ceil(n / rows);
@@ -73,29 +72,13 @@ function genDefaultRows(project, f) {
   });
 }
 
-// ---------- 舞者/舞对 ----------
+// ---------- 舞者 / 编组 ----------
 export function dancerById(project, id) { return project.dancers.find(d => d.id === id) || null; }
-export function pairOf(project, dancerId) { return project.pairs.find(p => p.leader === dancerId || p.follower === dancerId) || null; }
-export function partnerOf(project, dancerId) {
-  const p = pairOf(project, dancerId);
-  if (!p) return null;
-  return p.leader === dancerId ? p.follower : p.leader;
-}
-export function orderedDancers(project, unit = 'pair') {
-  if (unit !== 'pair') return project.dancers.map(d => d.id);
-  const inPair = new Set();
-  const ids = [];
-  for (const p of project.pairs) {
-    if (project.dancers.some(d => d.id === p.leader) && project.dancers.some(d => d.id === p.follower)) {
-      ids.push(p.leader, p.follower); inPair.add(p.leader); inPair.add(p.follower);
-    }
-  }
-  for (const d of project.dancers) if (!inPair.has(d.id)) ids.push(d.id);
-  return ids;
-}
+export function orderedDancers(project) { return project.dancers.map(d => d.id); }
 export function removeDancer(project, dancerId) {
   project.dancers = project.dancers.filter(d => d.id !== dancerId);
-  project.pairs = project.pairs.filter(p => p.leader !== dancerId && p.follower !== dancerId);
+  // 编组成员联动清理（删除组≠删除舞者；反之删舞者需清引用）
+  for (const g of project.groups || []) g.memberIds = (g.memberIds || []).filter(id => id !== dancerId);
   for (const f of project.formations) {
     delete f.positions[dancerId];
     // 帧内合并单元引用一并清理（保证 positions 键 === dancers id、merges 不悬挂）
@@ -105,7 +88,46 @@ export function removeDancer(project, dancerId) {
     }
   }
 }
-export function removePair(project, pairId) { project.pairs = project.pairs.filter(p => p.id !== pairId); }
+
+// ---------- RTS 式编组（project.groups：纯选择辅助，可与合并交叉叠加，不改变渲染/数据语义） ----------
+export function groupById(project, groupId) { return (project.groups || []).find(g => g.id === groupId) || null; }
+export function nextGroupName(project) {
+  const used = new Set((project.groups || []).map(g => g.name));
+  let n = 1;
+  while (used.has(`组${n}`)) n++;
+  return `组${n}`;
+}
+export function createGroup(project, memberIds = [], name = '') {
+  const g = { id: uid('g'), name: name || nextGroupName(project), memberIds: [...memberIds] };
+  project.groups = project.groups || [];
+  project.groups.push(g);
+  return g;
+}
+export function removeGroup(project, groupId) {
+  project.groups = (project.groups || []).filter(g => g.id !== groupId);
+}
+export function renameGroup(project, groupId, name) {
+  const n = String(name ?? '').trim().slice(0, 40);
+  if (!n) return;
+  const g = groupById(project, groupId);
+  if (g) g.name = n;
+}
+export function setGroupMembers(project, groupId, memberIds) {
+  const g = groupById(project, groupId);
+  if (g) g.memberIds = [...new Set(memberIds)];
+}
+// 组选择的单元原子展开：成员若在合并单元中，展开为整单元两人
+export function expandUnits(formation, ids) {
+  const out = [];
+  const seen = new Set();
+  for (const id of ids) {
+    const m = formation && (formation.merges || []).find(x => x.a === id || x.b === id);
+    for (const u of (m ? [m.a, m.b] : [id])) {
+      if (!seen.has(u)) { seen.add(u); out.push(u); }
+    }
+  }
+  return out;
+}
 // 从更早的队形顺延缺失舞者的位置（查不到则放舞台中心附近）
 export function carryPositionsForward(project, index) {
   const f = project.formations[index];
@@ -122,7 +144,7 @@ export function carryPositionsForward(project, index) {
   }
 }
 // ---------- 帧内合并单元（任意两名舞者合为一个呈示符号） ----------
-export const UNIT_STYLES = ['capsule', 'diamond', 'twin'];
+export const UNIT_STYLES = ['capsule', 'single'];
 export const mergeKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 export function findMerge(formation, idA, idB) {
   const key = mergeKey(idA, idB);
@@ -145,45 +167,23 @@ export function setMergeStyle(formation, idA, idB, style) {
   const m = findMerge(formation, idA, idB);
   if (m && UNIT_STYLES.includes(style)) m.style = style;
 }
-// 把一对舞伴收拢/拆开到标准间距（用于生成器后处理与呈示切换）
-export function collapsePair(f, idA, idB) {
+// 把合并单元两人收拢/拆开到标准间距（用于呈示切换与合并确认的后处理）
+export function collapseUnit(f, idA, idB) {
   const a = f.positions[idA], b = f.positions[idB];
   if (!a || !b) return;
   const mx = Math.round(((a.x + b.x) / 2) * 100) / 100;
   const my = Math.round(((a.y + b.y) / 2) * 100) / 100;
   a.x = b.x = mx; a.y = b.y = my;
 }
-// 帧布局顺延：仅补齐缺席舞者位置；合并单元完全由手动操作创建（组队自动逻辑已移除）
+// 帧布局顺延：仅补齐缺席舞者位置；合并单元完全由手动操作创建
 export function applyFormationLayout(project, index) {
   const f = project.formations[index];
   if (!f) return;
   carryPositionsForward(project, index);
 }
-// 将两名已有舞者组成舞伴（两人都必须未配对）；对内编号取不冲突的最小号
-export function addPairByIds(project, leaderId, followerId) {
-  if (!dancerById(project, leaderId) || !dancerById(project, followerId)) return null;
-  if (pairOf(project, leaderId) || pairOf(project, followerId)) return null;
-  const used = new Set(project.dancers.map(d => d.short));
-  let num = 1;
-  while (used.has(String(num))) num++;
-  const pair = { id: uid('p'), leader: leaderId, follower: followerId };
-  dancerById(project, leaderId).short = String(num);
-  dancerById(project, followerId).short = String(num);
-  project.pairs.push(pair);
-  return pair;
-}
-export function renameShortsByPair(project) {
-  // 按舞对顺序重编 short：对内同号（第 n 对 = n），未配对舞者往后编
-  let n = 1;
-  for (const p of project.pairs) {
-    const l = dancerById(project, p.leader), fo = dancerById(project, p.follower);
-    if (l) l.short = String(n);
-    if (fo) fo.short = String(n);
-    n++;
-  }
-  for (const d of project.dancers) {
-    if (!pairOf(project, d.id)) { d.short = String(n); n++; }
-  }
+// 按名册当前列表顺序重编 short（第 n 人 = n）
+export function renumberShorts(project) {
+  project.dancers.forEach((d, i) => { d.short = String(i + 1); });
 }
 
 // ---------- 队形 ----------
@@ -356,7 +356,8 @@ export function validateProject(json) {
   p.audio.durationSec = num(p.audio.durationSec, 0, 0, 36000);
   p.audio.name = String(p.audio.name ?? '').slice(0, 200);
   p.dancers = Array.isArray(p.dancers) ? p.dancers : [];
-  p.pairs = Array.isArray(p.pairs) ? p.pairs : [];
+  delete p.pairs; // v3：舞对概念退役——旧项目载入时忽略并清除 pairs 字段，不破坏 formations/positions/merges
+  p.groups = Array.isArray(p.groups) ? p.groups : [];
   p.formations = Array.isArray(p.formations) ? p.formations : [];
   p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, ...p.timeline };
   p.timeline.countInBeats = num(p.timeline.countInBeats, 8, 0, 32);
@@ -365,17 +366,27 @@ export function validateProject(json) {
   const ids = new Set();
   for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }
   const dids = new Set(p.dancers.map(d => d.id));
-  p.pairs = p.pairs.filter(pp => dids.has(pp.leader) && dids.has(pp.follower));
   p.formations = p.formations.filter(f => f && f.id);
+  // groups 清洗：缺省 []、悬挂成员清理（引用已删除舞者的 memberIds）、组内去重、组 id 去重
+  const seenG = new Set();
+  p.groups = p.groups
+    .filter(g => g && typeof g === 'object' && g.id && !seenG.has(g.id) && (seenG.add(g.id), true))
+    .map(g => ({
+      id: String(g.id),
+      name: String(g.name ?? '').trim().slice(0, 40) || '编组',
+      memberIds: [...new Set((Array.isArray(g.memberIds) ? g.memberIds : []).filter(id => dids.has(id)))],
+    }));
   if (!p.formations.length) p.formations.push({ id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {} });
   for (const f of p.formations) {
     const np = {};
     for (const [k, v] of Object.entries(f.positions)) if (dids.has(k) && v && typeof v.x === 'number' && typeof v.y === 'number' && Number.isFinite(v.x) && Number.isFinite(v.y)) np[k] = { x: v.x, y: v.y, facing: ((v.facing || 0) % 360 + 360) % 360 };
     f.positions = np;
-    // 合并单元清洗：引用有效、去重、样式合法
+    // 合并单元清洗：引用有效、去重、样式合法；旧样式 diamond/twin 载入时迁移归一为 capsule
     if (Array.isArray(f.merges)) {
       const seen = new Set();
-      f.merges = f.merges.filter(m => m && dids.has(m.a) && dids.has(m.b) && m.a !== m.b && UNIT_STYLES.includes(m.style) && !seen.has(mergeKey(m.a, m.b)) && (seen.add(mergeKey(m.a, m.b)), true)).slice(0, 32);
+      f.merges = f.merges
+        .map(m => (m && (m.style === 'diamond' || m.style === 'twin') ? { ...m, style: 'capsule' } : m))
+        .filter(m => m && dids.has(m.a) && dids.has(m.b) && m.a !== m.b && UNIT_STYLES.includes(m.style) && !seen.has(mergeKey(m.a, m.b)) && (seen.add(mergeKey(m.a, m.b)), true)).slice(0, 32);
       if (!f.merges.length) delete f.merges;
     } else delete f.merges;
   }

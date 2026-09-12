@@ -153,27 +153,12 @@ export function swapTwo(formation, idA, idB) {
   if (!a || !b) return;
   formation.positions[idA] = b; formation.positions[idB] = a;
 }
-export function swapPairPositions(formation, project) {
-  // 镜像后交换每对男女位置（保持相对握持方位的镜像一致性）
-  for (const p of project.pairs) {
-    const a = formation.positions[p.leader], b = formation.positions[p.follower];
-    if (a && b) { formation.positions[p.leader] = b; formation.positions[p.follower] = a; }
-  }
-}
-export function faceAll(positions, ids, target, { stage, project }) {
+export function faceAll(positions, ids, target, { stage }) {
   const face = faceAudience(stage);
   const cx = stage.widthM / 2, cy = stage.depthM / 2;
   for (const id of ids) {
     const p = positions[id]; if (!p) continue;
     if (target === 'audience') p.facing = face;
     else if (target === 'center') p.facing = Math.round(((angleTo(p, { x: cx, y: cy }) % 360) + 360) % 360);
-    else if (target === 'project' || target === 'partner') {
-      const partner = partnerIdOf(project, id);
-      if (partner && positions[partner]) p.facing = Math.round(((angleTo(p, positions[partner]) % 360) + 360) % 360);
-    }
   }
-}
-function partnerIdOf(project, id) {
-  const p = project.pairs.find(q => q.leader === id || q.follower === id);
-  return p ? (p.leader === id ? p.follower : p.leader) : null;
 }

@@ -1,7 +1,9 @@
-// L0 测试仪器（v2）：环境门禁 G2-G6 + 注入器元测试 I1-I10 + 像素探针 P1-P4。
+// L0 测试仪器（v3）：环境门禁 G2-G6 + 注入器元测试 I1-I10 + 像素探针 P1-P4。
 // （G1 的"单标签/服务器 200/磁盘 build 一致"由 lab 驱动脚本在 node 侧判定；本文件补 build-tag 读取证据。）
+// v3（round14）：产品语义裁定——pairs 退役（orderedDancers 无 unit 参数）、单元样式收敛为
+//   capsule/single（P3 改两样式：single=中点单圆 + 1.45r 虚线环强调色 + ×2 角标）。
 // 纪律：
-//   - 场景搭建只走 store/M 公共 API（createNewProject 等）：12 名舞者（6 舞对）两行布置，
+//   - 场景搭建只走 store/M 公共 API（createNewProject 等）：12 名舞者（M/F 交替生成）两行布置，
 //     positions 键 = 真实 dancer id，禁止改名键（G2 红线，v1 仪器 page-matrix.js 在此违规）。
 //   - 本文件属测试仪器，被测应用代码（js/*、index.html、css/*）零改动。
 // 运行前提：window.__fs（main.js 测试钩子）、window.__input（page-injector.js v2）、
@@ -11,7 +13,7 @@
 // 探针/比对/用例引擎公共实现已抽到 tests/page-kit.js（L0/L1 共用）。
 import {
   raf2, sleep, TH_PRESENT, TH_COLOR, TH_HL, TH_HL_DELTA, TH_BG, SCREEN_TOL, SCREEN_RATIO,
-  makeCtx, dprOf, mean3x3, dist, rgb, hex, ringMinDist, innerMinDist, minDistOver, gridRegion,
+  makeCtx, dprOf, mean3x3, dist, rgb, hex, ringMinDist, innerMinDist, minDistOver, gridRegion, px1,
   decodeShot, screenCompare, shotSample, leakCheck, runCases,
 } from './page-kit.js';
 
@@ -23,12 +25,12 @@ export async function runL0() {
   const ctx = makeCtx();
   const { store, M, sv, state, fmt, toClient } = ctx;
 
-  // ---- 场景搭建：真实 API 建 12 名舞者（6 舞对）两行布置，真实 id，不改名键 ----
+  // ---- 场景搭建：真实 API 建 12 名舞者（M/F 交替）两行布置，真实 id，不改名键 ----
   store.createNewProject({ title: 'L0 层', pairs: 6 });
   store.setUI({ selection: [], multiSelect: false, editMode: true, showFacingHandle: false });
   sv.resetView(); // 视图复位 = fit
   await raf2();
-  const ids = M.orderedDancers(state().project, 'pair'); // 真实 dancer id（舞对顺序）
+  const ids = M.orderedDancers(state().project); // 真实 dancer id（名册顺序 = M/F 交替）
   const dancerOf = id => state().project.dancers.find(d => d.id === id);
   const posOf = id => ({ ...fmt().positions[id] });
   const ptOf = id => { const p = posOf(id); return toClient(p.x, p.y); };
@@ -318,13 +320,24 @@ export async function runL0() {
       },
     },
     {
-      id: 'P3', name: '徽标三样式：胶囊/菱形/双圆填充色（M.addMerge 建立）',
+      id: 'P3', name: '单元两样式：capsule 双半色 / single=单圆+虚线环强调色+×2角标（M.addMerge 建立）',
       async run({ step }) {
         const base = runL0._baseline;
         const idA = ids[0], idB = ids[1];
         const origA = posOf(idA), origB = posOf(idB);
         const origPtA = toClient(origA.x, origA.y);
         const midM = (() => { const mx = (origA.x + origB.x) / 2, my = (origA.y + origB.y) / 2; return toClient(mx, my); })();
+        // v3 主题强调色（single 样式虚线环/角标）：stage.js drawUnitSymbol —— dark ? '#38bdf8' : '#0284c7'
+        const ACC2 = hex(state().theme === 'dark' ? '#38bdf8' : '#0284c7');
+        const TH_RING = 90; // 虚线环/角标单像素扫阈值（1~2px 线条 AA 边缘，单像素取最小色距）
+        // 虚线环扫描带：半径 1.45r 圆环 ±1.5px、5° 步长的单像素候选点
+        const ringBand = (cx, cy, R) => {
+          const pts = [];
+          for (let a = 0; a < 360; a += 5) for (const rr of [R - 1.5, R - 0.5, R + 0.5, R + 1.5])
+            pts.push([cx + Math.cos(a * Math.PI / 180) * rr, cy + Math.sin(a * Math.PI / 180) * rr]);
+          return pts;
+        };
+        const pxLive = (x, y) => px1(cv, x, y) || { r: 255, g: 255, b: 255 };
         // 参照渲染器：直呼 __fs.drawScene（显式传 merges）画进离屏画布 —— 用于标定仪器采样点、
         // 并与实时舞台（StageView.draw 路径）区分责任
         const rect = cv.getBoundingClientRect();
@@ -351,56 +364,49 @@ export async function runL0() {
           };
           return { sample, url: oc.toDataURL('image/png') };
         };
-        for (const style of ['capsule', 'diamond', 'twin']) {
+        for (const style of ['capsule', 'single']) {
           store.mutate(p => {
             const f = p.formations[state().formationIndex];
             M.addMerge(f, idA, idB, style);
-            M.collapsePair(f, idA, idB);
+            M.collapseUnit(f, idA, idB);
           });
           await raf2();
           const merge = fmt().merges?.find(m => (m.a === idA && m.b === idB) || (m.b === idA && m.a === idB));
           const sceneMerges = (sv.getScene().merges || []).map(m => m.style).join(',') || '空';
           step(`${style} 合并已建立且 stageScene 可见 [STATE]`, !!merge && merge.style === style && sceneMerges.includes(style), `store.merges=[${(fmt().merges || []).map(m => m.style).join(',')}] getScene().merges=[${sceneMerges}]`);
-          const zh = { capsule: '胶囊', diamond: '菱形', twin: '双圆' }[style];
-          // 各样式 A/B 两个区域的内部候选点（避开描边；区域内含文字但取最小色距可穿透）
-          const regions = style === 'capsule'
-            ? (() => {
-                const w = 3.4 * rpx, hh = 1.5 * rpx;
-                return [
-                  { n: '左半=A色', pts: gridRegion(midM.x - w / 2 + 2.5, midM.y - hh / 2 + 2.5, midM.x - 2, midM.y + hh / 2 - 2.5), c: ROLE_M },
-                  { n: '右半=B色', pts: gridRegion(midM.x + 2, midM.y - hh / 2 + 2.5, midM.x + w / 2 - 2.5, midM.y + hh / 2 - 2.5), c: ROLE_F },
-                ];
-              })()
-            : style === 'diamond'
-              ? (() => {
-                  const h = 1.9 * rpx, candA = [], candB = [];
-                  for (let oy = -0.85 * h; oy <= -0.08 * h; oy += 1.5)
-                    for (let ox = -0.85 * h; ox <= -0.08 * h; ox += 1.5)
-                      if (ox - oy > -0.9 * h) candA.push([midM.x + ox, midM.y + oy]); // 三角 T-L-C 内部
-                  for (let oy = -0.85 * h; oy <= 0.85 * h; oy += 1.5)
-                    for (let ox = 0.08 * h; ox <= 0.85 * h; ox += 1.5)
-                      if (Math.abs(ox + oy) < 0.9 * h) candB.push([midM.x + ox, midM.y + oy]); // 四边形 T-C-B-Rt 内部
-                  return [{ n: '上左三角=A色', pts: candA, c: ROLE_M }, { n: '下右区=B色', pts: candB, c: ROLE_F }];
-                })()
-              : (() => {
-                  const rr = 1.08 * rpx, candA = [], candB = [];
-                  for (let oy = -(rr - 2); oy <= rr - 2; oy += 1.5)
-                    for (let ox = -(rr - 2); ox <= rr - 2; ox += 1.5)
-                      if (ox * ox + oy * oy <= (rr - 2.2) * (rr - 2.2)) {
-                        candA.push([midM.x - 0.62 * rr + ox, midM.y + oy]);
-                        candB.push([midM.x + 0.62 * rr + ox, midM.y + oy]);
-                      }
-                  return [{ n: '左圆=A色', pts: candA, c: ROLE_M }, { n: '右圆=B色', pts: candB, c: ROLE_F }];
-                })();
-          const ref = mkRef();
-          shots['p3-' + style + '-ref'] = ref.url.split(',')[1];
-          for (const q of regions) {
-            const refMin = minDistOver(ref.sample, q.c, q.pts);
-            step(`${zh}·参照渲染(drawScene+merges)·${q.n}`, refMin.d < TH_COLOR, `${refMin.n} 点中最小色距 ${refMin.d.toFixed(1)} < ${TH_COLOR}`);
-          }
-          for (const q of regions) {
-            const liveMin = minDistOver((x, y) => mean3x3(cv, x, y), q.c, q.pts);
-            step(`${zh}·实时舞台·${q.n}`, liveMin.d < TH_COLOR, `${liveMin.n} 点中最小色距 ${liveMin.d.toFixed(1)} < ${TH_COLOR}`);
+          const zh = { capsule: '胶囊', single: '单编号' }[style];
+          if (style === 'capsule') {
+            // 胶囊：A/B 两个半区的内部候选点（避开描边；区域内含文字但取最小色距可穿透）
+            const w = 3.4 * rpx, hh = 1.5 * rpx;
+            const regions = [
+              { n: '左半=A色', pts: gridRegion(midM.x - w / 2 + 2.5, midM.y - hh / 2 + 2.5, midM.x - 2, midM.y + hh / 2 - 2.5), c: ROLE_M },
+              { n: '右半=B色', pts: gridRegion(midM.x + 2, midM.y - hh / 2 + 2.5, midM.x + w / 2 - 2.5, midM.y + hh / 2 - 2.5), c: ROLE_F },
+            ];
+            const ref = mkRef();
+            shots['p3-capsule-ref'] = ref.url.split(',')[1];
+            for (const q of regions) {
+              const refMin = minDistOver(ref.sample, q.c, q.pts);
+              step(`${zh}·参照渲染(drawScene+merges)·${q.n}`, refMin.d < TH_COLOR, `${refMin.n} 点中最小色距 ${refMin.d.toFixed(1)} < ${TH_COLOR}`);
+            }
+            for (const q of regions) {
+              const liveMin = minDistOver((x, y) => mean3x3(cv, x, y), q.c, q.pts);
+              step(`${zh}·实时舞台·${q.n}`, liveMin.d < TH_COLOR, `${liveMin.n} 点中最小色距 ${liveMin.d.toFixed(1)} < ${TH_COLOR}`);
+            }
+          } else {
+            // 单编号：中点仍为一个圆（半径同单人；填充=编号较小成员色，此处 m.a=ids[0]）
+            // + 1.45r 虚线外环（主题强调色）+ 右上 ×2 角标（同强调色）
+            const ref = mkRef();
+            shots['p3-single-ref'] = ref.url.split(',')[1];
+            const disc = gridRegion(midM.x - rpx * 0.55, midM.y - rpx * 0.55, midM.x + rpx * 0.55, midM.y + rpx * 0.55, 2);
+            const refFill = minDistOver(ref.sample, ROLE_M, disc);
+            step(`${zh}·参照渲染(drawScene+merges)·中点单圆=A色`, refFill.d < TH_COLOR, `圆盘区最小色距 ${refFill.d.toFixed(1)} < ${TH_COLOR}`);
+            const liveFill = minDistOver((x, y) => mean3x3(cv, x, y), ROLE_M, disc);
+            step(`${zh}·实时舞台·中点单圆=A色`, liveFill.d < TH_COLOR, `圆盘区最小色距 ${liveFill.d.toFixed(1)} < ${TH_COLOR}`);
+            const ringMin = minDistOver(pxLive, ACC2, ringBand(midM.x, midM.y, 1.45 * rpx));
+            step(`${zh}·实时舞台·1.45r 虚线环=主题强调色`, ringMin.d < TH_RING, `环带最小单像素色距 ${ringMin.d.toFixed(1)}@${JSON.stringify(ringMin.at)} < ${TH_RING}（ACC=${state().theme === 'dark' ? '#38bdf8' : '#0284c7'}）`);
+            const bc = { x: midM.x + 1.15 * rpx, y: midM.y - 1.15 * rpx }, br = Math.max(5, rpx * 0.5);
+            const badgeMin = minDistOver(pxLive, ACC2, gridRegion(bc.x - br * 0.42, bc.y - br * 0.42, bc.x + br * 0.42, bc.y + br * 0.42, 1));
+            step(`${zh}·实时舞台·×2 角标=主题强调色`, badgeMin.d < TH_RING, `角标区最小单像素色距 ${badgeMin.d.toFixed(1)}@${JSON.stringify(badgeMin.at)} < ${TH_RING}`);
           }
           const oldA = mean3x3(cv, origPtA.x, origPtA.y);
           step(`${zh}·原圆心A回到背景`, dist(oldA, base) < TH_BG, `原圆心 ${rgb(oldA)} 距基线 ${dist(oldA, base).toFixed(1)} < ${TH_BG}（无独立圆点色）`);

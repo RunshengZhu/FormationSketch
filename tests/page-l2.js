@@ -1,5 +1,8 @@
 // L2 测试仪器：组合功能动线 C-01~C-10（权威计划 tests/e2e-matrix.md §3，四层验证 §0）。
 // 本文件属测试仪器，被测应用代码（js/*、index.html、css/*）零改动；场景搭建只走 store/M 公共 API。
+// v3（round14）：pairs 退役——C-08 从「名册舞对联动」重写为「名册与编组管理」（chips/存组/删人联动）；
+//   样式断言 capsule/single 两样式（菱形/双圆退役）；浮窗标题「舞对单元」→「合并单元」；
+//   collapsePair→collapseUnit；orderedDancers 无 unit 参数；C-10 不变式加入 groups 引用有效。
 // 结构：
 //   runL2({part:'desktop'})            → C-01..C-08 + C-10 前半（reload 前取证；快照经驱动回传）
 //   runL2({part:'desktop', c10pre})    → C-10 后半（同 context 同页 reload 后深等比对，IndexedDB 同源持久化）
@@ -58,7 +61,7 @@ function makeEnv(shots, hw) {
     store.mutate(p => { p.stage.snap = false; }); // 无 label：不产生历史
     sv.resetView();
     await raf2();
-    const ids = M.orderedDancers(state().project, 'pair');
+    const ids = M.orderedDancers(state().project); // 真实 dancer id（名册顺序，v3 无 unit 参数）
     const dancerOf = id => state().project.dancers.find(d => d.id === id);
     const posOf = id => ({ ...fmt().positions[id] });
     const ptOf = id => { const p = posOf(id); return ctx.toClient(p.x, p.y); };
@@ -145,27 +148,43 @@ function makeEnv(shots, hw) {
     store.mutate(p => {
       const f = p.formations[state().formationIndex];
       M.addMerge(f, idA, idB, style);
-      M.collapsePair(f, idA, idB);
+      M.collapseUnit(f, idA, idB);
     });
     await raf2();
     return { idA, idB, mid: t.mergePt(idA, idB) };
   }
-  // 合并徽标双半色采样（§0.2：中点两侧各取纯填充色区域）
-  function unitHalves(style, mid, rpx, colA, colB) {
-    let regA, regB;
-    if (style === 'diamond') {
-      const h = 1.9 * rpx;
-      regA = gridRegion(mid.x - h * 0.55, mid.y - h * 0.32, mid.x - h * 0.12, mid.y + h * 0.32, 2);
-      regB = gridRegion(mid.x + h * 0.12, mid.y - h * 0.32, mid.x + h * 0.55, mid.y + h * 0.32, 2);
-    } else if (style === 'twin') {
-      const rr = 1.08 * rpx;
-      regA = gridRegion(mid.x - rr * 1.55, mid.y - rr * 0.5, mid.x - rr * 0.25, mid.y + rr * 0.5, 2);
-      regB = gridRegion(mid.x + rr * 0.25, mid.y - rr * 0.5, mid.x + rr * 1.55, mid.y + rr * 0.5, 2);
-    } else { // capsule
-      const w = 3.4 * rpx, h = 1.5 * rpx;
-      regA = gridRegion(mid.x - w * 0.46, mid.y - h * 0.3, mid.x - w * 0.08, mid.y + h * 0.3, 2);
-      regB = gridRegion(mid.x + w * 0.08, mid.y - h * 0.3, mid.x + w * 0.46, mid.y + h * 0.3, 2);
+  // v3 单元呈示探针（两样式）：
+  //   capsule=圆角矩形双半色采样（unitHalves）；single=中点单圆填充 + 1.45r 虚线环强调色 + ×2 角标
+  //   （环/角标为 1~2px 线条/小徽标，3×3 均色会被背景稀释 → 用单像素 px1 扫描，独立阈值 TH_RING）
+  const unitProbe = (t, style, mid, colA, colB) => {
+    if (style === 'single') {
+      const ACC2 = hex(state().theme === 'dark' ? '#38bdf8' : '#0284c7');
+      const TH_RING = 90;
+      const pxLive = (x, y) => px1(cv, x, y) || { r: 255, g: 255, b: 255 };
+      const band = (cx, cy, R) => {
+        const pts = [];
+        for (let a = 0; a < 360; a += 5) for (const rr of [R - 1.5, R - 0.5, R + 0.5, R + 1.5])
+          pts.push([cx + Math.cos(a * Math.PI / 180) * rr, cy + Math.sin(a * Math.PI / 180) * rr]);
+        return pts;
+      };
+      const fill = minDistOver((x, y) => mean3x3(cv, x, y), colA, gridRegion(mid.x - t.rpx * 0.55, mid.y - t.rpx * 0.55, mid.x + t.rpx * 0.55, mid.y + t.rpx * 0.55, 2));
+      const ring = minDistOver(pxLive, ACC2, band(mid.x, mid.y, 1.45 * t.rpx));
+      const bc = { x: mid.x + 1.15 * t.rpx, y: mid.y - 1.15 * t.rpx }, br = Math.max(5, t.rpx * 0.5);
+      const badge = minDistOver(pxLive, ACC2, gridRegion(bc.x - br * 0.42, bc.y - br * 0.42, bc.x + br * 0.42, bc.y + br * 0.42, 1));
+      return {
+        d: Math.max(fill.d, ring.d, badge.d),
+        ok: fill.d < TH_COLOR && ring.d < TH_RING && badge.d < TH_RING,
+        why: `单圆填充 ${fill.d.toFixed(1)}(<${TH_COLOR})、虚线环 ${ring.d.toFixed(1)}、×2 角标 ${badge.d.toFixed(1)}（环/角标 <90，ACC=${state().theme === 'dark' ? '#38bdf8' : '#0284c7'}）`,
+      };
     }
+    const h = unitHalves(style, mid, t.rpx, colA, colB); // capsule
+    return { d: Math.max(h.sA.d, h.sB.d), ok: h.sA.d < TH_COLOR && h.sB.d < TH_COLOR, why: `A 半 ${h.sA.d.toFixed(1)} / B 半 ${h.sB.d.toFixed(1)} < ${TH_COLOR}` };
+  };
+  // capsule 徽标双半色采样（§0.2：中点两侧各取纯填充色区域；v3 仅保留 capsule——diamond/twin 退役）
+  function unitHalves(style, mid, rpx, colA, colB) {
+    const w = 3.4 * rpx, h = 1.5 * rpx;
+    const regA = gridRegion(mid.x - w * 0.46, mid.y - h * 0.3, mid.x - w * 0.08, mid.y + h * 0.3, 2);
+    const regB = gridRegion(mid.x + w * 0.08, mid.y - h * 0.3, mid.x + w * 0.46, mid.y + h * 0.3, 2);
     return {
       sA: minDistOver((x, y) => mean3x3(cv, x, y), colA, regA),
       sB: minDistOver((x, y) => mean3x3(cv, x, y), colB, regB),
@@ -186,7 +205,7 @@ function makeEnv(shots, hw) {
     });
   };
 
-  return { ctx, store, M, sv, state, fmt, cv, inp, inLog, menu, clickMenuBtn, closeMenu, clickBtn, dragPts, dwellDrag, cmpShot, cmpStep, menuBorder, setup, setupMergeT, unitHalves, thumbData, thumbDiff, inflate };
+  return { ctx, store, M, sv, state, fmt, cv, inp, inLog, menu, clickMenuBtn, closeMenu, clickBtn, dragPts, dwellDrag, cmpShot, cmpStep, menuBorder, setup, setupMergeT, unitProbe, unitHalves, thumbData, thumbDiff, inflate };
 }
 
 // =====================================================================
@@ -195,7 +214,7 @@ function makeEnv(shots, hw) {
 async function runDesktop(opts) {
   const shots = {};
   const env = makeEnv(shots, 'mouse');
-  const { ctx, store, M, sv, state, fmt, cv, inp, inLog, menu, clickMenuBtn, closeMenu, clickBtn, dragPts, dwellDrag, cmpShot, cmpStep, menuBorder, setup, setupMergeT, unitHalves, thumbData, thumbDiff, inflate } = env;
+  const { ctx, store, M, sv, state, fmt, cv, inp, inLog, menu, clickMenuBtn, closeMenu, clickBtn, dragPts, dwellDrag, cmpShot, cmpStep, menuBorder, setup, setupMergeT, unitProbe, unitHalves, thumbData, thumbDiff, inflate } = env;
   let c10preCaptured = null;
 
   const defs = [
@@ -252,17 +271,17 @@ async function runDesktop(opts) {
         step('[PIXEL] 合并：徽标双半色呈示', halves.sA.d < TH_COLOR && halves.sB.d < TH_COLOR, `A 半 ${halves.sA.d.toFixed(1)} / B 半 ${halves.sB.d.toFixed(1)} < ${TH_COLOR}`, 'PIXEL');
         cmpStep(step, r);
 
-        // ---- 步4 换样式（双击徽标 → 单元浮窗 → 「菱形」）----
+        // ---- 步4 换样式（双击徽标 → 单元浮窗 → 「单编号」；v3 两样式 capsule/single）----
         await inp.dblclick(midC.x, midC.y, { hw: 'mouse' });
         await raf2();
         const m4 = menu();
-        await clickMenuBtn(m4, '菱形');
+        await clickMenuBtn(m4, '单编号');
         r = await cmpShot('c01-4-styled');
         const mg4 = (fmt().merges || [])[0];
-        const dia = unitHalves('diamond', midC, t.rpx, colA, colB);
-        step('[DOM] 换样式：单元浮窗出现', !!m4 && m4.title === '舞对单元', m4 ? m4.title : '无 .unit-menu', 'DOM');
-        step('[STATE] 换样式：style=diamond + 历史「切换单元样式」', !!mg4 && mg4.style === 'diamond' && store.undoLabel() === '切换单元样式', `style=${mg4 ? mg4.style : '无'} ${t.hist()}`);
-        step('[PIXEL] 换样式：菱形左右半色', dia.sA.d < TH_COLOR && dia.sB.d < TH_COLOR, `A 半 ${dia.sA.d.toFixed(1)} / B 半 ${dia.sB.d.toFixed(1)}`, 'PIXEL');
+        const sp = unitProbe(t, 'single', midC, colA, colB);
+        step('[DOM] 换样式：单元浮窗出现（v3 标题=合并单元）', !!m4 && m4.title === '合并单元', m4 ? m4.title : '无 .unit-menu', 'DOM');
+        step('[STATE] 换样式：style=single + 历史「切换单元样式」', !!mg4 && mg4.style === 'single' && store.undoLabel() === '切换单元样式', `style=${mg4 ? mg4.style : '无'} ${t.hist()}`);
+        step('[PIXEL] 换样式：单编号呈示（单圆+虚线环+角标）', sp.ok, sp.why, 'PIXEL');
         cmpStep(step, r);
 
         // ---- 步5 撤销×4（逐帧 STATE+PIXEL+SCREEN）----
@@ -285,8 +304,8 @@ async function runDesktop(opts) {
           const aCu = ctx.toClient(uf.aAt.x, uf.aAt.y);
           let pxProbe;
           if (uf.px.startsWith('badge:')) {
-            const b = unitHalves(uf.px.slice(6), aCu, t.rpx, colA, colB);
-            pxProbe = { d: Math.max(b.sA.d, b.sB.d), why: `徽标半色 ${b.sA.d.toFixed(1)}/${b.sB.d.toFixed(1)}` };
+            const b = unitProbe(t, uf.px.slice(6), aCu, colA, colB);
+            pxProbe = { d: b.d, why: `单元呈示 ${b.why}` };
           } else if (uf.px === 'bTop') {
             pxProbe = { d: innerMinDist(cv, aCu.x, aCu.y, t.rpx, colB).d, why: `同点顶层 B 色距 ${innerMinDist(cv, aCu.x, aCu.y, t.rpx, colB).d.toFixed(1)}（A 被遮挡）` };
           } else {
@@ -304,7 +323,7 @@ async function runDesktop(opts) {
           { tag: 'r1', label: '移动舞者', merges: 0, style: null, aAt: target, bAt: origB, px: 'aSolo' },
           { tag: 'r2', label: '移动舞者', merges: 0, style: null, aAt: midS, bAt: midS, px: 'bTop' },
           { tag: 'r3', label: '合并单元', merges: 1, style: 'capsule', aAt: midS, bAt: midS, px: 'badge:capsule' },
-          { tag: 'r4', label: '切换单元样式', merges: 1, style: 'diamond', aAt: midS, bAt: midS, px: 'badge:diamond' },
+          { tag: 'r4', label: '切换单元样式', merges: 1, style: 'single', aAt: midS, bAt: midS, px: 'badge:single' },
         ];
         for (const rf of rFrames) {
           inp.key('z', { ctrl: true, shift: true });
@@ -315,8 +334,8 @@ async function runDesktop(opts) {
           const aCr = ctx.toClient(rf.aAt.x, rf.aAt.y);
           let pxProbe;
           if (rf.px.startsWith('badge:')) {
-            const b = unitHalves(rf.px.slice(6), aCr, t.rpx, colA, colB);
-            pxProbe = { d: Math.max(b.sA.d, b.sB.d), why: `徽标半色 ${b.sA.d.toFixed(1)}/${b.sB.d.toFixed(1)}` };
+            const b = unitProbe(t, rf.px.slice(6), aCr, colA, colB);
+            pxProbe = { d: b.d, why: `单元呈示 ${b.why}` };
           } else if (rf.px === 'bTop') {
             pxProbe = { d: innerMinDist(cv, aCr.x, aCr.y, t.rpx, colB).d, why: `同点顶层 B 色距 ${innerMinDist(cv, aCr.x, aCr.y, t.rpx, colB).d.toFixed(1)}` };
           } else {
@@ -373,7 +392,7 @@ async function runDesktop(opts) {
         const edgeL = { x: mid1.x - 1.7 * t.rpx - 4, y: mid1.y };
         const edgeR = { x: mid1.x + 1.7 * t.rpx + 4, y: mid1.y };
         const inB = innerMinDist(cv, mid1.x, mid1.y, t.rpx, colB);
-        step('[DOM] 拆开：单元浮窗出现（舞对单元）', !!m3 && m3.title === '舞对单元', m3 ? m3.title : '无 .unit-menu', 'DOM');
+        step('[DOM] 拆开：单元浮窗出现（v3 标题=合并单元）', !!m3 && m3.title === '合并单元', m3 ? m3.title : '无 .unit-menu', 'DOM');
         step('[STATE] 拆开：merges 空、位置不变（仍重叠）', (fmt().merges || []).length === 0 && eq(t.posOf(A), pa2) && eq(t.posOf(B), pb2), `merges=${(fmt().merges || []).length} ${t.hist()}`);
         step('[PIXEL] 拆开：徽标消失（旧徽标边缘回背景）、原地呈独立圆',
           dist(mean3x3(cv, edgeL.x, edgeL.y), t.base) < 40 && dist(mean3x3(cv, edgeR.x, edgeR.y), t.base) < 40 && inB.d < TH_COLOR,
@@ -446,20 +465,20 @@ async function runDesktop(opts) {
         step('[PIXEL] 缩略图像素变化（合并提交后 chip 画布逐像素差>0）', td[0] > 0, `chip0 全量像素绝对差=${td[0]}（合并徽标 vs 两圆）`, 'PIXEL');
         cmpStep(step, r);
 
-        // ---- 步4 样式切换：双击单元 → 「菱形」 ----
+        // ---- 步4 样式切换：双击单元 → 「单编号」（v3 两样式）----
         const mid4 = t.mergePt(G[2], G[3]);
         await inp.dblclick(mid4.x, mid4.y, { hw: 'mouse' });
         await raf2();
         const m4 = menu();
-        await clickMenuBtn(m4, '菱形');
+        await clickMenuBtn(m4, '单编号');
         r = await cmpShot('c03-4-styled');
         const mg4 = (fmt().merges || [])[0];
-        const dia = unitHalves('diamond', mid4, t.rpx, t.col(G[2]), t.col(G[3]));
-        step('[STATE] 样式切换：diamond + 历史「切换单元样式」', !!mg4 && mg4.style === 'diamond' && store.undoLabel() === '切换单元样式', `style=${mg4 ? mg4.style : '无'} ${t.hist()}`);
-        step('[PIXEL] 菱形半色呈示', dia.sA.d < TH_COLOR && dia.sB.d < TH_COLOR, `A 半 ${dia.sA.d.toFixed(1)} / B 半 ${dia.sB.d.toFixed(1)}`, 'PIXEL');
+        const sp4 = unitProbe(t, 'single', mid4, t.col(G[2]), t.col(G[3]));
+        step('[STATE] 样式切换：single + 历史「切换单元样式」', !!mg4 && mg4.style === 'single' && store.undoLabel() === '切换单元样式', `style=${mg4 ? mg4.style : '无'} ${t.hist()}`);
+        step('[PIXEL] 单编号呈示（单圆+虚线环+角标）', sp4.ok, sp4.why, 'PIXEL');
         cmpStep(step, r);
 
-        // ---- 步5 替换语义：拖 G0 绕行至单元上驻留 → 「双圆」→ G0|G2 替换 G2|G3 ----
+        // ---- 步5 替换语义：拖 G0 绕行至单元上驻留 → 「胶囊」→ G0|G2 替换 G2|G3 ----
         const uPt = t.posOf(G[3]);
         const wpts = [t.ptOf(G[0]), ctx.toClient(uPt.x, 13.5), ctx.toClient(uPt.x, uPt.y)];
         const pid5 = await inp.down(wpts[0].x, wpts[0].y, { hw: 'mouse' });
@@ -472,25 +491,25 @@ async function runDesktop(opts) {
         const m5 = menu();
         await inp.up(wpts[2].x, wpts[2].y, { hw: 'mouse', pid: pid5 });
         await raf2();
-        await clickMenuBtn(m5, '双圆');
+        await clickMenuBtn(m5, '胶囊');
         await raf2();
         r = await cmpShot('c03-5-replaced');
         const mgs = fmt().merges || [];
-        const replOK = mgs.length === 1 && sortedEq([mgs[0].a, mgs[0].b], [G[0], G[2]]) && mgs[0].style === 'twin' && store.undoLabel() === '合并单元';
+        const replOK = mgs.length === 1 && sortedEq([mgs[0].a, mgs[0].b], [G[0], G[2]]) && mgs[0].style === 'capsule' && store.undoLabel() === '合并单元';
         step('[STATE] 替换语义：G0|G2 替换旧 G2|G3（一人只属一个单元）', replOK,
           `merges=${JSON.stringify(mgs.map(x => [x.a.slice(6, 10), x.b.slice(6, 10), x.style]))} ${t.hist()}`);
-        const tw = unitHalves('twin', t.mergePt(G[0], G[2]), t.rpx, t.col(G[0]), t.col(G[2]));
-        step('[PIXEL] 替换后双圆徽标呈示', tw.sA.d < TH_COLOR && tw.sB.d < TH_COLOR, `A 半 ${tw.sA.d.toFixed(1)} / B 半 ${tw.sB.d.toFixed(1)}`, 'PIXEL');
+        const rp = unitProbe(t, 'capsule', t.mergePt(G[0], G[2]), t.col(G[0]), t.col(G[2]));
+        step('[PIXEL] 替换后胶囊徽标呈示', rp.ok, rp.why, 'PIXEL');
         cmpStep(step, r);
 
-        // ---- 步6 撤销：回退替换合并 → merges 复原为 G2|G3 diamond（其前一条提交是 G0 的驻留位移）----
+        // ---- 步6 撤销：回退替换合并 → merges 复原为 G2|G3 single（其前一条提交是 G0 的驻留位移）----
         inp.key('z', { ctrl: true });
         await raf2();
         r = await cmpShot('c03-6-undone');
         const mgu = (fmt().merges || [])[0];
         const o2 = outsiders.map(id => t.posOf(id));
-        step('[STATE] 撤销：替换合并回退（merges=[G2|G3 diamond]，label=移动舞者 即替换前的驻留位移提交）',
-          !!mgu && mgu.style === 'diamond' && sortedEq([mgu.a, mgu.b], [G[2], G[3]]) && store.undoLabel() === '移动舞者',
+        step('[STATE] 撤销：替换合并回退（merges=[G2|G3 single]，label=移动舞者 即替换前的驻留位移提交）',
+          !!mgu && mgu.style === 'single' && sortedEq([mgu.a, mgu.b], [G[2], G[3]]) && store.undoLabel() === '移动舞者',
           `merges=${JSON.stringify((fmt().merges || []).map(x => x.style))} ${t.hist()}`);
         step('[STATE] 组外 8 人全程零位移（终态复核）', o2.every((p, i) => eq(p, o0[i])), `最大漂移 ${Math.max(...o2.map((p, i) => Math.hypot(p.x - o0[i].x, p.y - o0[i].y))).toExponential(2)}m`);
         cmpStep(step, r);
@@ -624,16 +643,16 @@ async function runDesktop(opts) {
         store.mutate(p => {
           const f0 = p.formations[state().formationIndex];
           M.addMerge(f0, ids[0], ids[1], 'capsule');
-          M.collapsePair(f0, ids[0], ids[1]);
+          M.collapseUnit(f0, ids[0], ids[1]);
           const mk = () => { const f = M.createFormationFrom(p, p.formations.length - 1); f.merges = []; return f; }; // createFormationFrom 会克隆 src.merges → 新帧清空后再按需建合并
           const f1 = mk(), f2 = mk(), f3 = mk();
           f1.positions[ids[6]] = { x: 9, y: 4, facing: 180 };
           f2.positions[ids[6]] = { x: 3, y: 12, facing: 180 };
           f3.positions[ids[6]] = { x: 9, y: 12, facing: 180 };
           M.addMerge(f2, ids[2], ids[3], 'capsule');
-          M.collapsePair(f2, ids[2], ids[3]);
+          M.collapseUnit(f2, ids[2], ids[3]);
           M.addMerge(f3, ids[4], ids[5], 'capsule');
-          M.collapsePair(f3, ids[4], ids[5]);
+          M.collapseUnit(f3, ids[4], ids[5]);
         }, 'C06 布置四帧');
         await raf2();
         const fms = store.getState().project.formations;
@@ -836,67 +855,100 @@ async function runDesktop(opts) {
       },
     },
 
-    // ---------- C-08 名册联动 ----------
+    // ---------- C-08 名册与编组管理（v3 重写：原「名册联动」的舞对语义随 pairs 退役） ----------
     {
-      id: 'C-08', name: '名册联动：增舞者→改舞对→删舞者→回舞台验证出缺席→undo 全链往返',
+      id: 'C-08', name: '名册与编组管理：存组→名册 chips 加入/移出→＋单人→删组员（组引用联动清理）→回舞台验证→undo/redo 全链',
       async run(t, { step }) {
         const projStr = () => stableStr(store.getState().project);
         const ids = t.ids;
+        const n0 = store.getState().project.dancers.length; // 12
+        const groupsOf = () => store.getState().project.groups || [];
+        const nGroups0 = groupsOf().length; // 默认 gender 项目预置 男士/女士 两组——按名定位「组1」，不依赖位次
+        const g1 = () => groupsOf().find(g => g.name === '组1');
+        const snapBase = projStr(); // 基线（存组前；undo 栈底还原后按布置约定复位 snap 再深等）
+
+        // ---- 步1 框选 2 人（第 1 行前 2）→ 右侧「编组」tab → ＋存为编组 ----
+        await dragPts(ctx.toClient(0.8, 6.4), ctx.toClient(4.5, 7.95));
+        await raf2();
+        const sel2 = t.sel().slice().sort();
+        const ptab = document.querySelector('.ptab[data-tab="groups"]');
+        const tr = ptab.getBoundingClientRect();
+        await inp.click(tr.left + tr.width / 2, tr.top + tr.height / 2, { hw: 'mouse' });
+        await raf2();
+        const addGrpBtn = [...document.querySelectorAll('#props-groups button')].find(b => b.textContent.includes('存为编组'));
+        const agr = addGrpBtn.getBoundingClientRect();
+        await inp.click(agr.left + agr.width / 2, agr.top + agr.height / 2, { hw: 'mouse' });
+        await raf2();
+        const savedOK = groupsOf().length === nGroups0 + 1 && g1() && g1().memberIds.length === 2 &&
+          JSON.stringify(g1().memberIds.slice().sort()) === JSON.stringify(sel2) &&
+          store.undoLabel() === '存为编组' && store.getState().project.dancers.length === n0;
+        step('[STATE] ＋存为编组：新增「组1(2人)」成员=所选、舞者数量不变', savedOK,
+          `groups=${JSON.stringify(groupsOf().map(g => [g.name, g.memberIds.length]))} ${t.hist()}`);
         const snap0 = projStr();
-        const n0 = store.getState().project.dancers.length;
 
-        // ---- 打开名册 ----
+        // ---- 步2 打开名册：v3 标题/编组列/chip 状态（组员行的「组1」chip 呈 chip-on）----
         await clickBtn('btn-roster');
-        const modalEl = document.querySelector('#modal-root .modal');
-        step('[DOM] 名册弹窗出现', !!modalEl, modalEl ? 'title=名册 · 舞者与舞对' : '无 .modal', 'DOM');
+        let modalEl = document.querySelector('#modal-root .modal');
+        step('[DOM] 名册弹窗出现（v3 标题=名册 · 舞者与编组）', !!modalEl && modalEl.textContent.includes('名册 · 舞者与编组'),
+          modalEl ? 'title=名册 · 舞者与编组' : '无 .modal', 'DOM');
+        const chipOf = (i, name = '组1') => { // 第 i 行中名为 name 的编组芯片（行内含预置组+新建组多枚 chip）
+          const row = document.querySelectorAll('#modal-root .roster-table tbody tr')[i];
+          return row ? [...row.querySelectorAll('.roster-groups .chip')].find(c => c.textContent === name) || null : null;
+        };
+        step('[DOM] 组员行「组1」chip-on、非组员行普通 chip', chipOf(0)?.classList.contains('chip-on') === true && chipOf(2)?.classList.contains('chip-on') === false,
+          `row0="${chipOf(0)?.className}" row2="${chipOf(2)?.className}"`, 'DOM');
 
-        // ---- 增：＋ 单人 ----
-        const addBtn = [...modalEl.querySelectorAll('button')].find(b => b.textContent === '＋ 单人');
+        // ---- 步3 chips 加入：ids[2] 行点「组1」 → 组1=3 人 ----
+        const c3 = chipOf(2).getBoundingClientRect();
+        await inp.click(c3.left + c3.width / 2, c3.top + c3.height / 2, { hw: 'mouse' });
+        await raf2();
+        const joinOK = g1().memberIds.length === 3 && g1().memberIds.includes(ids[2]) && store.undoLabel() === '加入编组';
+        step('[STATE] chip 加入：组1=3 人含 ids[2]，历史「加入编组」', joinOK, `members=${g1().memberIds.length} ${t.hist()}`);
+        const snapJoin = projStr();
+
+        // ---- 步4 chips 移出：ids[0] 行再点 → 组1=2 人 ----
+        const c0 = chipOf(0).getBoundingClientRect();
+        await inp.click(c0.left + c0.width / 2, c0.top + c0.height / 2, { hw: 'mouse' });
+        await raf2();
+        const leaveOK = g1().memberIds.length === 2 && !g1().memberIds.includes(ids[0]) && store.undoLabel() === '移出编组';
+        step('[STATE] chip 移出：组1=2 人不含 ids[0]，历史「移出编组」', leaveOK, `members=${g1().memberIds.length} ${t.hist()}`);
+        const snapLeave = projStr();
+
+        // ---- 步5 ＋ 单人（出缺席处理保持）----
+        const addBtn = [...document.querySelectorAll('#modal-root button')].find(b => b.textContent === '＋ 单人');
         const ar = addBtn.getBoundingClientRect();
         await inp.click(ar.left + ar.width / 2, ar.top + ar.height / 2, { hw: 'mouse' });
         await raf2();
         const p1 = store.getState().project;
         const dNew = p1.dancers[p1.dancers.length - 1];
-        const addOK = p1.dancers.length === n0 + 1 && p1.formations.every(f => !!f.positions[dNew.id]);
-        step('[STATE] 增：舞者 +1 且全部队形补位（ensureDancerInFormation）', addOK,
+        const addOK = p1.dancers.length === n0 + 1 && p1.formations.every(f => !!f.positions[dNew.id]) && !g1().memberIds.includes(dNew.id);
+        step('[STATE] 增：舞者 +1 且全部队形补位（ensureDancerInFormation）、新舞者不在组1', addOK,
           `dancers=${p1.dancers.length} 新id=${dNew.id.slice(0, 8)} 各帧补位=${p1.formations.every(f => !!f.positions[dNew.id])}`);
         const snapAdd = projStr();
 
-        // ---- 改舞对：第 1 对 leader → 新舞者 ----
-        const pairSel = modalEl.querySelectorAll('.pair-row select')[0];
-        pairSel.value = dNew.id;
-        pairSel.dispatchEvent(new Event('change', { bubbles: true }));
-        await raf2();
-        const p2 = store.getState().project;
-        const pair1 = p2.pairs[0];
-        const oldLeader = ids[0];
-        const pairOK = pair1.leader === dNew.id && !p2.pairs.some(q => q.leader === oldLeader || q.follower === oldLeader);
-        step('[STATE] 改舞对：pair1.leader=新舞者，原领舞变未配对', pairOK, `pair1=[${pair1.leader.slice(0, 8)},${pair1.follower.slice(0, 8)}]`);
-        const snapPair = projStr();
-
-        // ---- 删：ids[5]（确认弹窗由仪器放行）----
-        const victim = ids[5];
+        // ---- 步6 删组内一员 ids[1]（删除走既有 removeDancer 路径 → 组引用联动清理；确认弹窗由仪器放行）----
+        const victim = ids[1];
         const victimPos = { ...fmt().positions[victim] };
-        const victimIdx = p2.dancers.findIndex(d => d.id === victim);
         const oldConfirm = window.confirm;
         window.confirm = () => true;
-        const rows = modalEl.querySelectorAll('.roster-table tbody tr');
-        const delBtn = rows[victimIdx].querySelector('button.danger');
+        const victimIdx = p1.dancers.findIndex(d => d.id === victim);
+        const delBtn = document.querySelectorAll('#modal-root .roster-table tbody tr')[victimIdx].querySelector('button.danger');
         const dr = delBtn.getBoundingClientRect();
         await inp.click(dr.left + dr.width / 2, dr.top + dr.height / 2, { hw: 'mouse' });
         await raf2();
         window.confirm = oldConfirm;
         const p3 = store.getState().project;
         const victimGone = p3.dancers.length === n0 && !p3.dancers.some(d => d.id === victim) &&
-          p3.formations.every(f => !(victim in f.positions)) && !p3.pairs.some(q => q.leader === victim || q.follower === victim);
+          p3.formations.every(f => !(victim in f.positions));
         const keysOK = p3.formations.every(f => sortedEq(Object.keys(f.positions), p3.dancers.map(d => d.id)));
-        step('[STATE] 删：舞者移除、全队形 positions 键同步、舞对解绑', victimGone, `dancers=${p3.dancers.length} victim 位置残留=${p3.formations.some(f => victim in f.positions)}`);
-        step('[STATE] 数据不变式：各队形 positions 键==dancers id', keysOK, `键一致=${keysOK}`);
+        const grpClean = g1().memberIds.length === 1 && !g1().memberIds.includes(victim);
+        step('[STATE] 删组员：舞者移除、全队形 positions 键同步', victimGone, `dancers=${p3.dancers.length} victim 位置残留=${p3.formations.some(f => victim in f.positions)}`);
+        step('[STATE] 数据不变式：positions 键==dancers id、组引用联动清理（memberIds 不含被删者）', keysOK && grpClean, `键一致=${keysOK} 组1 剩 ${g1().memberIds.length} 人`);
         const snapDel = projStr();
 
-        // ---- 回舞台 PIXEL ----
+        // ---- 步7 回舞台 PIXEL ----
         const closeBtn = [...document.querySelectorAll('#modal-root .m-foot button')].find(b => b.textContent === '关闭');
-        closeBtn.scrollIntoView({ block: 'center' }); // 名册内容超高（13 行 + 舞对区）：footer 在滚动折叠线下，须先滚入视口
+        closeBtn.scrollIntoView({ block: 'center' }); // 名册内容超高：footer 在滚动折叠线下，须先滚入视口
         await sleep(80);
         const cr = closeBtn.getBoundingClientRect();
         await inp.click(cr.left + cr.width / 2, cr.top + cr.height / 2, { hw: 'mouse' });
@@ -908,30 +960,32 @@ async function runDesktop(opts) {
         const vicC = mean3x3(cv, vicPt.x, vicPt.y);
         const r = await cmpShot('c08-stage');
         step('[PIXEL] 回舞台：新舞者在其补位呈示（X 绿）', inNewD.d < TH_COLOR, `色距 ${inNewD.d.toFixed(1)} < ${TH_COLOR}`, 'PIXEL');
-        step('[PIXEL] 回舞台：被删舞者原位回背景（缺席处理）', dist(vicC, t.base) < TH_BG, `原位距基线 ${dist(vicC, t.base).toFixed(1)} < ${TH_BG}`, 'PIXEL');
+        step('[PIXEL] 回舞台：被删组员原位回背景（缺席处理）', dist(vicC, t.base) < TH_BG, `原位距基线 ${dist(vicC, t.base).toFixed(1)} < ${TH_BG}`, 'PIXEL');
         cmpStep(step, r);
 
-        // ---- undo 全链：删→改对→增 逐级深等还原 ----
+        // ---- 步8 undo 全链：删→增→移出→加入→存组 逐级深等还原，redo×5 重放 ----
         const levels = [
-          { tag: 'undo1(删还原)', want: snapPair, label: '调整舞对' },
-          { tag: 'undo2(改对还原)', want: snapAdd, label: '添加舞者' },
-          { tag: 'undo3(增还原)', want: snap0, label: '' },
+          { tag: 'undo1(删还原)', want: snapAdd, label: '添加舞者' },
+          { tag: 'undo2(移出还原)', want: snapLeave, label: '移出编组' },
+          { tag: 'undo3(加入还原)', want: snapJoin, label: '加入编组' },
+          { tag: 'undo4(存组还原)', want: snap0, label: '存为编组' },
+          { tag: 'undo5(基线还原)', want: snapBase, label: '', snapFix: true }, // 栈底快照含 snap:true → 复位后按布置约定深等
         ];
         for (const lv of levels) {
           inp.key('z', { ctrl: true });
           await raf2();
-          if (lv.label === '') store.mutate(p => { p.stage.snap = false; }); // 基线快照含 snap:true（setup 的 snap 关不产生历史）→ 复位后按布置约定深等
+          if (lv.snapFix) store.mutate(p => { p.stage.snap = false; }); // 无 label：不产生历史
           await raf2();
           const got = projStr();
           const labelOK = lv.label === '' ? !store.canUndo() : store.undoLabel() === lv.label;
           step(`[STATE] ${lv.tag}：项目深等还原`, got === lv.want && labelOK, `深等=${got === lv.want} ${t.hist()}`);
         }
-        for (const lv of ['redo1(增重放)', 'redo2(改对重放)', 'redo3(删重放)']) {
+        for (let i = 0; i < 5; i++) {
           inp.key('z', { ctrl: true, shift: true });
           await raf2();
         }
         const gotTip = projStr();
-        step('[STATE] redo×3 重放至删除后终态（深等）', gotTip === snapDel && !store.canRedo(), `深等=${gotTip === snapDel} ${t.hist()}`);
+        step('[STATE] redo×5 重放至删除后终态（深等，含组数据）', gotTip === snapDel && !store.canRedo(), `深等=${gotTip === snapDel} ${t.hist()}`);
         const rEnd = await cmpShot('c08-final');
         cmpStep(step, rEnd);
       },
@@ -970,11 +1024,11 @@ async function runDesktop(opts) {
 
         // ===== reload 前半段 =====
         const proj = projNow();
-        // 不变式 1/2：键一致 + merges 引用有效
+        // 不变式 1/2/3：键一致 + merges 引用有效 + groups 引用有效（v3）
         const inv = (() => {
           const ids = proj.dancers.map(d => d.id).sort();
-          let keysOK = true, mergesOK = true;
-          const det = [], det2 = [];
+          let keysOK = true, mergesOK = true, groupsOK = true;
+          const det = [], det2 = [], det3 = [];
           proj.formations.forEach((f, i) => {
             const ks = Object.keys(f.positions).sort();
             if (JSON.stringify(ks) !== JSON.stringify(ids)) { keysOK = false; det.push(`帧${i + 1}: ${ks.length} 键 vs ${ids.length} 舞者`); }
@@ -987,13 +1041,19 @@ async function runDesktop(opts) {
               seen.add(key);
             }
           });
-          return { keysOK, mergesOK, det: det.join('; ') || `全部 ${proj.formations.length} 帧键一致（${ids.length} 舞者）`, det2: det2.join('; ') || '全部 merges 引用有效' };
+          const seenG = new Set();
+          for (const g of proj.groups || []) {
+            if (!g || !g.id || seenG.has(g.id) || (g.memberIds || []).some(id => !ids.includes(id))) { groupsOK = false; det3.push(`无效编组 ${JSON.stringify(g).slice(0, 80)}`); }
+            seenG.add(g && g.id);
+          }
+          return { keysOK, mergesOK, groupsOK, det: det.join('; ') || `全部 ${proj.formations.length} 帧键一致（${ids.length} 舞者）`, det2: det2.join('; ') || '全部 merges 引用有效', det3: det3.join('; ') || `全部 ${(proj.groups || []).length} 组引用有效` };
         })();
         step('[STATE] positions 键==dancers id（全部队形）', inv.keysOK, inv.det);
         step('[STATE] merges 引用有效（a/b 存在、a≠b、样式合法、无重复键）', inv.mergesOK, inv.det2);
+        step('[STATE] groups 引用有效（v3：组 id 唯一、memberIds ⊆ dancers）', inv.groupsOK, inv.det3);
 
         // 不变式 3：undo 深度≤上限（70 次微调压测 60 层截断）
-        const firstId = M.orderedDancers(proj, 'pair')[0];
+        const firstId = M.orderedDancers(proj)[0]; // v3：名册顺序首人
         store.mutate(p => { p.stage.snap = false; }); // 防御：前置动线若停在基线快照会带回 snap:true（0.5m 步进触发舞台钳制 → commit 去重跳过）
         store.setUI({ selection: [firstId] });
         await raf2();

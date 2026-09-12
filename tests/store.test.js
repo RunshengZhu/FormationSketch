@@ -57,7 +57,8 @@ test('项目持久化：内存存储往返', async () => {
   await store.storage.putProject(p);
   const got = await store.storage.getProject(p.id);
   assert.equal(got.meta.title, '持久');
-  assert.equal(got.pairs.length, 3);
+  assert.equal(got.dancers.length, 6);
+  assert.equal(got.groups.length, 2, '默认男士/女士编组随项目持久化');
   const list = await store.storage.listProjects();
   assert.ok(list.some(x => x.id === p.id));
   await store.storage.deleteProject(p.id);

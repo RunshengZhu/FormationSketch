@@ -30,7 +30,7 @@
       <input id="proj-title" class="title-input" spellcheck="false" title="项目名称">
       <span class="spacer"></span>
       <button id="btn-theme" class="btn ghost" title="切换深色/浅色主题">🌙</button>
-      <button id="btn-roster" class="btn ghost" title="舞者与舞伴名单">名册</button>
+      <button id="btn-roster" class="btn ghost" title="舞者与编组名单">名册</button>
       <button id="btn-undo" class="btn ghost" title="撤销 (Ctrl+Z)">↺</button>
       <button id="btn-redo" class="btn ghost" title="重做 (Ctrl+Shift+Z)">↻</button>
       <div class="dropdown" id="export-dd">
@@ -74,8 +74,7 @@
             <option value="diamond">菱形</option>
           </select>
           <select id="gen-unit" title="编队粒度">
-            <option value="pair">以舞对为单位</option>
-            <option value="dancer">以单人（拆对）</option>
+            <option value="dancer">单人</option>
             <option value="men">仅男士</option>
             <option value="women">仅女士</option>
           </select>
@@ -84,16 +83,15 @@
           <button id="btn-mirror-v" class="btn small ghost" title="垂直镜像">⇅</button>
           <label class="rot-ctl" title="整体旋转">⟳<input id="rot-slider" type="range" min="-180" max="180" value="0"><span id="rot-val">0°</span></label>
           <button id="btn-distribute" class="btn small ghost" title="所选舞者等间距(竖排间距)">均布</button>
-          <button id="btn-swap" class="btn small ghost" title="两人换位（需选中2人）">换位</button>
+          <button id="btn-swap" class="btn small ghost" title="单元换位（需恰好选中 2 个单元：合并单元或单人）">换位</button>
           <span class="vsep"></span>
-          <button id="btn-pair-create" class="btn small ghost" title="将所选两名舞者组成舞伴（需选中2人）">⛓ 组对</button>
-          <button id="btn-pair-split" class="btn small ghost" title="拆开所选舞者的舞伴绑定">✂ 拆对</button>
+          <button id="btn-merge-create" class="btn small ghost" title="将所选两名舞者合并为一个呈示单元（需选中2人）">合并为单元</button>
+          <button id="btn-merge-cancel" class="btn small ghost" title="取消所选舞者所在合并单元（两人原地保留）">取消合并</button>
           <span class="vsep"></span>
           <select id="face-target" title="统一朝向">
             <option value="">朝向…</option>
             <option value="audience">面向观众</option>
             <option value="center">面向圆心</option>
-            <option value="partner">面向舞伴</option>
           </select>
           <span class="spacer"></span>
           <button id="btn-ghost" class="btn small ghost toggled-on" title="显示前后队形 Ghost">幽灵</button>
@@ -114,10 +112,12 @@
           <button class="ptab active" data-tab="formation">队形</button>
           <button class="ptab" data-tab="stage">舞台</button>
           <button class="ptab" data-tab="style">样式</button>
+          <button class="ptab" data-tab="groups">编组</button>
         </div>
         <div id="props-formation" class="props-page"></div>
         <div id="props-stage" class="props-page" hidden></div>
         <div id="props-style" class="props-page" hidden></div>
+        <div id="props-groups" class="props-page" hidden></div>
       </aside>
     </div>
 

@@ -23,7 +23,7 @@
 export const TH = {
   promoteM: 0.06,  // PENDING→DRAG 晋升位移
   mergeM: 0.55,    // 拖动重叠触发合并确认的距离
-  showM: 0.8,      // 组队徽标呈示距离（与渲染 MERGE_DIST 一致）
+  showM: 0.8,      // 合并单元徽标呈示距离（与渲染 MERGE_DIST 一致）
   dwellMs: 1500,   // 拖动重叠驻留时长：拖到位停住一段时间即弹合并确认（无需松手）
   lpMs: 500,       // 长按触发时长（仅触摸端；桌面端为双击）
   lpCancelPx: 12,  // 长按取消位移（client px，放宽以容忍手指抖动）
@@ -108,7 +108,7 @@ export function createGestureMachine(host) {
     return out;
   }
 
-  // id 与他人重叠（<mergeM）且尚未结成舞伴 → 返回对方 id
+  // id 与他人重叠（<mergeM）且尚未合并 → 返回对方 id
   function overlapOther(fmt, id) {
     const p = fmt.positions[id];
     if (!p) return null;
@@ -256,7 +256,7 @@ export function createGestureMachine(host) {
     if (state === 'MENU') { g = null; return; } // 浮窗期间抬起：无操作（按钮自会处理）
     if (state === 'PENDING') {
       // 纯点击（未转正、位置未动）：仅选择语义，不做重叠合并判定——
-      // 静止队形里本就相邻的两个未组队舞者，点击不应误弹合并确认
+      // 静止队形里本就相邻的两个未合并舞者，点击不应误弹合并确认
       const sel = host.selection();
       if (!g.selectMod && !host.multiSelect() && sel.length > 1 && sel.includes(g.id)) {
         // 多选中单击其一（未拖动、按下时未改选择）：单元感知收拢——目标是整单元而非单人；

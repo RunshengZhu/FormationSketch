@@ -1,10 +1,11 @@
-// shapes.js 单元测试
+// shapes.js 单元测试（v3：无舞对概念——swapPairPositions/faceAll-partner 已随 pairs 退役；
+// 改写映射：mirrorH「舞对换位」段删除；faceAll「面向舞伴」段删除）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createProject, orderedDancers } from '../js/model.js';
+import { createProject } from '../js/model.js';
 import {
   genSlots, applySlots, mirrorH, mirrorV, rotateSelected, distributeAxis,
-  swapTwo, swapPairPositions, faceAll, angleTo, SHAPE_KINDS,
+  swapTwo, faceAll, angleTo, SHAPE_KINDS,
 } from '../js/shapes.js';
 
 const stage = { widthM: 12, depthM: 16, audience: 'bottom' };
@@ -48,24 +49,23 @@ test('applySlots：唯一映射 + 就近保持', () => {
   assert.equal(rightmost, 'b');
 });
 
-test('mirrorH：x 镜像 + 朝向镜像 + 舞对换位', () => {
+test('mirrorH：x 镜像 + 朝向镜像', () => {
   const p = createProject({ pairs: 1 });
   const f = p.formations[0];
-  const [l, fo] = orderedDancers(p, 'pair');
+  const [l, fo] = p.dancers.map(d => d.id);
   f.positions[l] = { x: 3, y: 5, facing: 30 };
   f.positions[fo] = { x: 4, y: 5, facing: 150 };
   mirrorH(f, p.stage);
   assert.equal(f.positions[l].x, 9); // 12-3
   assert.equal(f.positions[l].facing, 330); // 360-30
-  swapPairPositions(f, p);
-  assert.equal(f.positions[l].x, 8); // 原 follower 位置 12-4
-  assert.equal(f.positions[fo].x, 9);
+  assert.equal(f.positions[fo].x, 8); // 12-4
+  assert.equal(f.positions[fo].facing, 210); // 360-150
 });
 
 test('mirrorV：前后镜像', () => {
   const p = createProject({ pairs: 1 });
   const f = p.formations[0];
-  const [l] = orderedDancers(p, 'pair');
+  const [l] = p.dancers.map(d => d.id);
   f.positions[l] = { x: 3, y: 5, facing: 90 };
   mirrorV(f, p.stage);
   assert.equal(f.positions[l].y, 11); // 16-5
@@ -99,17 +99,14 @@ test('swapTwo', () => {
   assert.deepEqual(f.positions.a, { x: 2, y: 2, facing: 90 });
 });
 
-test('faceAll：面向观众/圆心/舞伴', () => {
+test('faceAll：面向观众/圆心（partner 语义已随 pairs 退役）', () => {
   const p = createProject({ pairs: 1 });
   const f = p.formations[0];
-  const [l, fo] = orderedDancers(p, 'pair');
+  const [l] = p.dancers.map(d => d.id);
   f.positions[l] = { x: 4, y: 6, facing: 0 };
-  f.positions[fo] = { x: 8, y: 6, facing: 0 };
-  faceAll(f.positions, [l], 'audience', { stage: p.stage, project: p });
+  faceAll(f.positions, [l], 'audience', { stage: p.stage });
   assert.equal(f.positions[l].facing, 180); // 观众在下方
-  faceAll(f.positions, [l], 'partner', { stage: p.stage, project: p });
-  assert.equal(f.positions[l].facing, 90); // 舞伴在右侧
-  faceAll(f.positions, [l], 'center', { stage: p.stage, project: p });
+  faceAll(f.positions, [l], 'center', { stage: p.stage });
   assert.equal(f.positions[l].facing, 135); // 圆心 (6,8) 在 (4,6) 的右下 45°方向：90+45
 });
 

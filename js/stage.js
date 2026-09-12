@@ -1,5 +1,5 @@
 // 舞台画布：渲染 + 命中测试；手势全部委托 gesture.js 纯状态机（本类是其薄客户端）
-import { faceAudience, partnerOf, posAt, computeSegments, easeInOut, lerpAngle } from './model.js';
+import { faceAudience, posAt, computeSegments, easeInOut, lerpAngle } from './model.js';
 import { createGestureMachine } from './gesture.js';
 
 export const DANCER_R = 0.38; // 舞者圆点半径（米）
@@ -92,7 +92,7 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.restore();
   }
 
-  // Ghost（上一/下一队形）：配对接近=圆角矩形虚影，分离=圆虚影
+  // Ghost（上一/下一队形）：合并单元接近=圆角矩形虚影，分离/独立舞者=圆虚影
   if (opts.ghost) {
     function ghostBadge(cx, cy, w, hh, bothPresent) {
       ctx.save(); ctx.globalAlpha = 0.32;
@@ -102,30 +102,29 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
       ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
       ctx.restore();
     };
+    function ghostCircle(px, py) {
+      ctx.save(); ctx.globalAlpha = 0.32;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.arc(px, py, DANCER_R * s, 0, Math.PI * 2);
+      ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+    };
     for (const gp of opts.ghost) {
-      for (const pair of project.pairs) {
-        const a = gp.positions[pair.leader], b = gp.positions[pair.follower];
+      const gmerged = new Set((gp.merges || []).flatMap(m => [m.a, m.b]));
+      for (const m of gp.merges || []) {
+        const a = gp.positions[m.a], b = gp.positions[m.b];
         if (!a || !b) continue;
         if (Math.hypot(a.x - b.x, a.y - b.y) <= MERGE_DIST) {
           ghostBadge((X(a.x) + X(b.x)) / 2, (Y(a.y) + Y(b.y)) / 2, r * 3.4, r * 1.5, true);
         } else {
-          ctx.save(); ctx.globalAlpha = 0.32;
-          ctx.setLineDash([4, 4]);
-          ctx.beginPath(); ctx.arc(X(a.x), Y(a.y), DANCER_R * s, 0, Math.PI * 2);
-          ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
-          ctx.beginPath(); ctx.arc(X(b.x), Y(b.y), DANCER_R * s, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.restore();
+          ghostCircle(X(a.x), Y(a.y));
+          ghostCircle(X(b.x), Y(b.y));
         }
       }
       for (const [id, p2] of Object.entries(gp.positions)) {
-        if (project.pairs.some(pa => pa.leader === id || pa.follower === id)) continue;
+        if (gmerged.has(id)) continue;
         if (!positions[id]) continue;
-        ctx.save(); ctx.globalAlpha = 0.32;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath(); ctx.arc(X(p2.x), Y(p2.y), DANCER_R * s, 0, Math.PI * 2);
-        ctx.strokeStyle = '#475569'; ctx.lineWidth = 1.5; ctx.stroke();
-        ctx.restore();
+        ghostCircle(X(p2.x), Y(p2.y));
       }
     }
   }
@@ -141,8 +140,8 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.stroke(); ctx.restore();
   }
 
-  // 舞者与舞对单元渲染：
-  //   配对舞者位置接近（≤0.8m）时合为【圆角矩形徽标】（一个视觉符号）；
+  // 舞者与合并单元渲染：
+  //   合并单元两人位置接近（≤0.8m）时合为单元符号（capsule 徽标 / single 单编号圆）；
   //   分开超过阈值时呈示为两个独立圆 + 虚线绑定（拖动编辑互不影响）。
   const dancerById = id => project.dancers.find(x => x.id === id);
   const inSel = id => opts.selection?.has(id);
@@ -175,39 +174,42 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.arcTo(x, y, x + w, y, rad);
     ctx.closePath();
   };
-  // 合并单元符号：capsule=圆角矩形 / diamond=菱形 / twin=双圆，左右各色+编号
+  // 合并单元符号：capsule=圆角矩形（左右各色+编号）/ single=单编号圆+虚线外环+×2 角标
   function drawUnitSymbol(style, idA, idB, a, b, sel, alpha) {
     const cx = (X(a.x) + X(b.x)) / 2, cy = (Y(a.y) + Y(b.y)) / 2;
     const dA = dancerById(idA), dB = dancerById(idB);
     ctx.save();
     if (alpha !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    if (style === 'diamond') {
-      const h = r * 1.9;
-      const T = [cx, cy - h], Rt = [cx + h, cy], B = [cx, cy + h], L = [cx - h, cy], C = [cx, cy];
-      const poly = pts => { ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); };
-      poly([T, L, C]); ctx.fillStyle = dA?.color || '#64748b'; ctx.fill();
-      poly([T, C, B, Rt]); ctx.fillStyle = dB?.color || '#94a3b8'; ctx.fill();
-      poly([T, Rt, B, L]);
-      ctx.lineWidth = sel ? Math.max(3, s * 0.1) : 2;
-      ctx.strokeStyle = sel ? '#0ea5e9' : '#f8fafc';
-      ctx.stroke();
+    if (style === 'single') {
+      // 单编号：只画一个与单舞者同尺寸的圆（编号取成员中较小者）；
+      // 叠加虚线外环 + 右上角 ×2 角标（配色随主题）——一眼可辨非单人
+      const acc = dark ? '#38bdf8' : '#0284c7';
+      const num = v => (parseFloat(v?.short) || Number.MAX_SAFE_INTEGER);
+      const dd = [dA, dB].filter(Boolean).sort((x, y) => num(x) - num(y) || String(x.short).localeCompare(String(y.short)))[0] || dA;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = dd?.color || '#64748b'; ctx.fill();
+      ctx.lineWidth = sel ? Math.max(2.5, s * 0.09) : Math.max(1, s * 0.04);
+      ctx.strokeStyle = sel ? '#0ea5e9' : 'rgba(15,23,42,.55)'; ctx.stroke();
       ctx.fillStyle = '#fff';
-      ctx.font = `700 ${Math.max(8, h * 0.42)}px sans-serif`;
+      ctx.font = `700 ${Math.max(8, r * 0.95)}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(dA?.short || '?', cx - h * 0.42, cy);
-      ctx.fillText(dB?.short || '?', cx + h * 0.42, cy);
-    } else if (style === 'twin') {
-      const rr = r * 1.08;
-      for (const [id, px, py] of [[idA, cx - rr * 0.62, cy], [idB, cx + rr * 0.62, cy]]) {
-        const d = dancerById(id);
-        ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2);
-        ctx.fillStyle = d?.color || '#64748b'; ctx.fill();
-        ctx.lineWidth = 2; ctx.strokeStyle = '#f8fafc'; ctx.stroke();
-        ctx.fillStyle = '#fff';
-        ctx.font = `700 ${Math.max(8, rr * 0.8)}px sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(d?.short || '?', px, py);
-      }
+      ctx.fillText(dd?.short || '?', cx, cy + r * 0.05);
+      // 虚线外环（与内圆留出间隙）
+      ctx.beginPath(); ctx.arc(cx, cy, r * 1.45, 0, Math.PI * 2);
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = Math.max(1.2, s * 0.05);
+      ctx.strokeStyle = acc; ctx.stroke();
+      ctx.setLineDash([]);
+      // 右上角 ×2 角标
+      const bx = cx + r * 1.15, by = cy - r * 1.15, br = Math.max(5, r * 0.5);
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fillStyle = acc; ctx.fill();
+      ctx.lineWidth = Math.max(1, s * 0.03);
+      ctx.strokeStyle = dark ? '#0b1220' : '#ffffff'; ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 ${Math.max(7, br * 1.15)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('×2', bx, by + br * 0.05);
     } else { // capsule 圆角矩形
       const w = r * 3.4, hh = r * 1.5;
       const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;

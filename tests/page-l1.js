@@ -1,6 +1,7 @@
 // L1 测试仪器：原语手势动线 D-01~D-16 × 硬件矩阵（M=鼠标全量 / T=触摸子集 / P=笔子集）。
 // 计划权威来源：tests/e2e-matrix.md §2。布置基线：真实 dancer id、12 人两行、snap 关、视图 fit；
 // 每条动线后断言指针零残留 + state=IDLE + 无 .unit-menu（泄漏即停，§4.3）。
+// v3（round14）：pairs 退役——orderedDancers 无 unit 参数、collapsePair→collapseUnit，断言语义不变。
 // 纪律：本文件属测试仪器，被测应用代码（js/*、index.html、css/*）零改动；场景搭建只走 store/M 公共 API。
 // 结构纪律：每条动线「先执行/取证（手势必定收尾+清理），后断言」——失败即停（首败后后续断言作废）
 // 时不会把指针/浮窗遗留在半途，避免把动线本身的失败污染成泄漏噪声。
@@ -45,7 +46,7 @@ export async function runL1(opts = {}) {
     sv.resetView();
     if (opts.setupView) { await opts.setupView(sv); } // L2·C-04 视图变换回归钩子：子动线重放前重加同一视图变换（不传=原行为）
     await raf2();
-    const ids = M.orderedDancers(state().project, 'pair');
+    const ids = M.orderedDancers(state().project); // 真实 dancer id（名册顺序，v3 无 unit 参数）
     const dancerOf = id => state().project.dancers.find(d => d.id === id);
     const posOf = id => ({ ...fmt().positions[id] });
     const ptOf = id => { const p = posOf(id); return ctx.toClient(p.x, p.y); };
@@ -112,7 +113,7 @@ export async function runL1(opts = {}) {
     store.mutate(p => {
       const f = p.formations[state().formationIndex];
       M.addMerge(f, idA, idB, style);
-      M.collapsePair(f, idA, idB);
+      M.collapseUnit(f, idA, idB);
     });
     await raf2();
     return { idA, idB, mid: t.mergePt(idA, idB) };
@@ -696,7 +697,7 @@ export async function runL1(opts = {}) {
         const A = t.ids[0], B = t.ids[1], C = t.ids[2], colB = t.col(B), colC = t.col(C);
         const origA = t.posOf(A), origB = t.posOf(B);
         const targetA = { x: origA.x + 1.0, y: origA.y - 2.0 };
-        const CP = t.posOf(C); // collapsePair 中点 = C 原位（B 被拖到 C 上）
+        const CP = t.posOf(C); // collapseUnit 中点 = C 原位（B 被拖到 C 上）
         const CPc = ctx.toClient(CP.x, CP.y); // CP 的 client 像素（像素采样用）
         // ---- 执行：三次提交 ----
         await dragPts(t.ptOf(A), ctx.toClient(targetA.x, targetA.y));
