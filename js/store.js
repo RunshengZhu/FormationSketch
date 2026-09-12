@@ -30,9 +30,12 @@ function tx(store, mode, fn) {
 }
 export const storage = {
   async putProject(p) {
-    p.meta.updatedAt = new Date().toISOString();
-    if (!hasIDB) { memory.projects.set(p.id, clone(p)); return; }
-    await tx('projects', 'readwrite', s => s.put(clone(p)));
+    // 先 clone 再盖时间戳：绝不原地改写活对象（其已被 commit 基线快照引用，
+    // 原地改写会让下一次 commit 的重复判定失效）。落盘记录内容与原语义一致。
+    const rec = clone(p);
+    rec.meta.updatedAt = new Date().toISOString();
+    if (!hasIDB) { memory.projects.set(rec.id, rec); return; }
+    await tx('projects', 'readwrite', s => s.put(rec));
   },
   async getProject(id) {
     if (!hasIDB) return memory.projects.get(id) ? clone(memory.projects.get(id)) : null;
