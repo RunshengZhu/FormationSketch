@@ -274,6 +274,7 @@ export class StageView {
     this.hooks = hooks;           // {select(ids,{add}), mutateLive(fn), commit(label), onStageClick()}
     this.view = null;
     this.box = null;
+    this.boxOrigin = null; // 长按框选起点标记（触摸/笔；桌面鼠标框选为 null）
     this._spaceHeld = false;   // 空格（平移修饰键）按住状态，由 main.js 键盘接线驱动
     this._spaceGesture = false; // 本次按住空格期间是否发生过指针手势
     this.gesture = createGestureMachine(this._makeGestureHost());
@@ -319,6 +320,7 @@ export class StageView {
     };
     this.gesture?.reset(); // 动效打断进行中的手势
     this.box = null;
+    this.boxOrigin = null;
     this._animTick();
   }
   _animTick() {
@@ -413,6 +415,18 @@ export class StageView {
       ctx.fillRect(x, y, Math.abs(x1 - x0), Math.abs(y1 - y0));
       ctx.strokeRect(x, y, Math.abs(x1 - x0), Math.abs(y1 - y0));
       ctx.restore();
+      // 长按框选起点标记：小圆点+细虚线环（触摸/笔长按触发的轻量反馈；零尺寸矩形阶段的可见主体）
+      if (this.boxOrigin) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(56,189,248,.95)';
+        ctx.strokeStyle = 'rgba(56,189,248,.6)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.arc(this.boxOrigin.x, this.boxOrigin.y, 7, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(this.boxOrigin.x, this.boxOrigin.y, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
     }
 
     // 朝向把手（恰好选中一名舞者且非播放）
@@ -502,10 +516,12 @@ export class StageView {
         this.hooks.showUnitMenu({ ...payload, screen: { x: dx + v.ox + at.x * v.scale, y: dy + v.oy + at.y * v.scale } });
       },
       hideMenu: () => this.hooks.hideUnitMenu?.(),
-      box: rect => {
-        if (!rect) { this.box = null; this.requestDraw(); return; }
+      box: (rect, opts = {}) => {
+        if (!rect) { this.box = null; this.boxOrigin = null; this.requestDraw(); return; }
         const r = this.canvas.getBoundingClientRect(); // client px → 画布内像素（渲染用）
         this.box = { x0: rect.x0 - r.left, y0: rect.y0 - r.top, x1: rect.x1 - r.left, y1: rect.y1 - r.top };
+        // 长按框选（触摸/笔）起点反馈：opts.origin=在锚点画低调标记（桌面鼠标框选不画，视觉不变）
+        this.boxOrigin = opts.origin ? { x: rect.x0 - r.left, y: rect.y0 - r.top } : null;
         this.requestDraw();
       },
       panBy: (dx, dy) => {

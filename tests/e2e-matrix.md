@@ -204,7 +204,7 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 | R-06 | 拆开清选 [M] | 建单元 → 点选徽标（selection==[A,B]）→ 单元菜单点「✂ 拆开」→ 各自拖动 A、B | [STATE] 拆开后 selection 清空（规格外补充断言）、merges 空、位置不变；双方可独立拖动（两条「移动舞者」）｜ [PIXEL] 两独立圆呈示 | 拆开不残留原子选择、恢复独立语义 |
 | R-07 | 单元原子性抽查 [M] | 点选徽标 → [A,B]；shift+点他人 → 追加整单元；shift+点徽标再按 → 整单元原子移出；框选仅罩徽标 → [A,B]；点空白 → 清空 | [STATE] 全程 selection 均为整单元或单人（无 [A] 型半单元中间态）｜ [PIXEL] 高亮随原子选择出现/消失 | 点选/框选/shift 全部单元原子 |
 
-**执行**：R 组经 lab/run-r.mjs 驱动（先复跑 L0 门禁 20/20，再按 M/T/P 三批次执行，每动线后泄漏断言同 L1）；L1/L2 格数与红线阈值不变（L1 29 格、L2 12 格、单测 101/101），R 组 10 格独立判定。
+**执行**：R 组经 lab/run-r.mjs 驱动（先复跑 L0 门禁 20/20，再按 M/T/P 三批次执行，每动线后泄漏断言同 L1）；L1/L2 格数与红线阈值不变（L1 29 格、L2 12 格、单测 107/107），R 组 10 格独立判定。
 
 ---
 
@@ -228,18 +228,35 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 
 ---
 
+## 3.7 IR 组 —— 真实输入动线（round15 起；CDP Input domain，isTrusted=true）
+
+**背景**：L1/R/GR/L2 全部经 tests/page-injector.js 的 `dispatchEvent` **合成事件**（isTrusted=false，绕过浏览器默认行为）。触屏长按框选（轮 6）与中键平移两类报告的根因恰恰藏在真实输入管线独有层：compat mouse 事件、指针事件合成、autoscroll 竞争、setPointerCapture、多点触控合成。IR 组用 CDP `Input.dispatchMouseEvent` / `Input.dispatchTouchEvent` / `Input.dispatchKeyEvent`（Playwright keyboard 同管线）派发**受信任事件**回归同一手势语义，是合成注入的**补充通道**，不替代、不重复计数。
+**执行顺序**：IR 在 **L2 之后**执行（`lab/run-realinput.mjs`，headless + headed 双通道，两通道各自全过才算过）；被测页 console 错误一票否决（favicon 404 为浏览器自动请求的资源噪音，记录但不进判定）。每用例独立基线（12 人两行 / snap 关 / resetView），用例后泄漏断言同 L1（IDLE + debugPointers 空 + 无 .unit-menu）。
+
+| 编号 | 动线 | 步骤链 | 端到端验证点（类型） | 验证目标 |
+|------|------|--------|----------------------|----------|
+| IR-01 | 触屏长按空白=框选 [T·真实] | touchStart 空白 → 静止 700ms → touchMove×5 画框 → touchEnd | [STATE] 待晋升 PAN→长按转 BOX（零尺寸矩形+起点反馈）、结算=按几何期望集合**精确相等**（含合并单元原子展开）、全程 viewΔ=(0,0)｜ [DOM] 拖动中矩形出现、松手清除｜ [PIPE] 事件流全部 isTrusted=true | 长按框选全链走真实触摸管线（轮 6 修复回归） |
+| IR-02 | 框选期第二指不进 PINCH [T·真实] | 长按进 BOX → 第二指 touchStart → 双指 touchMove（捏合）→ 抬第二指 → 发起指继续拖 → 全抬 | [STATE] 全程 BOX 不转 PINCH、debugPointers 仅发起指、scale 零变化、终态回 IDLE 零平移零缩放 | 长按框选多点触控安全（真实双指合成） |
+| IR-03 | 中键平移（受信任事件）[M·真实] | mousePressed(middle) 空白 → mouseMoved×6 → mouseReleased | [STATE] PAN、viewΔ≈位移(±3px)、零选择/零历史/无矩形残留｜ [PIPE] pointerdown button=1/buttons=4 且 trusted；**compat mousedown=0**（防 autoscroll 根）；pointermove 全程到达（autoscroll 未劫持） | 中键平移在真实管线无 autoscroll 劫持（设备层限制裁决回归） |
+| IR-04 | 中键拖动中途 Escape [M·真实]（round15 reviewer 补充） | 中键拖动（view 已移动）→ keydown Escape → 继续中键 move ×3 → mouseReleased | [STATE] Escape 后手势干净中止（回 IDLE，cancel() 消费）、零历史、选择不变、无矩形/浮窗残留；**后续 move 不再平移**（手势已死）；抬起后 pointers 空｜ [PIPE] Escape keydown 到达且 trusted | 取消路径在真实管线的中止语义（gesture.js cancel：PAN→endGesture；view 平移保留=平移本身即终态，非数据回滚场景） |
+| IR-05 | 框选结算后立刻二次长按 [T·真实]（round15 reviewer 补充） | 长按框选结算 S1（回 IDLE）→ 同走廊立刻二次 touchStart 长按 → 小矩形拖至最左舞者 → 抬起 | [STATE] 二次长按再次进入 BOX（re-arm）、期间 viewΔ=(0,0)；终态选择=S2 **精确相等（替换而非并集）**、|S2|<|S1| 非空；二次结算后 IDLE、矩形清除 | 长按框选可重复触发 + 替换语义（破坏性：连续两次） |
+
+**执行**：IR 组经 lab/run-realinput.mjs 驱动（`node run-realinput.mjs [roundTag] [both|headless|headed]`）；产出 out/&lt;roundTag&gt;/results.json + report.md + shots/（关键帧截图）+ evidence/&lt;mode&gt;-&lt;case&gt;/replay.json（失败证据包）。IR 组 5 格独立判定（headless/headed 各一遍），不改变 L0/L1/R/GR/L2 格数与单测红线。
+
+---
+
 ## 4. 执行与判定规范
 
-1. **顺序（v3）**：L0 门禁 → L0 元测试 → L1 → R 组 → **GR 组** → L2。任何 L0 失败：不出业务结论。
+1. **顺序（v3，round15 增补 IR）**：L0 门禁 → L0 元测试 → L1 → R 组 → **GR 组** → L2 → **IR 组（真实输入，L2 后作为合成注入的补充通道）**。任何 L0 失败：不出业务结论。
 2. **失败即停**：记录证据包（用例 id、步骤、四类检查点结果、positions/merges/groups 快照、失败帧截图）。
 3. **泄漏即停**：任一动线后 `debugPointers()` 非空 = 缺陷，修复后该组从头重跑。
 4. **SCREEN 失败 = 环境故障**：重建标签，从 L0 重来；不产出应用结论。
-5. **回归红线**：node 单测全绿（阈值随用例演进，**当前 101/101**，以 lab/run-l2.mjs 红线阈值为准）。
+5. **回归红线**：node 单测全绿（阈值随用例演进，**当前 107/107**，以 lab/run-l2.mjs 红线阈值为准；round15 同步：101→107，轮 6 触摸长按框选单测 +6）。
 6. **证据包**：每条结论必须能引用 `{用例ID, 步骤, 四类检查点结果, 数据快照, 截图路径}`。
 
 ## 5. 已知局限（诚实声明）
 
-- isTrusted 无法模拟：OS 级输入等价性靠"事件链建模 + 人工按同清单执行"双兜底；
+- isTrusted 无法经合成 dispatchEvent 模拟（L1/R/GR/L2 通道的事件链建模仍保留）：OS 级输入等价性自 round15 起由 IR 组（CDP Input domain 真实管线，isTrusted=true）直接回归，人工按清单执行降级为抽检兜底；
 - 人工目检仅用于 SCREEN 层的最终确认，判定以自动比对为准；
 - 长按/驻留/双击为时序敏感用例，注入器显式控制时序并测量验证（I7）；
 - GR 快捷键为 `e.code` 合成事件（真实键盘 Shift+数字产生的 `!@#` 字符差异由 e.code 判定吸收，注入器显式传 `code: 'DigitN'`）。
@@ -250,4 +267,4 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 2. 样式收敛：P3、C-01/C-02/C-03、R-01 的样式探针与按钮断言改为 capsule/single（diamond/twin 仅作为载入迁移语义存在于单测）；
 3. 新增 GR 组（§3.6）与仪器 tests/page-gr.js + lab/run-gr.mjs；C-08 从「名册舞对联动」重写为「名册与编组管理」；
 4. v1 仪器 tests/page-matrix.js 标记废弃归档（违反 G2 改名键纪律 + 读取已退役的 pairs 字段，仅存档不再执行）；
-5. 阈值：L0 门禁 20/20、L1 29 格、R 10 格、GR 7 格、L2 12 格、单测 101/101（96→101，v3 单测扩充）。
+5. 阈值：L0 门禁 20/20、L1 29 格、R 10 格、GR 7 格、L2 12 格、IR 5 格（round15 新增，headless/headed 双通道）、单测 107/107（96→101 v3，101→107 round15 轮 6 触摸长按框选 +6）。

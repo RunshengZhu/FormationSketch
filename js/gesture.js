@@ -13,6 +13,8 @@
 //   Escape/双指中断=整单元回滚。
 //   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空；命中单元成员=整单元入选）
 //   IDLE  --down(空白·触摸)--> PAN  --位移>晋升阈值--> panBy；未晋升抬起=清空选择（点按）
+//                                    --静止 lpMs（位移<lpCancelPx）--> BOX(长按框选 lpBox)：拖动画框、
+//                                     松手复用桌面框选结算；期间忽略新增手指（不转 PINCH，直到松手）
 //   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
 //   IDLE  --contextmenu(右键·stage 层翻译进来)--> MENU（命中合并=单元菜单/未合并=删除菜单；仅 IDLE 响应）
 //   任意  --第二指按下--> PINCH（进行中的 DRAG 立即回滚）
@@ -77,6 +79,25 @@ export function createGestureMachine(host) {
   }
   function disarmLP() { if (lpTimer) { clearT(lpTimer); lpTimer = null; } }
 
+  // 触摸/笔空白长按：静止 lpMs 且未晋升平移 → 转 BOX（长按框选，lpBox 标记）。
+  // 与舞者长按菜单（armLP）共用 lpTimer 槽位——同一时刻至多一个待决长按。
+  // 锚点取触发时指位（非按下点）：容忍长按等待期内的手部微漂，反馈点落在指下。
+  function armLPBox() {
+    clearT(lpTimer); lpTimer = null;
+    lpTimer = setT(() => {
+      lpTimer = null;
+      if (state !== 'PAN' || !g || !g.touch || g.promoted) return; // 已晋升平移/手势已断=放弃
+      // 锚点=当前指位（pointers 表由 move 持续更新；未晋升的抖动也反映在此）
+      const p = pointers.get(g.pointerId) || { x: g.lastX, y: g.lastY };
+      g.kind = 'BOX';
+      g.lpBox = true; // 长按框选标记：期间忽略新增手指、抬起只认发起指
+      g.x0 = p.x; g.y0 = p.y; g.x1 = p.x; g.y1 = p.y;
+      g.lastX = p.x; g.lastY = p.y;
+      state = 'BOX';
+      host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 }, { origin: true }); // 零尺寸矩形+起点反馈
+    }, TH.lpMs);
+  }
+
   function enterMenu(payload) {
     state = 'MENU'; g = null;
     host.showMenu(payload);
@@ -136,6 +157,7 @@ export function createGestureMachine(host) {
   function down(e) {
     if (state === 'MENU') { exitMenu(); return; } // 点外部=取消，并吞掉这次按下
     if (e.button === 2) return; // 右键：交给 contextmenu 事件（仅 IDLE 响应），不启动任何手势
+    if (state === 'BOX' && g && g.lpBox) return; // 长按框选进行中：忽略新增手指（不转 PINCH/缩放），其抬起同样无效
     pointers.set(e.pointerId, { x: e.px, y: e.py });
     if (pointers.size === 2) { abortToPinch(); return; }
     if (pointers.size > 2) return;
@@ -180,15 +202,18 @@ export function createGestureMachine(host) {
       state = 'BOX';
       host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 });
     } else {
-      // 触摸空白：先以点按待定，位移超过晋升阈值才转平移；未晋升抬起=清空选择
-      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: true, promoted: false, startS: s };
+      // 触摸/笔空白：先以点按待定；位移超晋升阈值→转平移；静止达 lpMs→长按框选（lpBox）。
+      // 未晋升抬起=清空选择（点按语义不变）。
+      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: true, promoted: false, startS: s, startPx: { x: e.px, y: e.py }, pointerId: e.pointerId };
       state = 'PAN';
+      armLPBox();
     }
   }
 
   function move(e) {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.px, y: e.py });
     if (state === 'MENU') return;
+    if (g && g.lpBox && e.pointerId !== g.pointerId) return; // 长按框选中：非发起指的移动不画框
     if (state === 'PINCH') {
       if (pointers.size < 2 || !pinch) return;
       const [a, b] = firstTwo();
@@ -234,9 +259,12 @@ export function createGestureMachine(host) {
     }
     if (g.kind === 'PAN') {
       if (!g.promoted) {
+        // 长按框选意图：位移超取消阈值即解除长按（维持平移语义）
+        if (Math.hypot(e.px - g.startPx.x, e.py - g.startPx.y) > TH.lpCancelPx) disarmLP();
         // 触摸空白：位移超过晋升阈值才转平移（阈值与拖拽晋升一致）
         const sNow = host.toStage(e.px, e.py);
         if (Math.hypot(sNow.x - g.startS.x, sNow.y - g.startS.y) <= TH.promoteM) return;
+        disarmLP();
         g.promoted = true; // 晋升当次即补齐自按下起的全部位移（平移量=手指位移，无滞后）
       }
       host.panBy(e.px - g.lastX, e.py - g.lastY);
@@ -250,6 +278,7 @@ export function createGestureMachine(host) {
   }
 
   function up(e) {
+    if (state === 'BOX' && g && g.lpBox && e.pointerId !== g.pointerId) return; // 长按框选中：非发起指抬起不结算
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
     disarmLP();
