@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h } from './ui.js';
-window.__MAIN_BUILD = 'build-19-matrix';
+window.__MAIN_BUILD = 'build-20-pwa';
 const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);
@@ -1141,6 +1141,16 @@ requestAnimationFrame(() => {
   const bt = document.getElementById('build-tag');
   if (bt) bt.textContent = BUILD_TAG;
 });
+
+// PWA：http(s) 托管且页面带有构建注入的 manifest（dist 双文件包才注入）时注册 Service Worker →
+// 断网后用 SW 缓存的 HTML 继续工作，数据由 IndexedDB 本地持久。file:// 下载版协议不符、
+// dev 源码树（index.html 无 manifest link）条件不符，均一行不执行；注册失败（如宿主缺 sw.js）
+// 静默吞掉——优雅降级为普通网页，应用行为与无 SW 完全一致（硬性要求）。
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+    && location.protocol.indexOf('http') === 0
+    && document.querySelector('link[rel="manifest"]')) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
 
 // 自动化测试钩子（不影响正常使用）：注入音频、读取状态
 window.__fs = {
