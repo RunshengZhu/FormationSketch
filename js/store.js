@@ -1,9 +1,64 @@
-// 集中状态树 + 撤销/重做 + IndexedDB 持久化（Node 环境自动降级为内存存储）
+// 集中状态树 + 撤销/重做 + 持久化（http→IndexedDB；file:// 离线→localStorage；Node 环境自动降级为内存存储）
 import { createProject, clone, uid } from './model.js';
 
-// ---------- 存储（IndexedDB / 内存回退） ----------
+// ---------- 存储（IndexedDB / localStorage 离线档 / 内存回退） ----------
 const memory = { projects: new Map(), audio: new Map() };
 const hasIDB = typeof indexedDB !== 'undefined';
+
+// ---------- 后端选择（确定性，不混写） ----------
+// file:// 双击打开的离线单文件：IndexedDB 在 file 源下是会话级（写后刷新即丢，实测），
+// localStorage 则浏览器完全重启后仍存活（实测）→ 离线档唯一后端为 localStorage。
+// http(s) 托管部署维持 IndexedDB（现状零改动）；两档互不读写。
+// Node 测试环境无 location → 走原有 IDB/内存路径。
+export function isFileOrigin() {
+  return typeof location !== 'undefined' && location.protocol === 'file:';
+}
+const LS_KEY_PREFIX = 'wuzhen:proj:'; // 每项目一条 JSON 记录；不设独立索引键，键前缀扫描即索引（无失步风险）
+const lsAvailable = typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && typeof localStorage.setItem === 'function';
+export const STORAGE_MODE = (isFileOrigin() && lsAvailable) ? 'ls' : (hasIDB ? 'idb' : 'memory');
+
+function lsIds() {
+  const ids = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LS_KEY_PREFIX)) ids.push(k.slice(LS_KEY_PREFIX.length));
+    }
+  } catch {}
+  return ids;
+}
+function lsReadRaw(id) {
+  try { return localStorage.getItem(LS_KEY_PREFIX + id); } catch { return null; }
+}
+function lsWrite(id, rec) {
+  // 配额满等写失败：安全忽略（不 crash、不阻塞主流程），当前会话内存里的活对象不受影响
+  try { localStorage.setItem(LS_KEY_PREFIX + id, JSON.stringify(rec)); }
+  catch (e) { console.warn('[wuzhen] 离线存储写入失败（不影响当前会话）', e); }
+}
+function lsParse(id) {
+  // 读时消毒：解析/清洗失败 → null（视为不存在），绝不阻塞打开流程
+  const raw = lsReadRaw(id);
+  if (raw == null) return null;
+  try {
+    const p = M.validateProject(JSON.parse(raw)).project;
+    p.id = id; // 键名即 id，防记录内 id 漂移
+    return p;
+  } catch { return null; }
+}
+// LS 档启动清洗：不可解析的条目直接移除；可解析的过 validateProject 回写净化结果（脏数据不致 boot 失败）
+function lsCleanup() {
+  for (const id of lsIds()) {
+    let obj = null;
+    try { obj = JSON.parse(lsReadRaw(id)); } catch { obj = null; }
+    if (!obj || typeof obj !== 'object') { try { localStorage.removeItem(LS_KEY_PREFIX + id); } catch {} continue; }
+    try {
+      const cleaned = M.validateProject(obj).project;
+      cleaned.id = id;
+      if (JSON.stringify(cleaned) !== lsReadRaw(id)) lsWrite(id, cleaned);
+    } catch {}
+  }
+}
+if (STORAGE_MODE === 'ls') { try { lsCleanup(); } catch {} }
 let dbPromise = null;
 function db() {
   if (!dbPromise) {
@@ -34,28 +89,37 @@ export const storage = {
     // 原地改写会让下一次 commit 的重复判定失效）。落盘记录内容与原语义一致。
     const rec = clone(p);
     rec.meta.updatedAt = new Date().toISOString();
+    if (STORAGE_MODE === 'ls') { lsWrite(rec.id, rec); return; }
     if (!hasIDB) { memory.projects.set(rec.id, rec); return; }
     await tx('projects', 'readwrite', s => s.put(rec));
   },
   async getProject(id) {
+    if (STORAGE_MODE === 'ls') return lsParse(id);
     if (!hasIDB) return memory.projects.get(id) ? clone(memory.projects.get(id)) : null;
     return await tx('projects', 'readonly', s => s.get(id));
   },
   async listProjects() {
+    if (STORAGE_MODE === 'ls') return lsIds().map(id => lsParse(id)).filter(Boolean)
+      .sort((a, b) => (b.meta.updatedAt || '').localeCompare(a.meta.updatedAt || ''));
     if (!hasIDB) return [...memory.projects.values()].sort((a, b) => (b.meta.updatedAt || '').localeCompare(a.meta.updatedAt || ''));
     const all = await tx('projects', 'readonly', s => s.getAll());
     return (all || []).sort((a, b) => (b.meta.updatedAt || '').localeCompare(a.meta.updatedAt || ''));
   },
   async deleteProject(id) {
+    if (STORAGE_MODE === 'ls') { try { localStorage.removeItem(LS_KEY_PREFIX + id); } catch {} return; }
     if (!hasIDB) { memory.projects.delete(id); memory.audio.delete(id); return; }
     await tx('projects', 'readwrite', s => s.delete(id));
     await tx('audio', 'readwrite', s => s.delete(id));
   },
   async putAudio(id, blob) {
+    // LS 离线档：音频 Blob 塞不进 localStorage 配额 → 安全忽略（不落盘、不 crash、不阻塞主流程）。
+    // 当前会话内音乐照常播放（AudioController 自持 blob），仅跨重启不保留（已明确接受）。
+    if (STORAGE_MODE === 'ls') return;
     if (!hasIDB) { memory.audio.set(id, blob); return; }
     await tx('audio', 'readwrite', s => s.put(blob, id));
   },
   async getAudio(id) {
+    if (STORAGE_MODE === 'ls') return null;
     if (!hasIDB) return memory.audio.get(id) || null;
     return await tx('audio', 'readonly', s => s.get(id));
   },

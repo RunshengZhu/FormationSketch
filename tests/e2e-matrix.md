@@ -204,7 +204,7 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 | R-06 | 拆开清选 [M] | 建单元 → 点选徽标（selection==[A,B]）→ 单元菜单点「✂ 拆开」→ 各自拖动 A、B | [STATE] 拆开后 selection 清空（规格外补充断言）、merges 空、位置不变；双方可独立拖动（两条「移动舞者」）｜ [PIXEL] 两独立圆呈示 | 拆开不残留原子选择、恢复独立语义 |
 | R-07 | 单元原子性抽查 [M] | 点选徽标 → [A,B]；shift+点他人 → 追加整单元；shift+点徽标再按 → 整单元原子移出；框选仅罩徽标 → [A,B]；点空白 → 清空 | [STATE] 全程 selection 均为整单元或单人（无 [A] 型半单元中间态）｜ [PIXEL] 高亮随原子选择出现/消失 | 点选/框选/shift 全部单元原子 |
 
-**执行**：R 组经 lab/run-r.mjs 驱动（先复跑 L0 门禁 20/20，再按 M/T/P 三批次执行，每动线后泄漏断言同 L1）；L1/L2 格数与红线阈值不变（L1 29 格、L2 12 格、单测 107/107），R 组 10 格独立判定。
+**执行**：R 组经 lab/run-r.mjs 驱动（先复跑 L0 门禁 20/20，再按 M/T/P 三批次执行，每动线后泄漏断言同 L1）；L1/L2 格数与红线阈值不变（L1 29 格、L2 12 格、单测 111/111），R 组 10 格独立判定。
 
 ---
 
@@ -240,8 +240,9 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 | IR-03 | 中键平移（受信任事件）[M·真实] | mousePressed(middle) 空白 → mouseMoved×6 → mouseReleased | [STATE] PAN、viewΔ≈位移(±3px)、零选择/零历史/无矩形残留｜ [PIPE] pointerdown button=1/buttons=4 且 trusted；**compat mousedown=0**（防 autoscroll 根）；pointermove 全程到达（autoscroll 未劫持） | 中键平移在真实管线无 autoscroll 劫持（设备层限制裁决回归） |
 | IR-04 | 中键拖动中途 Escape [M·真实]（round15 reviewer 补充） | 中键拖动（view 已移动）→ keydown Escape → 继续中键 move ×3 → mouseReleased | [STATE] Escape 后手势干净中止（回 IDLE，cancel() 消费）、零历史、选择不变、无矩形/浮窗残留；**后续 move 不再平移**（手势已死）；抬起后 pointers 空｜ [PIPE] Escape keydown 到达且 trusted | 取消路径在真实管线的中止语义（gesture.js cancel：PAN→endGesture；view 平移保留=平移本身即终态，非数据回滚场景） |
 | IR-05 | 框选结算后立刻二次长按 [T·真实]（round15 reviewer 补充） | 长按框选结算 S1（回 IDLE）→ 同走廊立刻二次 touchStart 长按 → 小矩形拖至最左舞者 → 抬起 | [STATE] 二次长按再次进入 BOX（re-arm）、期间 viewΔ=(0,0)；终态选择=S2 **精确相等（替换而非并集）**、|S2|<|S1| 非空；二次结算后 IDLE、矩形清除 | 长按框选可重复触发 + 替换语义（破坏性：连续两次） |
+| IR-06 | file:// 离线重启持久化 [M·持久]（round16 新增） | launchPersistentContext 打开 `dist/formation-studio.html`（file:// 双击形态）→ 真实 UI 新建项目（modal）→ 真实键盘 Ctrl+1 存编组 → 工具栏「合并为单元」→ 载入音频 → 真实点击「‹ 项目库」→ 提示条点 × dismiss → **context.close 完全退出浏览器 → 同 profile 重启** → 复核 | [STATE] 全程 STORAGE_MODE='ls'；重启后项目自动恢复、编组/合并/positions 与 Phase-A LS 落盘快照**深等**、audio.name 随项目数据保留而 blob 缺失（audio.ready=false、零崩溃）｜ [DOM] 首启提示条可见 → dismiss 跨重启不再显示；库卡片含标题；重启后库卡片点开可编辑（真实点击选中舞者）｜ [键白名单] LS 仅 `wuzhen:proj:*` + 白名单键，音频/杂散数据不落 LS | file:// 离线档跨浏览器**完全重启**的持久化/音频降级/dismiss 记忆语义（轮 7 离线回退回归） |
 
-**执行**：IR 组经 lab/run-realinput.mjs 驱动（`node run-realinput.mjs [roundTag] [both|headless|headed]`）；产出 out/&lt;roundTag&gt;/results.json + report.md + shots/（关键帧截图）+ evidence/&lt;mode&gt;-&lt;case&gt;/replay.json（失败证据包）。IR 组 5 格独立判定（headless/headed 各一遍），不改变 L0/L1/R/GR/L2 格数与单测红线。
+**执行**：IR-01..05 经 lab/run-realinput.mjs 驱动（`node run-realinput.mjs [roundTag] [both|headless|headed]`）；产出 out/&lt;roundTag&gt;/results.json + report.md + shots/（关键帧截图）+ evidence/&lt;mode&gt;-&lt;case&gt;/replay.json（失败证据包）。**IR-06（round16 起）经 lab/run-ir06.mjs 驱动并由 run-realinput.mjs 接线同报告判定**：persistent-context file:// 是新形态——被测对象是 dist 单文件（不经 dev server）、需跨浏览器完全退出重启（必须 launchPersistentContext 真实磁盘 profile）、持久化语义与窗口可见性无关 → **单通道执行（不适用 headless/headed 双通道口径）**，产出 out/&lt;roundTag&gt;/ir06-results.json + ir06-report.md + ir06-shots/，profile 留档 `out/<roundTag>/ir06-profile/`。console 错误一票否决同上（favicon 404 良性除外）。IR 组 6 用例：IR-01..05 双通道 10 格 + IR-06 单通道 1 格，不改变 L0/L1/R/GR/L2 格数与单测红线。
 
 ---
 
@@ -251,7 +252,7 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 2. **失败即停**：记录证据包（用例 id、步骤、四类检查点结果、positions/merges/groups 快照、失败帧截图）。
 3. **泄漏即停**：任一动线后 `debugPointers()` 非空 = 缺陷，修复后该组从头重跑。
 4. **SCREEN 失败 = 环境故障**：重建标签，从 L0 重来；不产出应用结论。
-5. **回归红线**：node 单测全绿（阈值随用例演进，**当前 107/107**，以 lab/run-l2.mjs 红线阈值为准；round15 同步：101→107，轮 6 触摸长按框选单测 +6）。
+5. **回归红线**：node 单测全绿（阈值随用例演进，**当前 111/111**，以 lab/run-l2.mjs 红线阈值为准；round16 同步：107→111，轮 7 file:// 离线档 store 单测 +4）。
 6. **证据包**：每条结论必须能引用 `{用例ID, 步骤, 四类检查点结果, 数据快照, 截图路径}`。
 
 ## 5. 已知局限（诚实声明）
@@ -267,4 +268,4 @@ gestureMenuClosed 解锁路径：触摸/笔长按（合并=单元菜单；未合
 2. 样式收敛：P3、C-01/C-02/C-03、R-01 的样式探针与按钮断言改为 capsule/single（diamond/twin 仅作为载入迁移语义存在于单测）；
 3. 新增 GR 组（§3.6）与仪器 tests/page-gr.js + lab/run-gr.mjs；C-08 从「名册舞对联动」重写为「名册与编组管理」；
 4. v1 仪器 tests/page-matrix.js 标记废弃归档（违反 G2 改名键纪律 + 读取已退役的 pairs 字段，仅存档不再执行）；
-5. 阈值：L0 门禁 20/20、L1 29 格、R 10 格、GR 7 格、L2 12 格、IR 5 格（round15 新增，headless/headed 双通道）、单测 107/107（96→101 v3，101→107 round15 轮 6 触摸长按框选 +6）。
+5. 阈值：L0 门禁 20/20、L1 29 格、R 10 格、GR 7 格、L2 12 格、IR 6 用例（round15 新增；IR-01..05 headless/headed 双通道 10 格 + round16 新增 IR-06 persistent-context file:// 单通道 1 格）、单测 111/111（96→101 v3，101→107 round15 轮 6 +6，107→111 round16 轮 7 file:// 离线档 store +4）。

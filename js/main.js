@@ -193,6 +193,7 @@ async function boot() {
   wireAudioPanel();
   wireMobileTabs();
   wireLibrary();
+  wireOfflineNote();
   wireKeyboard();
   try {
     applyTheme(store.getState().theme);
@@ -703,6 +704,20 @@ function wireMobileTabs() {
 // ---------- 项目库 ----------
 function wireLibrary() {
   $('btn-new-project').addEventListener('click', () => showNewProjectModal(opts => { store.createNewProject(opts); player.stop(); }));
+}
+// 离线档（file://）一次性提示：仅 file 源显示，关闭后 localStorage 记住已读（file 下持久）
+function wireOfflineNote() {
+  const note = $('offline-note');
+  if (!note) return;
+  let show = false;
+  try {
+    show = store.isFileOrigin() && localStorage.getItem('wuzhen:offlineNoteDismissed') !== '1';
+  } catch { show = store.isFileOrigin(); } // 隐私模式下 localStorage 不可用则每次都提示
+  note.hidden = !show;
+  $('offline-note-close').addEventListener('click', () => {
+    note.hidden = true;
+    try { localStorage.setItem('wuzhen:offlineNoteDismissed', '1'); } catch {}
+  });
 }
 function renderLibraryView() {
   const s = store.getState();

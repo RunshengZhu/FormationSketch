@@ -79,3 +79,104 @@ test('undo 后 formationIndex 自校正', () => {
   store.undo(); // 撤销新队形 → 队形只剩 1 个
   assert.ok(store.getState().formationIndex < store.getState().project.formations.length);
 });
+
+// ---------- 离线 localStorage 档（file:// 回退） ----------
+// 通过「先设全局 location/localStorage 再动态 import（带 query 换模块实例）」模拟 file:// 打开场景；
+// node --test 每个文件独立进程，全局污染不外泄。静态 import 的 store（无 location）即 http/Node 现状。
+function fakeLs() {
+  const m = new Map();
+  return {
+    getItem: k => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { m.set(k, String(v)); },
+    removeItem: k => { m.delete(k); },
+    key: i => [...m.keys()][i] ?? null,
+    get length() { return m.size; },
+  };
+}
+async function loadStoreInMode(protocol, ls) {
+  const prevLoc = globalThis.location;
+  const prevLs = globalThis.localStorage;
+  globalThis.location = { protocol };
+  globalThis.localStorage = ls;
+  const mod = await import(`../js/store.js?mode-${protocol}-${Math.random()}`);
+  return { mod, restore: () => { globalThis.location = prevLoc; globalThis.localStorage = prevLs; } };
+}
+
+test('file 协议判定 → 选 localStorage 档；http 不走 LS', async () => {
+  const fileCtx = await loadStoreInMode('file:', fakeLs());
+  try {
+    assert.equal(fileCtx.mod.STORAGE_MODE, 'ls');
+    assert.equal(fileCtx.mod.isFileOrigin(), true);
+  } finally { fileCtx.restore(); }
+
+  const ls2 = fakeLs();
+  const httpCtx = await loadStoreInMode('https:', ls2);
+  try {
+    assert.notEqual(httpCtx.mod.STORAGE_MODE, 'ls');
+    assert.equal(httpCtx.mod.isFileOrigin(), false);
+    // http 档绝不写 LS 键
+    await httpCtx.mod.storage.putProject({ id: 'prj_http', meta: { title: 'x' }, dancers: [], groups: [], formations: [{ id: 'f', positions: {} }], timeline: { blocks: [] }, audio: {}, stage: {} });
+    assert.equal(ls2.length, 0, 'https 下不应产生任何 wuzhen: 键');
+  } finally { httpCtx.restore(); }
+});
+
+test('LS 档 CRUD/列表/删除语义与 IDB 档一致', async () => {
+  const ls = fakeLs();
+  const { mod, restore } = await loadStoreInMode('file:', ls);
+  try {
+    const p = M.createProject({ title: '离线测试', pairs: 2 });
+    p.id = 'prj_ls1';
+    await mod.storage.putProject(p);
+    assert.ok(ls.getItem('wuzhen:proj:prj_ls1'), 'putProject 应写入 wuzhen:proj:<id> 键');
+    const got = await mod.storage.getProject('prj_ls1');
+    assert.equal(got.meta.title, '离线测试');
+    assert.equal(got.dancers.length, 4);
+    assert.ok(got.meta.updatedAt, 'putProject 应盖 updatedAt 时间戳');
+    assert.ok(got !== p, 'getProject 返回反序列化新对象，不共享引用');
+    // 列表按 updatedAt 降序（与 IDB 档一致）：直接写两条不同时间戳的记录
+    const older = M.createProject({ title: '旧', pairs: 1 }); older.id = 'prj_old';
+    older.meta.updatedAt = '2026-01-01T00:00:00.000Z';
+    ls.setItem('wuzhen:proj:prj_old', JSON.stringify(older));
+    const list = await mod.storage.listProjects();
+    assert.equal(list.length, 2);
+    assert.deepEqual(list.map(x => x.id), ['prj_ls1', 'prj_old']);
+    // 删除后 getProject → null、列表为空；删除不存在的 id 不抛
+    await mod.storage.deleteProject('prj_ls1');
+    assert.equal(await mod.storage.getProject('prj_ls1'), null);
+    await mod.storage.deleteProject('prj_never_existed');
+    assert.equal((await mod.storage.listProjects()).length, 1);
+  } finally { restore(); }
+});
+
+test('LS 档音频降级：putAudio 不落盘不抛、getAudio 返回空', async () => {
+  const ls = fakeLs();
+  const { mod, restore } = await loadStoreInMode('file:', ls);
+  try {
+    const blob = new Blob([new Uint8Array([9, 9, 9])], { type: 'audio/wav' });
+    await mod.storage.putAudio('prj_ls2', blob); // 不得抛
+    assert.equal(await mod.storage.getAudio('prj_ls2'), null);
+    const audioKeys = [...Array(ls.length).keys()].map(i => ls.key(i)).filter(k => !k.startsWith('wuzhen:proj:'));
+    assert.deepEqual(audioKeys, [], '音频不得写入 localStorage 任何键');
+  } finally { restore(); }
+});
+
+test('LS 档脏数据清洗：不可解析条目移除、可解析条目 validate 净化，boot 不失败', async () => {
+  const ls = fakeLs();
+  const dirty = M.createProject({ title: '脏', pairs: 1 });
+  dirty.id = 'prj_dirty';
+  dirty.stage.widthM = '30';          // 字符串数值 → 应清洗为 number
+  dirty.stage.depthM = 'not-a-num';   // 非法 → 回落默认 16
+  ls.setItem('wuzhen:proj:prj_dirty', JSON.stringify(dirty));
+  ls.setItem('wuzhen:proj:prj_broken', '{not-json'); // 不可解析 → 应被移除
+  const { mod, restore } = await loadStoreInMode('file:', ls); // 模块加载即启动清洗
+  try {
+    const clean = await mod.storage.getProject('prj_dirty');
+    assert.equal(typeof clean.stage.widthM, 'number');
+    assert.equal(clean.stage.widthM, 30);
+    assert.equal(clean.stage.depthM, 16);
+    assert.equal(await mod.storage.getProject('prj_broken'), null);
+    assert.equal(ls.getItem('wuzhen:proj:prj_broken'), null, '不可解析条目应在启动时移除');
+    const list = await mod.storage.listProjects();
+    assert.deepEqual(list.map(x => x.id), ['prj_dirty'], '脏数据不致 boot/列表失败');
+  } finally { restore(); }
+});
