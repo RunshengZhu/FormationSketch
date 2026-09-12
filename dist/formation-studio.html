@@ -190,9 +190,13 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 }
 @media (max-width:1023.5px){
   #topbar{gap:4px;padding:0 6px}
+  /* DEFECT-L2-3：375px 顶栏放不下版本徽标（~90px），是页面级横向溢出的根源
+     （#btn-export right=405>375）；移动端隐藏后其余控件可全部收入视口。
+     桌面端（≥1024px）不受影响，G1 门禁的可见版本徽标断言在 1280 宽下照常通过。 */
+  #build-tag{display:none}
   .title-input{flex:1 1 40px;min-width:0;width:0;text-align:center;font-size:13px}
   .btn.small{padding:6px 10px} /* 触摸目标 */
-  #playbar{gap:5px;padding:0 6px}
+  #playbar{gap:5px;padding:0 6px;overflow-x:auto} /* DEFECT-L2-3：375px 下播放条固定内容(节拍器 ctl)右缘=419>375，收敛为内部滚动（同 #stage-tools 模式） */
   #pb-formation{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #stage-tools{gap:4px;padding:4px 6px;flex-wrap:nowrap;overflow-x:auto}
   .rot-ctl input[type=range]{width:64px}
@@ -218,6 +222,8 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .unit-menu .um-btn.um-cur{border-color:var(--acc);color:var(--acc);font-weight:600}
 .unit-menu .um-btn.um-cancel{border-color:var(--line);color:var(--dim)}
 
+.build-tag{font-size:10px;color:var(--dim);opacity:.7;margin-left:8px;user-select:none}
+
 </style>
 </head>
 <body>
@@ -239,7 +245,7 @@ body[data-mtab="formations"] #tl-scroll{display:none}
   <!-- ===== 编辑器视图 ===== -->
   <section id="editor-view" class="view" hidden>
     <header id="topbar">
-      <button id="btn-back" class="btn ghost" title="返回项目库">‹ 项目库</button>
+      <button id="btn-back" class="btn ghost" title="返回项目库">‹ 项目库</button><span id="build-tag" class="build-tag"></span>
       <input id="proj-title" class="title-input" spellcheck="false" title="项目名称">
       <span class="spacer"></span>
       <button id="btn-theme" class="btn ghost" title="切换深色/浅色主题">🌙</button>
@@ -1541,6 +1547,357 @@ class Player {
 Object.assign(FS.player, { Player });
 })();
 
+/* ===== module: gesture ===== */
+FS.gesture = FS.gesture || {};
+FS.gesture = FS.gesture || {};
+(function(){
+'use strict';
+
+// 纯手势状态机：不依赖 DOM/渲染/存储，可在 node 中用假时钟直接驱动（tests/gesture.test.js）。
+// stage.js 是它的薄客户端：把 PointerEvent 翻译成 down/move/up 事件对象，
+// 并执行状态机通过 host 吐出的命令（选择/移动/回滚/浮窗/框选/平移缩放）。
+//
+// 状态转移总览：
+//   IDLE  --down(把手)--> FACE      --up(有变化)--> 提交"调整朝向"
+//   IDLE  --down(舞者)--> PENDING   --位移>晋升阈值--> DRAG --up--> 提交"移动舞者"（落点重叠→合并确认浮窗）
+//                                    --按住长按时长且位移小--> MENU（单元浮窗）
+//                                    --up--> TAP（仅选择；落点重叠同样弹合并确认）
+//   徽标即单元：无修饰键直接抓取「未入选且已收拢同点呈示」的合并舞者时，拖拽快照扩为
+//   整单元（两人同步位移）；选择本身仍逐人（点选只选中被点中者），先点后拖/shift/多选
+//   抓取不扩展（保持单人拉伸与组拖语义）；分离呈示（>0 收拢间距）的合并舞者仅拖其一人。
+//   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空）
+//   IDLE  --down(空白·触摸)--> PAN  --位移>晋升阈值--> panBy；未晋升抬起=清空选择（点按）
+//   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
+//   任意  --第二指按下--> PINCH（进行中的 DRAG 立即回滚）
+//   MENU  --任意按下--> 退出浮窗并吞掉该次按下（点外部=取消）
+//   DRAG/PENDING --Escape(cancel)--> 回滚到按下前快照，不产生历史
+
+// 所有手势阈值唯一出处（单位：米 / 毫秒 / client 像素）
+const TH = {
+  promoteM: 0.06,  // PENDING→DRAG 晋升位移
+  mergeM: 0.55,    // 拖动重叠触发合并确认的距离
+  showM: 0.8,      // 组队徽标呈示距离（与渲染 MERGE_DIST 一致）
+  dwellMs: 1500,   // 拖动重叠驻留时长：拖到位停住一段时间即弹合并确认（无需松手）
+  lpMs: 500,       // 长按触发时长（仅触摸端；桌面端为双击）
+  lpCancelPx: 12,  // 长按取消位移（client px，放宽以容忍手指抖动）
+  tapMs: 350,      // 双击间隔上限
+  boxMinPx: 6,     // 框选最小边长（client px），小于视为点击
+};
+
+function createGestureMachine(host) {
+  // host 查询：readOnly() hitHandle(px,py) hitDancer(x,y) toStage(px,py)
+  //            selection():string[] multiSelect():bool
+  //            formation():{positions,merges}|null stage() fmtIndex():number now():ms
+  // host 命令：select(ids,{add,toggleOff}) applyPositions({id:{x,y,facing?}})
+  //            rollback({id:{x,y}}) commit(label) showMenu({mode,ids,style,at,formationIndex})
+  //            hideMenu() box(rect|null) panBy(dx,dy) zoomAt(cx,cy,f) requestDraw()
+  const setT = host.setTimeout || ((fn, ms) => setTimeout(fn, ms));
+  const clearT = host.clearTimeout || (id => clearTimeout(id));
+
+  let state = 'IDLE';
+  let g = null;              // 当前手势上下文
+  let pinch = null;          // {dist,cx,cy}
+  const pointers = new Map(); // pointerId -> {x,y} client px
+  let lpTimer = null;        // 长按定时器句柄（触摸端）
+  let lastTap = null;        // {id,t} 双击检测
+
+  const firstTwo = () => [...pointers.values()].slice(0, 2);
+  function armLP() {
+    clearT(lpTimer); lpTimer = null;
+    lpTimer = setT(() => {
+      lpTimer = null;
+      if (state !== 'PENDING' || !g) return;
+      const fmt = host.formation();
+      const m = fmt && (fmt.merges || []).find(x => x.a === g.id || x.b === g.id);
+      if (!m) return; // 未合并舞者长按：无动作，保持等待拖动/单击
+      const a = fmt.positions[m.a], b = fmt.positions[m.b];
+      enterMenu({
+        mode: 'unit', ids: [m.a, m.b], style: m.style,
+        at: a && b && Math.hypot(a.x - b.x, a.y - b.y) <= TH.showM ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
+        formationIndex: host.fmtIndex(),
+      });
+    }, TH.lpMs);
+  }
+  function disarmLP() { if (lpTimer) { clearT(lpTimer); lpTimer = null; } }
+
+  function enterMenu(payload) {
+    state = 'MENU'; g = null;
+    host.showMenu(payload);
+    host.requestDraw();
+  }
+  function exitMenu() { host.hideMenu(); state = 'IDLE'; g = null; }
+  function endGesture() { state = 'IDLE'; g = null; }
+
+  // 拖拽中按 snap 网格计算整组目标位置（含舞台+后台钳制）
+  function computeTargets(start, dx, dy) {
+    const stg = host.stage();
+    const bs = stg.backstageM ?? 0;
+    let ddx = dx, ddy = dy;
+    if (stg.snap) {
+      const gs = stg.gridM;
+      const base = start[Object.keys(start)[0]];
+      if (base) {
+        ddx = Math.round((base.x + dx) / gs) * gs - base.x;
+        ddy = Math.round((base.y + dy) / gs) * gs - base.y;
+      }
+    }
+    const out = {};
+    for (const [id, s0] of Object.entries(start)) {
+      out[id] = {
+        x: Math.min(stg.widthM + bs, Math.max(-bs, s0.x + ddx)),
+        y: Math.min(stg.depthM + bs, Math.max(-bs, s0.y + ddy)),
+      };
+    }
+    return out;
+  }
+
+  // id 与他人重叠（<mergeM）且尚未结成舞伴 → 返回对方 id
+  function overlapOther(fmt, id) {
+    const p = fmt.positions[id];
+    if (!p) return null;
+    for (const [oid, q] of Object.entries(fmt.positions)) {
+      if (oid === id) continue;
+      if (Math.hypot(q.x - p.x, q.y - p.y) < TH.mergeM) {
+        const already = (fmt.merges || []).some(m => (m.a === id && m.b === oid) || (m.a === oid && m.b === id));
+        if (!already) return oid;
+      }
+    }
+    return null;
+  }
+
+  function abortToPinch() {
+    disarmLP();
+    if (state === 'DRAG' && g) host.rollback(g.start); // 半途拖拽回滚，不产生历史
+    if (state === 'BOX') host.box(null);
+    const [a, b] = firstTwo();
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+    g = null; state = 'PINCH';
+  }
+
+  // e = { pointerId, px, py, shift, touch, button, space }（px/py 为 client 坐标；
+  //      button=按下时的 PointerEvent.button，space=宿主跟踪的空格按住状态——桌面平移修饰键）
+  function down(e) {
+    if (state === 'MENU') { exitMenu(); return; } // 点外部=取消，并吞掉这次按下
+    pointers.set(e.pointerId, { x: e.px, y: e.py });
+    if (pointers.size === 2) { abortToPinch(); return; }
+    if (pointers.size > 2) return;
+    if (host.readOnly()) return;
+    // 桌面平移修饰键：中键（button=1）或空格按住+左键。仅在空白起手=平移；
+    // 命中把手/舞者时不启动任何编辑手势（平移意图优先，宁可不动作也不误编辑）。
+    const panMod = e.button === 1 || !!e.space;
+    // 命中优先级：朝向把手 > 舞者 > 空白
+    if (host.hitHandle(e.px, e.py)) {
+      if (panMod) return;
+      g = { kind: 'FACE', id: host.selection()[0], changed: false };
+      state = 'FACE';
+      return;
+    }
+    const s = host.toStage(e.px, e.py);
+    const hit = host.hitDancer(s.x, s.y);
+    if (hit) {
+      if (panMod) return;
+      const sel = host.selection();
+      let selectMod = false;
+      if (!sel.includes(hit)) { host.select([hit], { add: !!(e.shift || host.multiSelect()) }); selectMod = true; }
+      else if (e.shift) { host.select([hit], { add: true, toggleOff: true }); return; }
+      const fmt = host.formation();
+      // 徽标即单元（DEFECT-L2-1）：无修饰键直接抓取「未入选且已收拢同点（collapsePair
+      // 后呈示为单个徽标）」的合并舞者 → 拖拽快照扩为整单元，拖动两人同步位移。
+      // 条件刻意收窄：选择语义不变（点选仍只选中被点中者）；已入选（先点后拖）/shift/
+      // 多选抓取不扩展；未收拢（分离呈示）的合并舞者仅拖其一人（单元拉伸语义）。
+      let startIds = host.selection();
+      if (selectMod && !e.shift && !host.multiSelect() && fmt) {
+        const m = (fmt.merges || []).find(x => x.a === hit || x.b === hit);
+        const pa = m && fmt.positions[m.a], pb = m && fmt.positions[m.b];
+        if (m && pa && pb && Math.hypot(pa.x - pb.x, pa.y - pb.y) < 1e-6) startIds = [m.a, m.b];
+      }
+      const start = {};
+      for (const id of startIds) {
+        const p = fmt?.positions[id];
+        if (p) start[id] = { x: p.x, y: p.y };
+      }
+      g = { kind: 'PENDING', id: hit, startS: s, startPx: { x: e.px, y: e.py }, start, selectMod };
+      state = 'PENDING';
+      if (e.touch) armLP(); // 长按仅触摸端；桌面端用双击
+    } else if (panMod) {
+      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: false, promoted: true };
+      state = 'PAN';
+    } else if (!e.touch) {
+      g = { kind: 'BOX', x0: e.px, y0: e.py, x1: e.px, y1: e.py };
+      state = 'BOX';
+      host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 });
+    } else {
+      // 触摸空白：先以点按待定，位移超过晋升阈值才转平移；未晋升抬起=清空选择
+      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: true, promoted: false, startS: s };
+      state = 'PAN';
+    }
+  }
+
+  function move(e) {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.px, y: e.py });
+    if (state === 'MENU') return;
+    if (state === 'PINCH') {
+      if (pointers.size < 2 || !pinch) return;
+      const [a, b] = firstTwo();
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      if (pinch.dist > 8 && d > 0) host.zoomAt(cx, cy, d / pinch.dist); // 防零距离产生 Infinity
+      host.panBy(cx - pinch.cx, cy - pinch.cy);
+      pinch = { dist: d, cx, cy };
+      return;
+    }
+    if (!g) return;
+    if (g.kind === 'PENDING') {
+      if (Math.hypot(e.px - g.startPx.x, e.py - g.startPx.y) > TH.lpCancelPx) disarmLP();
+      const sNow = host.toStage(e.px, e.py);
+      if (Math.hypot(sNow.x - g.startS.x, sNow.y - g.startS.y) > TH.promoteM) {
+        g.kind = 'DRAG'; state = 'DRAG'; // 转正，落到下方 DRAG 分支立即响应
+      } else return;
+    }
+    if (g.kind === 'DRAG') {
+      const sNow = host.toStage(e.px, e.py);
+      host.applyPositions(computeTargets(g.start, sNow.x - g.startS.x, sNow.y - g.startS.y));
+      // 重叠驻留：拖到他人身上停住 dwellMs 即弹合并确认（无需松手）
+      const fmt = host.formation();
+      const other = fmt ? overlapOther(fmt, g.id) : null;
+      if (!other) { g.dwell = null; return; }
+      if (!g.dwell || g.dwell.other !== other) g.dwell = { other, start: host.now() };
+      else if (host.now() - g.dwell.start >= TH.dwellMs) {
+        const anchor = fmt.positions[g.id];
+        host.commit('移动舞者'); // 停在当前位置（取消确认也保留该次移动）
+        const ids = [g.id, other];
+        enterMenu({ mode: 'merge', ids, at: anchor, formationIndex: host.fmtIndex() });
+      }
+      return;
+    }
+    if (g.kind === 'FACE') {
+      const p = host.formation()?.positions[g.id];
+      if (p) {
+        const s = host.toStage(e.px, e.py);
+        const ang = Math.round(((Math.atan2(s.x - p.x, -(s.y - p.y)) * 180 / Math.PI) % 360 + 360) % 360);
+        if (ang !== (p.facing || 0)) { g.changed = true; host.applyPositions({ [g.id]: { x: p.x, y: p.y, facing: ang } }); }
+      }
+      return;
+    }
+    if (g.kind === 'PAN') {
+      if (!g.promoted) {
+        // 触摸空白：位移超过晋升阈值才转平移（阈值与拖拽晋升一致）
+        const sNow = host.toStage(e.px, e.py);
+        if (Math.hypot(sNow.x - g.startS.x, sNow.y - g.startS.y) <= TH.promoteM) return;
+        g.promoted = true; // 晋升当次即补齐自按下起的全部位移（平移量=手指位移，无滞后）
+      }
+      host.panBy(e.px - g.lastX, e.py - g.lastY);
+      g.lastX = e.px; g.lastY = e.py;
+      return;
+    }
+    if (g.kind === 'BOX') {
+      g.x1 = e.px; g.y1 = e.py;
+      host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 });
+    }
+  }
+
+  function up(e) {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    disarmLP();
+    if (state === 'MENU') { g = null; return; } // 浮窗期间抬起：无操作（按钮自会处理）
+    if (state === 'PENDING') {
+      // 纯点击（未转正、位置未动）：仅选择语义，不做重叠合并判定——
+      // 静止队形里本就相邻的两个未组队舞者，点击不应误弹合并确认
+      const sel = host.selection();
+      if (!g.selectMod && !host.multiSelect() && sel.length > 1 && sel.includes(g.id)) {
+        host.select([g.id]); // 多选中单击其一（未拖动、按下时未改选择）：收拢为单人
+      }
+      // 双击（tapMs 内二次单击同一舞者）：已合并 → 单元浮窗（桌面端替代长按）
+      const t = host.now();
+      const dbl = lastTap && lastTap.id === g.id && (t - lastTap.t) <= TH.tapMs;
+      lastTap = dbl ? null : { id: g.id, t };
+      if (dbl) {
+        const fmt = host.formation();
+        const m = fmt && (fmt.merges || []).find(x => x.a === g.id || x.b === g.id);
+        if (m) {
+          const a = fmt.positions[m.a], b = fmt.positions[m.b];
+          endGesture();
+          enterMenu({
+            mode: 'unit', ids: [m.a, m.b], style: m.style,
+            at: a && b && Math.hypot(a.x - b.x, a.y - b.y) <= TH.showM ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
+            formationIndex: host.fmtIndex(),
+          });
+          return;
+        }
+      }
+      endGesture();
+      return;
+    }
+    if (state === 'DRAG') {
+      const ctx = g;
+      const fmt = host.formation();
+      const other = fmt && overlapOther(fmt, ctx.id);
+      const anchor = fmt?.positions[ctx.id];
+      host.commit('移动舞者');
+      endGesture();
+      if (other) {
+        enterMenu({ mode: 'merge', ids: [ctx.id, other], at: anchor, formationIndex: host.fmtIndex() });
+      }
+      return;
+    }
+    if (state === 'FACE') {
+      if (g.changed) host.commit('调整朝向');
+      endGesture();
+      return;
+    }
+    if (state === 'BOX') {
+      const ctx = g;
+      const tiny = Math.abs(ctx.x1 - ctx.x0) < TH.boxMinPx && Math.abs(ctx.y1 - ctx.y0) < TH.boxMinPx;
+      let ids = [];
+      if (!tiny) {
+        const p1 = host.toStage(ctx.x0, ctx.y0), p2 = host.toStage(ctx.x1, ctx.y1);
+        const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
+        const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
+        ids = Object.entries(host.formation()?.positions || {})
+          .filter(([, p]) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
+          .map(([id]) => id);
+      }
+      host.select(ids, { add: !!e.shift });
+      host.box(null);
+      endGesture();
+      return;
+    }
+    if (state === 'PAN') {
+      // 触摸空白未晋升抬起 = 点按语义：清空选择（平移本身永不改选择）
+      if (g && g.touch && !g.promoted) host.select([]);
+      endGesture();
+      return;
+    }
+    if (state === 'PINCH') { endGesture(); return; }
+  }
+
+  // Escape / pointercancel：进行中手势取消；DRAG 回滚到按下前快照。
+  // 返回 true 表示消费了该次取消（调用方可据此决定是否再清空选择）。
+  function cancel() {
+    disarmLP();
+    if (state === 'DRAG' && g) { host.rollback(g.start); host.requestDraw(); endGesture(); return true; }
+    if (state === 'BOX') host.box(null);
+    if (state === 'MENU') { exitMenu(); return true; }
+    if (state !== 'IDLE') { endGesture(); return true; }
+    return false;
+  }
+
+  function reset() { // 场景切换等场景的强制复位（不回滚数据）
+    disarmLP();
+    pointers.clear(); pinch = null; g = null; lastTap = null; state = 'IDLE';
+  }
+
+  return {
+    down, move, up, cancel, reset,
+    state: () => state,
+    debugPointers: () => [...pointers.keys()], // 调试钩子：当前机器内的活跃指针
+  };
+}
+
+Object.assign(FS.gesture, { TH, createGestureMachine });
+})();
+
 /* ===== module: stage ===== */
 FS.stage = FS.stage || {};
 FS.stage = FS.stage || {};
@@ -1821,6 +2178,8 @@ class StageView {
     this.hooks = hooks;           // {select(ids,{add}), mutateLive(fn), commit(label), onStageClick()}
     this.view = null;
     this.box = null;
+    this._spaceHeld = false;   // 空格（平移修饰键）按住状态，由 main.js 键盘接线驱动
+    this._spaceGesture = false; // 本次按住空格期间是否发生过指针手势
     this.gesture = createGestureMachine(this._makeGestureHost());
     this._bind();
     this._ro = new ResizeObserver(() => this.requestDraw());
@@ -1939,6 +2298,7 @@ class StageView {
     this.view = drawScene(ctx, { x: 0, y: 0, w: W, h: H }, project, positions, {
       view: this.view,
       ghost, nextPositions,
+      merges: scene.merges || [],
       selection: scene.selection,
       showGrid: scene.showGrid,
       theme: scene.theme,
@@ -2064,18 +2424,33 @@ class StageView {
 
   _bind() {
     const cv = this.canvas;
-    const ev = e => ({ pointerId: e.pointerId, px: e.clientX, py: e.clientY, shift: e.shiftKey, touch: e.pointerType !== 'mouse' });
+    // 事件翻译：button=按下键位（1=中键）、space=空格按住状态（main.js 键盘接线跟踪，
+    // 经事件对象传给手势机——手势机保持纯函数、不读 DOM）
+    const ev = e => ({ pointerId: e.pointerId, px: e.clientX, py: e.clientY, shift: e.shiftKey, touch: e.pointerType !== 'mouse', button: e.button, space: this._spaceHeld });
     cv.addEventListener('pointerdown', e => {
+      if (e.button === 1) e.preventDefault(); // 中键按下：防浏览器自动滚动
+      if (this._spaceHeld) this._spaceGesture = true; // 本次按住空格期间发生了指针手势
       try { cv.setPointerCapture(e.pointerId); } catch {} // 合成事件/已释放指针时可能抛错
       this.gesture.down(ev(e));
     });
     cv.addEventListener('pointermove', e => this.gesture.move(ev(e)));
     cv.addEventListener('pointerup', e => this.gesture.up(ev(e)));
     cv.addEventListener('pointercancel', () => this.gesture.cancel());
+    // 中键的兼容鼠标事件默认行为（自动滚动）同样拦掉
+    cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     cv.addEventListener('wheel', e => {
       e.preventDefault();
       this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012));
     }, { passive: false });
+  }
+  // ---- 空格平移修饰键（main.js 驱动）----
+  get spaceHeld() { return this._spaceHeld; }
+  setSpaceHeld(on) {
+    const was = this._spaceHeld;
+    this._spaceHeld = !!on;
+    if (this._spaceHeld && !was) this._spaceGesture = false; // 新一次按住：重置"已参与手势"标记
+    if (!this._spaceHeld && was) { const used = this._spaceGesture; this._spaceGesture = false; return used; }
+    return false; // 松开时返回按住期间是否参与过指针手势（供上层决定是否触发原空格快捷键）
   }
   gestureCancel() { return this.gesture.cancel(); }
   gestureMenuClosed() { this.gesture.reset(); } // 浮窗经由自身按钮/上层关闭时同步解锁
@@ -2143,7 +2518,7 @@ class EditStrip {
       const dpr = window.devicePixelRatio || 1;
       if (cv.width !== 120 * dpr) { cv.width = 120 * dpr; cv.height = 68 * dpr; }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (f) drawScene(ctx, { x: 0, y: 0, w: 120, h: 68 }, p, f.positions, { minimal: true, pad: 4, pairLines: false });
+      if (f) drawScene(ctx, { x: 0, y: 0, w: 120, h: 68 }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], pairLines: false });
     });
   }
 }
@@ -2558,7 +2933,7 @@ function renderFormation(project, formation, { width = 1000, theme = 'light' } =
   cv.width = width;
   cv.height = Math.round(width * ratio);
   const ctx = cv.getContext('2d');
-  drawScene(ctx, { x: 0, y: 0, w: cv.width, h: cv.height }, project, formation.positions, { minimal: false, pad: 20, pairLocked: formation.pairLocked !== false, theme });
+  drawScene(ctx, { x: 0, y: 0, w: cv.width, h: cv.height }, project, formation.positions, { minimal: false, pad: 20, merges: formation.merges || [], pairLocked: formation.pairLocked !== false, theme });
   return cv;
 }
 function exportPNG(project, formation, theme = 'dark') {
@@ -2696,7 +3071,7 @@ function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplica
   for (const p of projects) {
     const cv = h('canvas', { width: 440, height: Math.round(440 * p.stage.depthM / p.stage.widthM) });
     const f0 = p.formations[0];
-    if (f0) drawScene(cv.getContext('2d'), { x: 0, y: 0, w: cv.width, h: cv.height }, p, f0.positions, { minimal: true, pad: 10, pairLines: false });
+    if (f0) drawScene(cv.getContext('2d'), { x: 0, y: 0, w: cv.width, h: cv.height }, p, f0.positions, { minimal: true, pad: 10, merges: f0.merges || [], pairLines: false });
     const card = h('div', { class: 'lib-card' },
       cv,
       h('div', { class: 'lc-body' },
@@ -2849,7 +3224,8 @@ const { renderLibrary, showNewProjectModal, showRosterModal, toast, h } = FS.ui;
 /* import from player */
 /* import from export */
 /* import from ui */
-window.__MAIN_BUILD = 'build-18-no-automerge-editlock';
+window.__MAIN_BUILD = 'build-19-matrix';
+const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);
 const audio = new AudioController();
@@ -3083,11 +3459,16 @@ function switchFormation(i) {
   player.pause(); // 无条件暂停（同时取消进行中的数拍入场）
   const s = store.getState();
   const changed = i !== s.formationIndex;
+  // DEFECT-L2-2：getState() 是活引用，setUI 会原地覆盖 formationIndex——动画端点必须
+  // 在 setUI 前暂存（from=切换前帧、to=目标帧，前后切换双向皆然），否则 from===to。
+  const fromF = s.project?.formations[s.formationIndex] || null;
+  const toF = s.project?.formations[i] || null;
+  const { previewOnSwitch: previewOn, editMode } = s;
   store.setUI({ formationIndex: i, selection: [] });
-  if (!s.editMode && player.beat > 0.001) player.seekFormation(i); // 查看模式：切换帧时播放头跟随所选队形
-  if (changed && s.previewOnSwitch) {
+  if (!editMode && player.beat > 0.001) player.seekFormation(i); // 查看模式：切换帧时播放头跟随所选队形
+  if (changed && previewOn) {
     // 双向过渡动画：从切换前的帧插值到目标帧（此前只有向后切才播动画）
-    stageView.startPositionsPreview(s.project.formations[s.formationIndex], s.project.formations[i], 700);
+    stageView.startPositionsPreview(fromF, toF, 700);
   }
 }
 async function addFormation(after = null) {
@@ -3636,7 +4017,13 @@ function wireKeyboard() {
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (store.getState().view !== 'editor') return;
     const s = store.getState();
-    if (e.code === 'Space') { e.preventDefault(); togglePlay(); return; }
+    if (e.code === 'Space') {
+      // 空格按住=平移修饰键（空格+左键空白拖动=平移）；原"空格=播放/暂停"延迟到
+      // keyup：若按住期间空格参与了指针手势（平移），则不触发播放切换
+      e.preventDefault();
+      stageView.setSpaceHeld(true);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) store.redo(); else store.undo();
@@ -3685,6 +4072,17 @@ function wireKeyboard() {
       }, '微调位置');
     }
   });
+  // 空格 keyup：结束平移修饰键状态；按住期间未参与指针手势 → 维持原"空格=播放/暂停"
+  document.addEventListener('keyup', e => {
+    if (e.code !== 'Space') return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (store.getState().view !== 'editor') return;
+    if (!stageView?.spaceHeld) return;
+    const used = stageView.setSpaceHeld(false);
+    if (!used) togglePlay();
+  });
+  window.addEventListener('blur', () => stageView?.setSpaceHeld(false)); // 焦点丢失防修饰键卡住
 }
 
 // ---------- 移动端队形索引条 ----------
@@ -3712,7 +4110,7 @@ function renderFormationIndex(state) {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       cv.width = 128 * dpr; cv.height = 72 * dpr;
       cv.style.width = '64px'; cv.style.height = '36px';
-      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, pairLines: false, view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
+      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], pairLines: false, view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
       const label = document.createElement('span');
       label.className = 'fi-label';
       label.textContent = (i + 1) + ' ' + f.name;
@@ -3797,6 +4195,11 @@ function render(state) {
 }
 
 boot();
+// 可见版本徽标：防止旧缓存页面误导验证
+requestAnimationFrame(() => {
+  const bt = document.getElementById('build-tag');
+  if (bt) bt.textContent = BUILD_TAG;
+});
 
 // 自动化测试钩子（不影响正常使用）：注入音频、读取状态
 window.__fs = {

@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(root, 'dist', 'formation-studio.html');
 
 // 依赖拓扑序（被依赖者在前）
-const ORDER = ['model', 'shapes', 'store', 'audio', 'player', 'stage', 'timeline', 'export', 'ui', 'main'];
+const ORDER = ['model', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'timeline', 'export', 'ui', 'main'];
 // 'export' 是保留字，命名空间键用 exporter
 const nsKey = mod => (mod === 'export' ? 'exporter' : mod);
 
