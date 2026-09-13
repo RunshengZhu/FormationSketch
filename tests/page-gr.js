@@ -303,7 +303,7 @@ export async function runGR(opts = {}) {
 
     // ---------- GR-04 组操作组合 ----------
     {
-      id: 'GR-04', name: '组选中后：整组移动 → 统一朝向（面向圆心）→ 右键删除组内一员（既有路径+引用联动）',
+      id: 'GR-04', name: '组选中后：整组移动 → 统一朝向（面向圆心）→ 右键删除所选（multi 菜单删整组+引用联动）→ 单人删除回归',
       async run(t, { step }) {
         const G = [t.ids[0], t.ids[1], t.ids[2]];
         const outsiders = t.ids.slice(3);
@@ -349,23 +349,28 @@ export async function runGR(opts = {}) {
         step('[STATE] 统一朝向：组内 3 人 facing=面向圆心角度（逐人精确）、历史「统一朝向」', faceOK && store.undoLabel() === '统一朝向',
           G.map(id => `facing=${t.posOf(id).facing} 期望=${ang(t.posOf(id))}`).join(' '));
 
-        // ---- 步3 右键删除组内一员（既有 removeDancer 路径 → 组引用联动清理）----
+        // ---- 步3 右键组员（组 3 人仍选中）→ multi 菜单「删除所选（3 人）」删整组 ----
+        // （round23 需求 1 新语义：命中者∈selection≥2 → 整 selection 菜单，操作对象=整个 selection；
+        //   单人「删除」入口保留在命中者不在选择时的单人菜单——步5 回归。仪器回填 round24-ux2-verify。）
         const victim = G[2];
         const n0 = state().project.dancers.length;
         const vicPt = t.ptOf(victim);
         await inp.contextMenu(vicPt.x, vicPt.y, { hw: 'mouse' });
         await raf2();
         const menuEl = document.querySelector('.unit-menu');
-        const delBtn = menuEl && [...menuEl.querySelectorAll('.um-btn')].find(b => b.textContent === '删除');
-        step('[DOM] 右键组员弹「删除」菜单（未合并=舞者菜单）', !!menuEl && !!delBtn && menuEl.textContent.includes('舞者 · '), menuEl ? menuEl.textContent.slice(0, 30) : '无 .unit-menu', 'DOM');
-        if (delBtn) await clickDom(delBtn);
+        const multiDelBtn = menuEl && [...menuEl.querySelectorAll('.um-btn')].find(b => b.textContent === '删除所选（3 人）');
+        const soloDelBtn = menuEl && [...menuEl.querySelectorAll('.um-btn')].find(b => b.textContent === '删除');
+        step('[DOM] 右键组员（组选中中）弹 multi 菜单「所选 3 人」+「删除所选（3 人）」（无单人「删除」）',
+          !!menuEl && !!multiDelBtn && !soloDelBtn && menuEl.textContent.includes('所选 3 人'),
+          menuEl ? menuEl.textContent.slice(0, 30) : '无 .unit-menu', 'DOM');
+        if (multiDelBtn) await clickDom(multiDelBtn);
         await raf2();
         const inv = invariants();
-        const delOK = state().project.dancers.length === n0 - 1 && !state().project.dancers.some(d => d.id === victim) &&
-          t.groups().length === 1 && t.groups()[0].memberIds.length === 2 && !t.groups()[0].memberIds.includes(victim) &&
-          !t.sel().includes(victim) && inv.keyOK && inv.mergeOK && inv.groupsOK && !document.querySelector('.unit-menu');
-        step('[STATE] 删除：舞者移除、组 memberIds 联动清理（3→2）、选择残留清理、不变式成立', delOK,
-          `dancers=${state().project.dancers.length} 组员=${t.groups()[0]?.memberIds.length} sel含victim=${t.sel().includes(victim)} ${t.hist()}`);
+        const delOK = state().project.dancers.length === n0 - 3 && G.every(id => !state().project.dancers.some(d => d.id === id)) &&
+          t.groups().length === 1 && t.groups()[0].memberIds.length === 0 && // 组引用联动清空（删除舞者→清引用）
+          t.sel().length === 0 && inv.keyOK && inv.mergeOK && inv.groupsOK && !document.querySelector('.unit-menu');
+        step('[STATE] 删除所选（3 人）：3 人全移除、组 memberIds 联动清空、选择清空、菜单关闭、不变式成立', delOK,
+          `dancers=${state().project.dancers.length} 组员=${t.groups()[0]?.memberIds.length} sel=${t.sel().length} ${t.hist()}`);
         const r = await cmpShot('gr04-after-del');
         cmpStep(step, r);
 
@@ -375,6 +380,28 @@ export async function runGR(opts = {}) {
         const backOK = state().project.dancers.length === n0 && t.groups()[0].memberIds.length === 3 &&
           Math.abs(t.posOf(victim).x - g0[2].x - gd.x) < 1e-9;
         step('[STATE] undo：删除还原（组复原 3 人、被删者回组内新位置）', backOK, `dancers=${state().project.dancers.length} ${t.hist()}`);
+
+        // ---- 步5 命中者不在选择：先单选命中者 → 单人菜单「删除」仍删 1 人（组引用 3→2 联动既有路径）----
+        await inp.click(t.blank.x, t.blank.y, { hw: 'mouse' });
+        await raf2();
+        const clearedOK = t.sel().length === 0;
+        await inp.contextMenu(t.ptOf(victim).x, t.ptOf(victim).y, { hw: 'mouse' });
+        await raf2();
+        const soloMenu = document.querySelector('.unit-menu');
+        const soloBtn = soloMenu && [...soloMenu.querySelectorAll('.um-btn')].find(b => b.textContent === '删除');
+        step('[DOM] 空选右键组员：单人「删除」菜单（命中者不在选择→自动单选）',
+          clearedOK && !!soloMenu && !!soloBtn && sortedEq(t.sel(), [victim]) && soloMenu.textContent.includes('舞者 · '),
+          soloMenu ? soloMenu.textContent.slice(0, 30) : '无 .unit-menu', 'DOM');
+        if (soloBtn) await clickDom(soloBtn);
+        await raf2();
+        const inv2 = invariants();
+        const soloOK = state().project.dancers.length === n0 - 1 && !state().project.dancers.some(d => d.id === victim) &&
+          t.groups().length === 1 && t.groups()[0].memberIds.length === 2 && !t.groups()[0].memberIds.includes(victim) &&
+          !t.sel().includes(victim) && inv2.keyOK && inv2.mergeOK && inv2.groupsOK && !document.querySelector('.unit-menu');
+        step('[STATE] 单人删除：1 人移除、组 memberIds 联动清理（3→2）、不变式成立（既有路径回归）', soloOK,
+          `dancers=${state().project.dancers.length} 组员=${t.groups()[0]?.memberIds.length} ${t.hist()}`);
+        store.undo(); // 还原场景（后续泄漏检查在干净态执行）
+        await raf2();
       },
     },
 

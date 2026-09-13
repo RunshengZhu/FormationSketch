@@ -9,6 +9,23 @@ export class EditStrip {
     this.hooks = hooks; // {select(i), add(), duplicate(), delete(), move(from,to), getProject(), getIndex(), names()}
     this._key = '';
     this._thumbTimer = null;
+    // round23 需求 3：缩略图按容器实测尺寸 × dpr 绘制——容器尺寸变化（窗口缩放、移动端
+    // 队形 tab 从 display:none 展开）时按新尺寸重绘，保持舞台纵横比、不拉伸不裁切。
+    if (typeof ResizeObserver !== 'undefined') {
+      this._ro = new ResizeObserver(() => this.drawThumbs());
+      this._ro.observe(container);
+    }
+  }
+  // 缩略图盒尺寸（CSS px）：宽=列表可用宽（上限 160），高按舞台（含后台）纵横比反推。
+  // 高度上限 96：保证 1280×800 桌面下前 3 个 chip 完整落在 #formation-list 可视区内
+  // （既有动线依赖不滚动直点第 3 个 chip；round23 回归教训——148px 高会把 chip3 挤出可视区，
+  // 使其中心坐标落进底部时间轴区，点击变成 scrub）。
+  thumbSize(p) {
+    const avail = Math.max(40, Math.min(160, (this.el.clientWidth || 164) - 26));
+    const bs = p.stage.backstageM ?? 0;
+    const bw = p.stage.widthM + bs * 2, bh = p.stage.depthM + bs * 2;
+    const w = Math.round(Math.min(avail, 96 * bw / bh));
+    return { w, h: Math.round(w * bh / bw) };
   }
   render() {
     const p = this.hooks.getProject();
@@ -22,14 +39,14 @@ export class EditStrip {
       chip.className = 'es-chip' + (i === this.hooks.getIndex() ? ' active' : '');
       chip.draggable = true;
       const cv = document.createElement('canvas');
-      cv.width = 120; cv.height = 68;
       const nm = document.createElement('div');
       nm.className = 'es-name';
       nm.textContent = `${i + 1}. ${f.name}`;
       nm.title = f.name;
       chip.append(cv, nm);
       chip.addEventListener('click', () => this.hooks.select(i));
-      chip.addEventListener('dragstart', e => { this._dragFrom = i; e.dataTransfer.effectAllowed = 'move'; });
+      chip.addEventListener('dragstart', e => { this._dragFrom = i; chip.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+      chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
       chip.addEventListener('dragover', e => { e.preventDefault(); });
       chip.addEventListener('drop', e => { e.preventDefault(); if (this._dragFrom != null && this._dragFrom !== i) this.hooks.move(this._dragFrom, i); this._dragFrom = null; });
       this.el.append(chip);
@@ -44,14 +61,22 @@ export class EditStrip {
   drawThumbs() {
     const p = this.hooks.getProject();
     if (!p) return;
+    const { w, h } = this.thumbSize(p);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = Math.round(w * dpr), H = Math.round(h * dpr);
     [...this.el.querySelectorAll('.es-chip')].forEach((chip, i) => {
       const f = p.formations[i];
       const cv = chip.querySelector('canvas');
+      if (!cv) return;
+      if (cv.width !== W || cv.height !== H) {
+        cv.width = W; cv.height = H;
+        // CSS 尺寸同步锁定（宽=实测可用宽、高=舞台纵横比），避免 100% 拉伸变形
+        cv.style.width = w + 'px';
+        cv.style.height = h + 'px';
+      }
       const ctx = cv.getContext('2d');
-      const dpr = window.devicePixelRatio || 1;
-      if (cv.width !== 120 * dpr) { cv.width = 120 * dpr; cv.height = 68 * dpr; }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (f) drawScene(ctx, { x: 0, y: 0, w: 120, h: 68 }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [] });
+      if (f) drawScene(ctx, { x: 0, y: 0, w, h }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [] });
     });
   }
 }

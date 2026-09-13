@@ -16,7 +16,8 @@
 //                                    --静止 lpMs（位移<lpCancelPx）--> BOX(长按框选 lpBox)：拖动画框、
 //                                     松手复用桌面框选结算；期间忽略新增手指（不转 PINCH，直到松手）
 //   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
-//   IDLE  --contextmenu(右键·stage 层翻译进来)--> MENU（命中合并=单元菜单/未合并=删除菜单；仅 IDLE 响应）
+//   IDLE  --contextmenu(右键·stage 层翻译进来)--> MENU（多选中命中=整 selection 菜单（恰一单元=
+//            单元浮窗）；命中者不在多选中=先选中再弹（合并=单元菜单/未合并=删除菜单）；仅 IDLE 响应）
 //   任意  --第二指按下--> PINCH（进行中的 DRAG 立即回滚）
 //   MENU  --任意按下--> 退出浮窗并吞掉该次按下（点外部=取消）
 //   DRAG/PENDING --Escape(cancel)--> 回滚到按下前快照（整单元），不产生历史
@@ -65,12 +66,50 @@ export function createGestureMachine(host) {
       formationIndex: host.fmtIndex(),
     };
   }
+  // 多选上下文菜单载荷：菜单操作对象=整个 selection（单元原子展开、去重、保持选择顺序）。
+  // 命中者仅作锚点（浮窗弹在其旁），不影响操作范围。
+  function expandedIds(fmt, sel) {
+    const out = [];
+    const seen = new Set();
+    for (const id of sel) {
+      for (const u of unitOf(fmt, id)) {
+        if (!seen.has(u)) { seen.add(u); out.push(u); }
+      }
+    }
+    return out;
+  }
+  // ids 恰为一个合并单元（样式按钮/单元浮窗的唯一形态）
+  function singleUnitOf(fmt, ids) {
+    if (!fmt || ids.length !== 2) return null;
+    return (fmt.merges || []).find(m => (m.a === ids[0] && m.b === ids[1]) || (m.a === ids[1] && m.b === ids[0])) || null;
+  }
+  // 多选触发（右键/长按命中者已在 selection≥2 中）的统一分流：
+  // 恰好选中一个单元 → 既有单元浮窗（样式按钮仅此处出现）；其余 → multi 载荷（整 selection 操作）。
+  function menuPayloadForSelection(fmt, sel, anchorId) {
+    const ids = expandedIds(fmt, sel);
+    if (ids.length >= 2) {
+      const unit = singleUnitOf(fmt, ids);
+      if (unit) return unitMenuPayload(fmt, unit);
+      return {
+        mode: 'multi', ids,
+        at: fmt?.positions[anchorId] || { x: 0, y: 0 },
+        formationIndex: host.fmtIndex(),
+      };
+    }
+    return null; // 展开后 <2 人：调用方落回单人/单元菜单
+  }
   function armLP() {
     clearT(lpTimer); lpTimer = null;
     lpTimer = setT(() => {
       lpTimer = null;
       if (state !== 'PENDING' || !g) return;
       const fmt = host.formation();
+      // 多选中长按命中者（selection≥2 且含命中者）：菜单操作对象=整个 selection
+      const sel = host.selection();
+      if (sel.length >= 2 && sel.includes(g.id)) {
+        const payload = menuPayloadForSelection(fmt, sel, g.id);
+        if (payload) { enterMenu(payload); return; }
+      }
       const m = fmt && (fmt.merges || []).find(x => x.a === g.id || x.b === g.id);
       if (m) { enterMenu(unitMenuPayload(fmt, m)); return; } // 合并成员长按：单元浮窗
       // 未合并舞者长按：同款上下文菜单（仅「删除」入口）
@@ -360,17 +399,27 @@ export function createGestureMachine(host) {
   }
 
   // 鼠标右键（stage 层把 contextmenu 事件翻译进来）：与触摸/笔长按同款上下文菜单——
-  // 命中合并单元=单元浮窗；未合并舞者=仅「删除」菜单。仅手势机 IDLE 且非只读时响应。
-  // 返回 true 表示已弹出（调用方可据此忽略后续处理）。
+  // 多选中命中（selection≥2 且含命中者）=整 selection 菜单（multi 载荷；恰一单元=单元浮窗）；
+  // 命中者不在 selection=先（单元原子）选中它再出菜单；未合并单人=仅「删除」菜单。
+  // 仅手势机 IDLE 且非只读时响应。返回 true 表示已弹出（调用方可据此忽略后续处理）。
   function contextMenu(e) {
     if (state !== 'IDLE' || host.readOnly()) return false;
     const s = host.toStage(e.px, e.py);
     const hit = host.hitDancer(s.x, s.y);
     if (!hit) return false;
     const fmt = host.formation();
+    const sel = host.selection();
+    if (!(sel.length >= 2 && sel.includes(hit))) {
+      // 命中者不在多选中：先选中它（整单元）再出菜单——已恰为该单元时不重发（零抖动）
+      const unit = unitOf(fmt, hit);
+      if (!(unit.length === sel.length && unit.every(id => sel.includes(id)))) host.select(unit);
+    }
+    const sel2 = host.selection();
+    const payload = sel2.length >= 2 && sel2.includes(hit) ? menuPayloadForSelection(fmt, sel2, hit) : null;
+    if (payload) { enterMenu(payload); return true; }
     const m = fmt && (fmt.merges || []).find(x => x.a === hit || x.b === hit);
-    if (m) enterMenu(unitMenuPayload(fmt, m));
-    else enterMenu({ mode: 'context', ids: [hit], at: fmt?.positions[hit] || { x: s.x, y: s.y }, formationIndex: host.fmtIndex() });
+    if (m) { enterMenu(unitMenuPayload(fmt, m)); return true; }
+    enterMenu({ mode: 'context', ids: [hit], at: fmt?.positions[hit] || { x: s.x, y: s.y }, formationIndex: host.fmtIndex() });
     return true;
   }
 

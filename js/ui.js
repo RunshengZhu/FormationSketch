@@ -198,6 +198,8 @@ export function showRosterModal({ mutate, toast: t, getProject }) {
         ...Object.entries(ROLE_NAME).map(([v, n]) => h('option', { value: v, ...(d.role === v ? { selected: true } : {}) }, n)));
       const nameInp = h('input', { type: 'text', value: d.name, onchange: () => mutate(p => { p.dancers.find(x => x.id === d.id).name = nameInp.value; }, '重命名舞者') });
       const shortInp = h('input', { type: 'text', value: d.short, maxlength: '3', style: 'width:44px', onchange: () => mutate(p => { p.dancers.find(x => x.id === d.id).short = shortInp.value; }, '修改简称') });
+      // 颜色可编辑（round23 需求 2 补全）：取色器即改即存；改角色仍会重置为角色默认色（既有语义）
+      const colorInp = h('input', { type: 'color', value: d.color || '#64748b', title: '舞者颜色', style: 'width:34px;height:26px;padding:0;border:none;background:none', onchange: () => mutate(p => { p.dancers.find(x => x.id === d.id).color = colorInp.value; }, '修改颜色') });
       // 编组 chips：每枚可点 = 加入/移出该组（一名舞者可属多组）
       const groupCell = h('td', { class: 'roster-groups' },
         ...groups.map(g => {
@@ -215,7 +217,7 @@ export function showRosterModal({ mutate, toast: t, getProject }) {
         groups.length ? null : h('span', { class: 'dim' }, '—'));
       tb.append(h('tr', {},
         h('td', {}, nameInp), h('td', {}, shortInp), h('td', {}, roleSel),
-        h('td', {}, h('span', { style: `display:inline-block;width:16px;height:16px;border-radius:50%;background:${d.color};vertical-align:middle` })),
+        h('td', {}, colorInp),
         groupCell,
         h('td', {}, h('button', { class: 'btn small danger', onclick: () => {
           if (!confirm(`删除舞者「${d.name}」？（将从所有队形移除）`)) return;

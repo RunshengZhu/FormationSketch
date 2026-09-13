@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
-window.__MAIN_BUILD = 'build-22-presets';
+window.__MAIN_BUILD = 'build-23-r23ux';
 const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);
@@ -107,6 +107,11 @@ function showUnitMenu(payload) {
     title.className = 'um-title';
     title.textContent = '合并为单元';
     el.append(title);
+  } else if (payload.mode === 'multi') {
+    const title = document.createElement('div');
+    title.className = 'um-title';
+    title.textContent = `所选 ${payload.ids.length} 人`;
+    el.append(title);
   } else if (payload.mode === 'context' && !ctxMerge) {
     // 未合并舞者的上下文菜单（触摸/笔长按、鼠标右键共用）：仅「删除」
     const d = M.dancerById(store.getState().project, payload.ids[0]);
@@ -155,15 +160,68 @@ function showUnitMenu(payload) {
     });
     return untie;
   };
+  // 多选菜单按钮（mode='multi'，round23 需求 1）：操作对象=整个 selection（N=展开单元后人数）。
+  // 恰选 2 人且未合并 → 「合并为单元」（capsule 建单元，与面板按钮同语义）；
+  // 涉及合并单元 → 「取消合并」（拆开所有涉及单元，成员原地保留，涉及成员移出选择防组拖残留）；
+  // 「删除所选（N 人）」恒可用（替代单人「删除」）。样式按钮不在此出现——恰选一个单元时
+  // 状态机已分流到既有单元浮窗（样式按钮唯一出现处）。
+  const mkMultiMergeBtn = () => {
+    const b = document.createElement('button');
+    b.className = 'um-btn';
+    b.textContent = '合并为单元';
+    b.addEventListener('click', () => {
+      store.mutate(p => {
+        const f = p.formations[store.getState().formationIndex];
+        if (!f) return;
+        M.addMerge(f, payload.ids[0], payload.ids[1], 'capsule');
+        M.collapseUnit(f, payload.ids[0], payload.ids[1]);
+      }, '合并单元');
+      hideUnitMenu();
+    });
+    return b;
+  };
+  const mkMultiUntieBtn = involved => {
+    const b = document.createElement('button');
+    b.className = 'um-btn';
+    b.textContent = '✂ 取消合并';
+    b.addEventListener('click', () => {
+      store.mutate(p => {
+        const f = p.formations[store.getState().formationIndex];
+        for (const m of involved) M.removeMerge(f, m.a, m.b);
+      }, '取消合并');
+      const touched = new Set(involved.flatMap(m => [m.a, m.b]));
+      store.setUI({ selection: store.getState().selection.filter(id => !touched.has(id)) });
+      hideUnitMenu();
+    });
+    return b;
+  };
+  const mkMultiDeleteBtn = n => {
+    const b = document.createElement('button');
+    b.className = 'um-btn';
+    b.textContent = `删除所选（${n} 人）`;
+    b.style.color = '#ef4444'; // 危险动作着色（同单人删除）
+    b.addEventListener('click', () => {
+      store.mutate(p => { for (const id of payload.ids) M.removeDancer(p, id); }, `删除所选（${n} 人）`);
+      store.setUI({ selection: store.getState().selection.filter(id => !payload.ids.includes(id)) });
+      hideUnitMenu();
+    });
+    return b;
+  };
   // 按钮区按 mode 分支（DEFECT-R-1 根因：原 else 同时覆盖 context 与 unit 两种 mode）：
   // merge → 样式×2；unit → 拆开+样式×2+删除（既有顺序不变）；context+有 merge → 样式×2+拆开+删除；
-  // context+无 merge → 标题分支已加「删除」，此处不追加。✕ 取消按钮在下方对所有形态统一追加。
+  // context+无 merge → 标题分支已加「删除」，此处不追加；multi → 合并/取消合并（按态）+删除所选（N 人）。
+  // ✕ 取消按钮在下方对所有形态统一追加。
   if (payload.mode === 'merge') {
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
   } else if (payload.mode === 'unit') {
     el.append(mkUntieBtn());
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
     el.append(mkDeleteBtn()); // 删除单元 = 两名成员一并从队形与名册移除
+  } else if (payload.mode === 'multi') {
+    const involved = (currentFormation()?.merges || []).filter(m => payload.ids.includes(m.a) || payload.ids.includes(m.b));
+    if (payload.ids.length === 2 && !involved.length) el.append(mkMultiMergeBtn());
+    if (involved.length) el.append(mkMultiUntieBtn(involved));
+    el.append(mkMultiDeleteBtn(payload.ids.length));
   } else if (ctxMerge) {
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
     el.append(mkUntieBtn());
@@ -776,7 +834,7 @@ function buildProps() {
   const f = currentFormation();
   if (!f) return;
   const durKey = s.project.timeline.blocks.map(b => `${b.holdBeats}:${b.travelBeats}`).join(',');
-  const key = `${s.project.formations.map(x => x.id).join(',')}|${s.formationIndex}|${s.selection.join(',')}|${durKey}|${f.combined !== false}`;
+  const key = `${s.project.formations.map(x => x.id).join(',')}|${s.formationIndex}|${s.selection.join(',')}|${durKey}|${f.combined !== false}|${M.labelModeOf(s.project)}`;
   if (key === propsKey) return;
   propsKey = key;
   // 队形页
@@ -830,6 +888,17 @@ function buildProps() {
       h('div', { class: 'pg-title' }, '网格'),
       h('div', { class: 'prop-row' }, h('label', {}, '网格间距'), h('input', { type: 'number', min: '0.1', max: '2', step: '0.1', value: st.gridM, onchange: e => stageChange('gridM', e.target.value) })),
       h('div', { class: 'prop-row' }, h('label', {}, '拖动吸附'), h('input', { type: 'checkbox', ...(st.snap ? { checked: true } : {}), onchange: e => stageChange('snap', e.target.checked) }))),
+    // 显示字段（round23 需求 2）：canvas 舞者标签与合并单元编号的呈示来源，persist 进 project.settings
+    h('div', { class: 'prop-group' },
+      h('div', { class: 'pg-title' }, '舞者标签'),
+      h('div', { class: 'prop-row' }, h('label', {}, '显示字段'),
+        h('select', { onchange: e => store.mutate(p => {
+          p.settings = p.settings || {};
+          p.settings.labelMode = M.LABEL_MODES.includes(e.target.value) ? e.target.value : 'no';
+        }, '显示字段') },
+        ...M.LABEL_MODES.map(v => h('option', { value: v, ...(M.labelModeOf(s.project) === v ? { selected: true } : {}) },
+          { no: '编号序号', short: '简称', name: '姓名' }[v])))),
+      h('div', { class: 'dim' }, '作用于舞台画布、合并单元编号与全部缩略图；姓名缺失时回退简称→序号，长名自动截断。')),
     h('div', { class: 'prop-group' },
       h('div', { class: 'pg-title' }, '背景图'),
       h('div', { class: 'prop-row' },
@@ -1064,40 +1133,52 @@ function wireKeyboard() {
   window.addEventListener('blur', () => stageView?.setSpaceHeld(false)); // 焦点丢失防修饰键卡住
 }
 
-// ---------- 移动端队形索引条 ----------
-function fitThumbView(w, h, stage) {
-  const b = { x0: -(stage.backstageM ?? 0), y0: -(stage.backstageM ?? 0), x1: stage.widthM + (stage.backstageM ?? 0), y1: stage.depthM + (stage.backstageM ?? 0) };
-  const scale = Math.min((w - 8) / (b.x1 - b.x0), (h - 8) / (b.y1 - b.y0));
-  return { scale, ox: (w - (b.x1 - b.x0) * scale) / 2 - b.x0 * scale, oy: (h - (b.y1 - b.y0) * scale) / 2 - b.y0 * scale };
-}
+// ---------- 移动端队形索引条（round23 需求 3 重设计） ----------
+// chip 画布按舞台（含后台）纵横比定宽 × dpr 绘制（不拉伸不裁切、高分屏清晰）；当前帧
+// 高亮强化（主题色描边+光晕+编号着色）；条尾 ＋/－ 直达加减队形（移动端舞台 tab 无需切 tab）；
+// 每次 render 全量重绘缩略图——队形编辑提交后像素即时跟随（红线 C-03 同源语义）。
 let indexKey = '';
+let indexThumbs = []; // 与队形顺序对齐的 chip canvas 列表
 function renderFormationIndex(state) {
   const host = document.getElementById('formation-index');
   if (!host) return;
   const p = state.project;
-  if (!p) { host.innerHTML = ''; return; }
+  if (!p) { host.innerHTML = ''; indexThumbs = []; return; }
   const key = p.formations.map(f => f.id).join(',') + '|' + state.formationIndex;
   if (key !== indexKey) {
     indexKey = key;
     host.innerHTML = '';
+    indexThumbs = [];
     p.formations.forEach((f, i) => {
       const chip = document.createElement('button');
       chip.className = 'fi-chip' + (i === state.formationIndex ? ' active' : '');
       chip.title = (i + 1) + ' ' + f.name;
-      // 迷你缩略图（形状是最强的视觉记忆点）
+      const num = document.createElement('span');
+      num.className = 'fi-num';
+      num.textContent = String(i + 1);
       const cv = document.createElement('canvas');
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      cv.width = 128 * dpr; cv.height = 72 * dpr;
-      cv.style.width = '64px'; cv.style.height = '36px';
-      drawScene(cv.getContext('2d'), { x: 0, y: 0, w: 128 * dpr, h: 72 * dpr }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [], view: fitThumbView(128 * dpr, 72 * dpr, p.stage) });
       const label = document.createElement('span');
       label.className = 'fi-label';
-      label.textContent = (i + 1) + ' ' + f.name;
-      chip.append(cv, label);
+      label.textContent = f.name;
+      chip.append(num, cv, label);
       chip.addEventListener('click', () => switchFormation(i));
       host.append(chip);
+      indexThumbs.push(cv);
     });
+    // 加/减操作直达：＋ 新队形（复制当前后插）、－ 删除当前队形（守卫同面板按钮）
+    const mkBtn = (txt, title, cls, fn) => {
+      const b = document.createElement('button');
+      b.className = 'fi-btn' + (cls ? ' ' + cls : '');
+      b.textContent = txt;
+      b.title = title;
+      b.addEventListener('click', fn);
+      return b;
+    };
+    host.append(
+      mkBtn('＋', '新队形（复制当前）', '', () => addFormation()),
+      mkBtn('－', '删除当前队形', 'fi-danger', () => deleteFormation()));
   }
+  drawIndexThumbs(p);
   // 当前帧滚入可视区
   const active = host.children[state.formationIndex];
   if (active) {
@@ -1107,6 +1188,22 @@ function renderFormationIndex(state) {
       host.scrollLeft += ar.left - (hr.left + hr.width / 2) + ar.width / 2;
     }
   }
+}
+function drawIndexThumbs(p) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const H = 44; // 紧凑版固定高；宽按舞台纵横比反推（画布即舞台，无 letterbox）
+  const bs = p.stage.backstageM ?? 0;
+  const bw = p.stage.widthM + bs * 2, bh = p.stage.depthM + bs * 2;
+  const w = Math.max(24, Math.round(H * bw / bh));
+  indexThumbs.forEach((cv, i) => {
+    const f = p.formations[i];
+    if (!f) return;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(H * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(H * dpr);
+      cv.style.width = w + 'px'; cv.style.height = H + 'px';
+    }
+    drawScene(cv.getContext('2d'), { x: 0, y: 0, w, h: H }, p, f.positions, { minimal: true, pad: 2, merges: f.merges || [] });
+  });
 }
 
 // ---------- 总渲染 ----------

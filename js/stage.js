@@ -1,5 +1,5 @@
 // 舞台画布：渲染 + 命中测试；手势全部委托 gesture.js 纯状态机（本类是其薄客户端）
-import { faceAudience, posAt, computeSegments, easeInOut, lerpAngle } from './model.js';
+import { faceAudience, posAt, computeSegments, easeInOut, lerpAngle, labelModeOf, dancerLabel, truncateLabel } from './model.js';
 import { createGestureMachine } from './gesture.js';
 
 export const DANCER_R = 0.38; // 舞者圆点半径（米）
@@ -11,7 +11,11 @@ export function stageBounds(stage) {
 }
 export function fitView(canvasW, canvasH, stage, pad = 14) {
   const b = stageBounds(stage);
-  const scale = Math.min((canvasW - pad * 2) / (b.x1 - b.x0), (canvasH - pad * 2) / (b.y1 - b.y0));
+  const raw = Math.min((canvasW - pad * 2) / (b.x1 - b.x0), (canvasH - pad * 2) / (b.y1 - b.y0));
+  // DEFECT-M-1（round23 音乐 E2E 实测发现）：画布隐藏（rect 0×0，如 boot 竞态下编辑器尚未
+  // 显示）时 raw≤0 → 负 scale 一路传进 ctx.arc 抛 IndexSizeError（pageerror 一票否决面）。
+  // 非有限/非正的 scale 一律回退到保守正值（0 尺寸画布绘制本就是无害 no-op）。
+  const scale = Number.isFinite(raw) && raw > 0 ? raw : 10;
   const ox = (canvasW - (b.x1 - b.x0) * scale) / 2 - b.x0 * scale;
   const oy = (canvasH - (b.y1 - b.y0) * scale) / 2 - b.y0 * scale;
   return { scale, ox, oy };
@@ -145,6 +149,14 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
   //   分开超过阈值时呈示为两个独立圆 + 虚线绑定（拖动编辑互不影响）。
   const dancerById = id => project.dancers.find(x => x.id === id);
   const inSel = id => opts.selection?.has(id);
+  // 舞者标签（round23 需求 2）：跟随项目设置 settings.labelMode——
+  // 'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名（缺失回退简称→序号），长名截断省略。
+  const ordinalOf = new Map(project.dancers.map((d, i) => [d.id, i + 1]));
+  const labelOf = id => {
+    const d = dancerById(id);
+    if (!d) return '?';
+    return truncateLabel(dancerLabel(project, d, ordinalOf.get(id) || 0));
+  };
   function drawOne(id, p, px, py, rr, sel) {
     const d = dancerById(id); if (!d) return;
     // 朝向指示（圆内指针）
@@ -163,7 +175,7 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.fillStyle = '#fff';
     ctx.font = `700 ${Math.max(8, rr * 0.95)}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(d.short || '?', px, py + rr * 0.05);
+    ctx.fillText(labelOf(id), px, py + rr * 0.05);
   };
   function rrPath(x, y, w, h, rad) {
     ctx.beginPath();
@@ -181,11 +193,11 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.save();
     if (alpha !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     if (style === 'single') {
-      // 单编号：只画一个与单舞者同尺寸的圆（编号取成员中较小者）；
+      // 单编号：只画一个与单舞者同尺寸的圆（编号取成员中序号较小者，随 labelMode 呈示）；
       // 叠加虚线外环（主题强调色）——虚线环已足够区分于单人，×2 角标已移除
       const acc = dark ? '#38bdf8' : '#0284c7';
-      const num = v => (parseFloat(v?.short) || Number.MAX_SAFE_INTEGER);
-      const dd = [dA, dB].filter(Boolean).sort((x, y) => num(x) - num(y) || String(x.short).localeCompare(String(y.short)))[0] || dA;
+      const ord = v => ordinalOf.get(v?.id) ?? Number.MAX_SAFE_INTEGER;
+      const dd = [dA, dB].filter(Boolean).sort((x, y) => ord(x) - ord(y) || String(x.short).localeCompare(String(y.short)))[0] || dA;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fillStyle = dd?.color || '#64748b'; ctx.fill();
       ctx.lineWidth = sel ? Math.max(2.5, s * 0.09) : Math.max(1, s * 0.04);
@@ -193,7 +205,7 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
       ctx.fillStyle = '#fff';
       ctx.font = `700 ${Math.max(8, r * 0.95)}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(dd?.short || '?', cx, cy + r * 0.05);
+      ctx.fillText(dd ? labelOf(dd.id) : '?', cx, cy + r * 0.05);
       // 虚线外环（与内圆留出间隙）
       ctx.beginPath(); ctx.arc(cx, cy, r * 1.45, 0, Math.PI * 2);
       ctx.setLineDash([4, 3]);
@@ -216,8 +228,8 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
       ctx.fillStyle = '#fff';
       ctx.font = `700 ${Math.max(8, hh * 0.62)}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(dA?.short || '?', cx - w * 0.25, cy + hh * 0.02);
-      ctx.fillText(dB?.short || '?', cx + w * 0.25, cy + hh * 0.02);
+      ctx.fillText(labelOf(idA), cx - w * 0.25, cy + hh * 0.02);
+      ctx.fillText(labelOf(idB), cx + w * 0.25, cy + hh * 0.02);
     }
     ctx.restore();
   };
@@ -351,6 +363,10 @@ export class StageView {
   draw() {
     const scene = this.getScene();
     if (!scene?.project) return;
+    // DEFECT-M-1 同源守卫：画布隐藏（rect 0×0，如 boot 中编辑器尚未显示）时不绘制，
+    // 防止把 fitView 的兜底 scale 写进 this.view 污染首次可见绘制
+    const probeRect = this.canvas.getBoundingClientRect();
+    if (probeRect.width < 1 || probeRect.height < 1) return;
     const { W, H, dpr } = this.ensureView();
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

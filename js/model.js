@@ -38,6 +38,7 @@ export function createProject({ title = '未命名队列舞', pairs = 6, extraM 
     meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     stage: { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null },
     audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
+    settings: { labelMode: 'no' }, // 项目级显示设置：'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名
     dancers: [], groups: [], formations: [],
     timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1 },
   };
@@ -198,6 +199,32 @@ export function applyFormationLayout(project, index) {
 // 按名册当前列表顺序重编 short（第 n 人 = n）
 export function renumberShorts(project) {
   project.dancers.forEach((d, i) => { d.short = String(i + 1); });
+}
+
+// ---------- 舞者标签（canvas 呈示文本；round23 需求 2 显示字段可切换） ----------
+// labelMode：'no'=编号序号(1..N，名册顺序) | 'short'=简称 | 'name'=姓名（缺失回退简称→序号）。
+// 默认 'no'：标准建档（short=序号）下呈示与历史版本逐字节一致（零迁移成本）。
+export const LABEL_MODES = ['no', 'short', 'name'];
+export function labelModeOf(project) {
+  const lm = project?.settings?.labelMode;
+  return LABEL_MODES.includes(lm) ? lm : 'no';
+}
+export function dancerOrdinal(project, dancerId) {
+  const i = project.dancers.findIndex(d => d.id === dancerId);
+  return i + 1; // 0 → 无此人
+}
+export function dancerLabel(project, dancer, ordinal = dancerOrdinal(project, dancer?.id)) {
+  const no = ordinal > 0 ? String(ordinal) : String(dancer?.short ?? '?');
+  if (!dancer) return no;
+  const mode = labelModeOf(project);
+  if (mode === 'name') { const nm = String(dancer.name ?? '').trim(); return nm || dancer.short || no; }
+  if (mode === 'short') return String(dancer.short ?? '') || no;
+  return no;
+}
+// 长名截断省略：圆内空间约 4 字符（名称模式>4 截为 3+…；序号/简称通常不受影响）
+export function truncateLabel(s, max = 4) {
+  const t = String(s ?? '');
+  return t.length <= max ? t : t.slice(0, Math.max(1, max - 1)) + '…';
 }
 
 // ---------- 队形 ----------
@@ -369,6 +396,9 @@ export function validateProject(json) {
   p.audio.firstBeatSec = num(p.audio.firstBeatSec, 0, 0, 3600);
   p.audio.durationSec = num(p.audio.durationSec, 0, 0, 36000);
   p.audio.name = String(p.audio.name ?? '').slice(0, 200);
+  // 项目级显示设置：旧项目无 settings → 补默认值（labelMode='no' 维持现状），零迁移成本
+  p.settings = { ...(p.settings && typeof p.settings === 'object' ? p.settings : {}) };
+  if (!LABEL_MODES.includes(p.settings.labelMode)) p.settings.labelMode = 'no';
   p.dancers = Array.isArray(p.dancers) ? p.dancers : [];
   delete p.pairs; // v3：舞对概念退役——旧项目载入时忽略并清除 pairs 字段，不破坏 formations/positions/merges
   p.groups = Array.isArray(p.groups) ? p.groups : [];
