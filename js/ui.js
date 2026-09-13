@@ -136,21 +136,39 @@ export function renderLibrary(container, { projects, onOpen, onNew, onDelete, on
 }
 
 // ---------- 新建项目向导 ----------
+// 「初始方案」预设：std6=现状默认（6 对独立）；merged6/merged8=建档即两两合并为胶囊单元
+// （经 opts.presetMerged 走 store/M 既有合并数据形态，拖动/拆开语义不变）；custom=保持既有
+// 能力（「对数」可编辑）。「对数」输入可用性随预设切换：仅自定义可编辑；「初始编组」
+// gender/none 照旧适用于所有预设。
 export function showNewProjectModal(onCreate) {
   const title = h('input', { type: 'text', value: '未命名队列舞', style: 'width:100%' });
+  const PRESET_PAIRS = { std6: 6, merged6: 6, merged8: 8 }; // 预设 → 固定对数（custom 才可编辑）
+  const preset = h('select', { style: 'width:160px' },
+    h('option', { value: 'std6' }, '标准 · 6 对（独立）'),
+    h('option', { value: 'merged6' }, '6 对 · 已组合'),
+    h('option', { value: 'merged8' }, '8 对 · 已组合'),
+    h('option', { value: 'custom' }, '自定义'));
   const pairs = h('input', { type: 'number', min: '0', max: '30', value: '6', style: 'width:80px' });
   const extraM = h('input', { type: 'number', min: '0', max: '30', value: '0', style: 'width:80px' });
   const extraF = h('input', { type: 'number', min: '0', max: '30', value: '0', style: 'width:80px' });
   const grouping = h('select', { style: 'width:120px' },
     h('option', { value: 'gender' }, '男士 / 女士'),
     h('option', { value: 'none' }, '不分组'));
+  const applyPreset = () => {
+    if (preset.value === 'custom') { pairs.disabled = false; return; }
+    pairs.value = String(PRESET_PAIRS[preset.value] ?? 6);
+    pairs.disabled = true;
+  };
+  preset.addEventListener('change', applyPreset);
+  applyPreset(); // 默认 std6：对数=6 且不可编辑
   const body = h('div', {},
     h('div', { class: 'prop-row' }, h('label', {}, '项目名称'), title),
+    h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '初始方案'), preset),
     h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '对数（男女各半）'), pairs),
     h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '额外男舞者'), extraM),
     h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '额外女舞者'), extraF),
     h('div', { class: 'prop-row', style: 'margin-top:8px' }, h('label', {}, '初始编组'), grouping),
-    h('p', { class: 'dim', style: 'margin-top:10px' }, '先建好名单进入编辑器，之后可随时在「名册」中增删舞者、加入编组。'));
+    h('p', { class: 'dim', style: 'margin-top:10px' }, '先建好名单进入编辑器，之后可随时在「名册」中增删舞者、加入编组。「已组合」方案会把每对男女合并为一个单元建档，之后可随时拆开。'));
   const m = modal('新建项目', body, [
     h('button', { class: 'btn primary', onclick: () => {
       onCreate({
@@ -159,6 +177,7 @@ export function showNewProjectModal(onCreate) {
         extraM: Math.max(0, +extraM.value || 0),
         extraF: Math.max(0, +extraF.value || 0),
         grouping: grouping.value,
+        presetMerged: preset.value === 'merged6' || preset.value === 'merged8',
       });
       m.close();
     } }, '创建'),

@@ -50,6 +50,58 @@ test('createProject grouping：none 不建组；extraM/extraF 入对应组', () 
   assert.ok(men.memberIds.includes(extra.id), 'extraM 入男士组');
 });
 
+// ---------- 初始化预设「已组合」（presetMerged） ----------
+test('createProject presetMerged：每对合并为 capsule 且位置收拢，groups 正常', () => {
+  const p = createProject({ title: '预设', pairs: 6, presetMerged: true });
+  const f = p.formations[0];
+  // merges 数 = 对数，全部 capsule
+  assert.equal(f.merges.length, 6);
+  assert.ok(f.merges.every(m => m.style === 'capsule'));
+  // 每对 M_i×F_i 恰在同一个单元里，且两人位置重合（收拢）；键集合 = 全体舞者
+  const byName = n => p.dancers.find(d => d.name === n);
+  for (let i = 1; i <= 6; i++) {
+    const m = byName(`M${i}`), w = byName(`F${i}`);
+    const u = f.merges.find(x => (x.a === m.id && x.b === w.id) || (x.a === w.id && x.b === m.id));
+    assert.ok(u, `M${i}×F${i} 应在同一合并单元`);
+    const a = f.positions[u.a], b = f.positions[u.b];
+    assert.equal(a.x, b.x); assert.equal(a.y, b.y, '收拢后两人重合');
+  }
+  assert.deepEqual(Object.keys(f.positions).sort(), p.dancers.map(d => d.id).sort(), 'positions 键 === dancers');
+  // 位置保持双横排布局节奏：所有单元中心只落在两行 y 上
+  const ys = new Set(f.merges.map(u => f.positions[u.a].y));
+  assert.equal(ys.size, 2);
+  // 默认编组方案照常（gender → 男士/女士两组，全员入组）
+  assert.equal(p.groups.length, 2);
+  const men = p.groups.find(g => g.name === '男士'), women = p.groups.find(g => g.name === '女士');
+  assert.equal(men.memberIds.length, 6);
+  assert.equal(women.memberIds.length, 6);
+  // 拆开一个单元后两人原地独立（与手动 merge 数据形态一致）
+  const [u0] = f.merges;
+  removeMerge(f, u0.a, u0.b);
+  assert.equal(f.merges.length, 5);
+  assert.ok(f.positions[u0.a] && f.positions[u0.b]);
+});
+
+test('createProject presetMerged：8 对 + grouping none；validate 往返合法；默认（未传）不合并', () => {
+  const p8 = createProject({ pairs: 8, presetMerged: true, grouping: 'none' });
+  assert.equal(p8.formations[0].merges.length, 8);
+  assert.ok(p8.formations[0].merges.every(m => m.style === 'capsule'));
+  assert.deepEqual(p8.groups, []);
+  assert.equal(p8.dancers.length, 16);
+  // 经 validateProject 消毒后 merges 原样保留（引用有效、样式合法）
+  const r = validateProject(JSON.parse(JSON.stringify(p8)));
+  assert.equal(r.ok, true);
+  assert.equal(r.project.formations[0].merges.length, 8);
+  assert.ok(r.project.formations[0].merges.every(m => m.style === 'capsule'));
+  assert.deepEqual(Object.keys(r.project.formations[0].positions).sort(), r.project.dancers.map(d => d.id).sort());
+  // 默认不合并（现状回归）
+  const pd = createProject({ pairs: 6 });
+  assert.equal(pd.formations[0].merges, undefined);
+  // presetMerged=false 显式传入同样不合并
+  const pf = createProject({ pairs: 2, presetMerged: false });
+  assert.equal(pf.formations[0].merges, undefined);
+});
+
 test('orderedDancers 按名册顺序', () => {
   const p = createProject({ pairs: 2 });
   assert.deepEqual(orderedDancers(p), p.dancers.map(d => d.id));

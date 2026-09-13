@@ -8,7 +8,7 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
-window.__MAIN_BUILD = 'build-21-uxfix';
+window.__MAIN_BUILD = 'build-22-presets';
 const BUILD_TAG = window.__MAIN_BUILD;
 
 const $ = id => document.getElementById(id);

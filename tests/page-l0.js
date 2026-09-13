@@ -2,6 +2,10 @@
 // （G1 的"单标签/服务器 200/磁盘 build 一致"由 lab 驱动脚本在 node 侧判定；本文件补 build-tag 读取证据。）
 // v3（round14）：产品语义裁定——pairs 退役（orderedDancers 无 unit 参数）、单元样式收敛为
 //   capsule/single（P3 改两样式：single=中点单圆 + 1.45r 虚线环强调色 + ×2 角标）。
+// round11（需求1）：×2 角标移除（保留虚线环）；round22 仪器同步：P3 角标断言改「原角标圆心
+//   3×3 非强调色」口径——旧「角标区最小单像素色距<TH_RING」采样带与保留虚线环相交 → 恒绿假绿；
+//   新口径双向验证（git stash 旧实现 live：角标存在圆心色距 72.4<90 绿 / 移除后 170.2≥90 红；
+//   旁路参照 drawScene±旧实心盘自检内置 P3 随轮复核）。
 // 纪律：
 //   - 场景搭建只走 store/M 公共 API（createNewProject 等）：12 名舞者（M/F 交替生成）两行布置，
 //     positions 键 = 真实 dancer id，禁止改名键（G2 红线，v1 仪器 page-matrix.js 在此违规）。
@@ -320,7 +324,7 @@ export async function runL0() {
       },
     },
     {
-      id: 'P3', name: '单元两样式：capsule 双半色 / single=单圆+虚线环强调色+×2角标（M.addMerge 建立）',
+      id: 'P3', name: '单元两样式：capsule 双半色 / single=单圆+虚线环强调色（×2 角标已移除）（M.addMerge 建立）',
       async run({ step }) {
         const base = runL0._baseline;
         const idA = ids[0], idB = ids[1];
@@ -329,7 +333,7 @@ export async function runL0() {
         const midM = (() => { const mx = (origA.x + origB.x) / 2, my = (origA.y + origB.y) / 2; return toClient(mx, my); })();
         // v3 主题强调色（single 样式虚线环/角标）：stage.js drawUnitSymbol —— dark ? '#38bdf8' : '#0284c7'
         const ACC2 = hex(state().theme === 'dark' ? '#38bdf8' : '#0284c7');
-        const TH_RING = 90; // 虚线环/角标单像素扫阈值（1~2px 线条 AA 边缘，单像素取最小色距）
+        const TH_RING = 90; // 虚线环单像素扫阈值（1~2px 线条 AA 边缘，单像素取最小色距）；亦作角标圆心「非强调色」阈值
         // 虚线环扫描带：半径 1.45r 圆环 ±1.5px、5° 步长的单像素候选点
         const ringBand = (cx, cy, R) => {
           const pts = [];
@@ -339,9 +343,11 @@ export async function runL0() {
         };
         const pxLive = (x, y) => px1(cv, x, y) || { r: 255, g: 255, b: 255 };
         // 参照渲染器：直呼 __fs.drawScene（显式传 merges）画进离屏画布 —— 用于标定仪器采样点、
-        // 并与实时舞台（StageView.draw 路径）区分责任
+        // 并与实时舞台（StageView.draw 路径）区分责任。withBadge=true 时按 round11 前旧实现
+        // （stage.js 被删 10 行中的实心盘：acc 填充 r=max(5,0.5r₀)@(cx+1.15r₀,cy−1.15r₀)，描边/
+        // ×2 文字不落在圆心 3×3 口径内）补画角标 —— 供「角标存在→绿」的旁路有效性自检。
         const rect = cv.getBoundingClientRect();
-        const mkRef = () => {
+        const mkRef = (withBadge = false) => {
           const oc = document.createElement('canvas');
           oc.width = cv.width; oc.height = cv.height;
           const octx = oc.getContext('2d', { willReadFrequently: true });
@@ -350,6 +356,12 @@ export async function runL0() {
           ctx.fs.drawScene(octx, { x: 0, y: 0, w: rect.width, h: rect.height }, state().project, fmt().positions, {
             view: sv.view, merges: fmt().merges || [], selection: new Set(), showGrid: true, theme: state().theme,
           });
+          if (withBadge) {
+            octx.beginPath();
+            octx.arc(midM.x - rect.left + 1.15 * rpx, midM.y - rect.top - 1.15 * rpx, Math.max(5, rpx * 0.5), 0, Math.PI * 2);
+            octx.fillStyle = state().theme === 'dark' ? '#38bdf8' : '#0284c7';
+            octx.fill();
+          }
           const img = octx.getImageData(0, 0, oc.width, oc.height);
           const sample = (clientX, clientY) => {
             const px = Math.round((clientX - rect.left) * d), py = Math.round((clientY - rect.top) * d);
@@ -394,7 +406,7 @@ export async function runL0() {
             }
           } else {
             // 单编号：中点仍为一个圆（半径同单人；填充=编号较小成员色，此处 m.a=ids[0]）
-            // + 1.45r 虚线外环（主题强调色）+ 右上 ×2 角标（同强调色）
+            // + 1.45r 虚线外环（主题强调色）。round11 需求1：×2 角标已移除（保留虚线环）。
             const ref = mkRef();
             shots['p3-single-ref'] = ref.url.split(',')[1];
             const disc = gridRegion(midM.x - rpx * 0.55, midM.y - rpx * 0.55, midM.x + rpx * 0.55, midM.y + rpx * 0.55, 2);
@@ -404,9 +416,17 @@ export async function runL0() {
             step(`${zh}·实时舞台·中点单圆=A色`, liveFill.d < TH_COLOR, `圆盘区最小色距 ${liveFill.d.toFixed(1)} < ${TH_COLOR}`);
             const ringMin = minDistOver(pxLive, ACC2, ringBand(midM.x, midM.y, 1.45 * rpx));
             step(`${zh}·实时舞台·1.45r 虚线环=主题强调色`, ringMin.d < TH_RING, `环带最小单像素色距 ${ringMin.d.toFixed(1)}@${JSON.stringify(ringMin.at)} < ${TH_RING}（ACC=${state().theme === 'dark' ? '#38bdf8' : '#0284c7'}）`);
-            const bc = { x: midM.x + 1.15 * rpx, y: midM.y - 1.15 * rpx }, br = Math.max(5, rpx * 0.5);
-            const badgeMin = minDistOver(pxLive, ACC2, gridRegion(bc.x - br * 0.42, bc.y - br * 0.42, bc.x + br * 0.42, bc.y + br * 0.42, 1));
-            step(`${zh}·实时舞台·×2 角标=主题强调色`, badgeMin.d < TH_RING, `角标区最小单像素色距 ${badgeMin.d.toFixed(1)}@${JSON.stringify(badgeMin.at)} < ${TH_RING}`);
+            // round22 仪器修正（角标口径）：旧断言「角标区最小色距<TH_RING」采样带与保留虚线环相交 →
+            // 角标移除后仍恒绿（假绿）。改口径=原角标圆心 3×3 均色：实心角标存在时圆心即强调色
+            // （stash 旧实现 live 实测色距 72.4 < 90 绿），移除后圆心=背景（实测 170.2 ≥ 90 红）。
+            const bc = { x: midM.x + 1.15 * rpx, y: midM.y - 1.15 * rpx };
+            const bcMean = mean3x3(cv, bc.x, bc.y);
+            const bcD = dist(bcMean, ACC2);
+            const refNoB = dist(ref.sample(bc.x, bc.y), ACC2), refB = dist(mkRef(true).sample(bc.x, bc.y), ACC2);
+            step(`${zh}·仪器自检·旁路参照（+角标→绿 / −角标→红）`, refB < TH_RING && refNoB >= TH_RING,
+              `drawScene 真渲染补画旧实心盘后圆心色距 ${refB.toFixed(1)} < ${TH_RING}；不补画（现状几何）${refNoB.toFixed(1)} ≥ ${TH_RING}`);
+            step(`${zh}·实时舞台·×2 角标已移除（圆心 3×3 非强调色）`, bcD >= TH_RING,
+              `原角标圆心(${Math.round(bc.x)},${Math.round(bc.y)}) 3×3 ${rgb(bcMean)} 距强调色 ${bcD.toFixed(1)} ≥ ${TH_RING}（距基线 ${dist(bcMean, base).toFixed(1)}）`);
           }
           const oldA = mean3x3(cv, origPtA.x, origPtA.y);
           step(`${zh}·原圆心A回到背景`, dist(oldA, base) < TH_BG, `原圆心 ${rgb(oldA)} 距基线 ${dist(oldA, base).toFixed(1)} < ${TH_BG}（无独立圆点色）`);

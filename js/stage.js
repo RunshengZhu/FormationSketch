@@ -174,7 +174,7 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.arcTo(x, y, x + w, y, rad);
     ctx.closePath();
   };
-  // 合并单元符号：capsule=圆角矩形（左右各色+编号）/ single=单编号圆+虚线外环+×2 角标
+  // 合并单元符号：capsule=圆角矩形（左右各色+编号）/ single=单编号圆+虚线外环
   function drawUnitSymbol(style, idA, idB, a, b, sel, alpha) {
     const cx = (X(a.x) + X(b.x)) / 2, cy = (Y(a.y) + Y(b.y)) / 2;
     const dA = dancerById(idA), dB = dancerById(idB);
@@ -182,7 +182,7 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     if (alpha !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     if (style === 'single') {
       // 单编号：只画一个与单舞者同尺寸的圆（编号取成员中较小者）；
-      // 叠加虚线外环 + 右上角 ×2 角标（配色随主题）——一眼可辨非单人
+      // 叠加虚线外环（主题强调色）——虚线环已足够区分于单人，×2 角标已移除
       const acc = dark ? '#38bdf8' : '#0284c7';
       const num = v => (parseFloat(v?.short) || Number.MAX_SAFE_INTEGER);
       const dd = [dA, dB].filter(Boolean).sort((x, y) => num(x) - num(y) || String(x.short).localeCompare(String(y.short)))[0] || dA;
@@ -200,16 +200,6 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
       ctx.lineWidth = Math.max(1.2, s * 0.05);
       ctx.strokeStyle = acc; ctx.stroke();
       ctx.setLineDash([]);
-      // 右上角 ×2 角标
-      const bx = cx + r * 1.15, by = cy - r * 1.15, br = Math.max(5, r * 0.5);
-      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
-      ctx.fillStyle = acc; ctx.fill();
-      ctx.lineWidth = Math.max(1, s * 0.03);
-      ctx.strokeStyle = dark ? '#0b1220' : '#ffffff'; ctx.stroke();
-      ctx.fillStyle = '#fff';
-      ctx.font = `700 ${Math.max(7, br * 1.15)}px sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('×2', bx, by + br * 0.05);
     } else { // capsule 圆角矩形
       const w = r * 3.4, hh = r * 1.5;
       const x0 = cx - w / 2, y0 = cy - hh / 2, rad = hh * 0.45;

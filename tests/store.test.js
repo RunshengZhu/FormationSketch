@@ -80,6 +80,27 @@ test('undo 后 formationIndex 自校正', () => {
   assert.ok(store.getState().formationIndex < store.getState().project.formations.length);
 });
 
+// ---------- 初始化预设「已组合」：createNewProject 透传 presetMerged ----------
+test('createNewProject({presetMerged:true})：建档即含 capsule 单元，进编辑器可撤销回基线', () => {
+  store.createNewProject({ title: 'M6', pairs: 6, presetMerged: true });
+  const p = store.getState().project;
+  assert.equal(store.getState().view, 'editor');
+  assert.equal(p.formations[0].merges.length, 6, 'merges 数 = 对数');
+  assert.ok(p.formations[0].merges.every(m => m.style === 'capsule'));
+  // 收拢：每对两人位置重合
+  for (const m of p.formations[0].merges) {
+    const a = p.formations[0].positions[m.a], b = p.formations[0].positions[m.b];
+    assert.equal(a.x, b.x); assert.equal(a.y, b.y);
+  }
+  // 预设本身即基线（新建提交）：无更早历史可撤销
+  assert.equal(store.canUndo(), false);
+  // 增删一笔后撤销 → 回到仍是 6 个单元的预设基线（预设不在撤销链中丢失）
+  store.mutate(q => { M.removeMerge(q.formations[0], p.formations[0].merges[0].a, p.formations[0].merges[0].b); }, '拆开单元');
+  assert.equal(store.getState().project.formations[0].merges.length, 5);
+  store.undo();
+  assert.equal(store.getState().project.formations[0].merges.length, 6);
+});
+
 // ---------- 离线 localStorage 档（file:// 回退） ----------
 // 通过「先设全局 location/localStorage 再动态 import（带 query 换模块实例）」模拟 file:// 打开场景；
 // node --test 每个文件独立进程，全局污染不外泄。静态 import 的 store（无 location）即 http/Node 现状。

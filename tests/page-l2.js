@@ -154,8 +154,11 @@ function makeEnv(shots, hw) {
     return { idA, idB, mid: t.mergePt(idA, idB) };
   }
   // v3 单元呈示探针（两样式）：
-  //   capsule=圆角矩形双半色采样（unitHalves）；single=中点单圆填充 + 1.45r 虚线环强调色 + ×2 角标
-  //   （环/角标为 1~2px 线条/小徽标，3×3 均色会被背景稀释 → 用单像素 px1 扫描，独立阈值 TH_RING）
+  //   capsule=圆角矩形双半色采样（unitHalves）；single=中点单圆填充 + 1.45r 虚线环强调色
+  //   （环为 1~2px 线条，3×3 均色会被背景稀释 → 用单像素 px1 扫描，独立阈值 TH_RING）。
+  //   round11 需求1：×2 角标已移除；round22 仪器修正：原「角标区最小色距<TH_RING」采样带与
+  //   保留虚线环相交恒绿（假绿）→ 改「原角标圆心 3×3 均色非强调色」（角标存在=实心强调盘必
+  //   <90，移除后=背景 ≥90；双向有效性经 git stash 旧实现 live 72.4 绿 / 现状 170.2 红验证）。
   const unitProbe = (t, style, mid, colA, colB) => {
     if (style === 'single') {
       const ACC2 = hex(state().theme === 'dark' ? '#38bdf8' : '#0284c7');
@@ -169,12 +172,13 @@ function makeEnv(shots, hw) {
       };
       const fill = minDistOver((x, y) => mean3x3(cv, x, y), colA, gridRegion(mid.x - t.rpx * 0.55, mid.y - t.rpx * 0.55, mid.x + t.rpx * 0.55, mid.y + t.rpx * 0.55, 2));
       const ring = minDistOver(pxLive, ACC2, band(mid.x, mid.y, 1.45 * t.rpx));
-      const bc = { x: mid.x + 1.15 * t.rpx, y: mid.y - 1.15 * t.rpx }, br = Math.max(5, t.rpx * 0.5);
-      const badge = minDistOver(pxLive, ACC2, gridRegion(bc.x - br * 0.42, bc.y - br * 0.42, bc.x + br * 0.42, bc.y + br * 0.42, 1));
+      const bc = { x: mid.x + 1.15 * t.rpx, y: mid.y - 1.15 * t.rpx };
+      const bcMean = mean3x3(cv, bc.x, bc.y);
+      const bcD = dist(bcMean, ACC2);
       return {
-        d: Math.max(fill.d, ring.d, badge.d),
-        ok: fill.d < TH_COLOR && ring.d < TH_RING && badge.d < TH_RING,
-        why: `单圆填充 ${fill.d.toFixed(1)}(<${TH_COLOR})、虚线环 ${ring.d.toFixed(1)}、×2 角标 ${badge.d.toFixed(1)}（环/角标 <90，ACC=${state().theme === 'dark' ? '#38bdf8' : '#0284c7'}）`,
+        d: Math.max(fill.d, ring.d),
+        ok: fill.d < TH_COLOR && ring.d < TH_RING && bcD >= TH_RING,
+        why: `单圆填充 ${fill.d.toFixed(1)}(<${TH_COLOR})、虚线环 ${ring.d.toFixed(1)}(<${TH_RING})、角标圆心距强调色 ${bcD.toFixed(1)}(≥${TH_RING}=已移除，ACC=${state().theme === 'dark' ? '#38bdf8' : '#0284c7'}）`,
       };
     }
     const h = unitHalves(style, mid, t.rpx, colA, colB); // capsule
@@ -281,7 +285,7 @@ async function runDesktop(opts) {
         const sp = unitProbe(t, 'single', midC, colA, colB);
         step('[DOM] 换样式：单元浮窗出现（v3 标题=合并单元）', !!m4 && m4.title === '合并单元', m4 ? m4.title : '无 .unit-menu', 'DOM');
         step('[STATE] 换样式：style=single + 历史「切换单元样式」', !!mg4 && mg4.style === 'single' && store.undoLabel() === '切换单元样式', `style=${mg4 ? mg4.style : '无'} ${t.hist()}`);
-        step('[PIXEL] 换样式：单编号呈示（单圆+虚线环+角标）', sp.ok, sp.why, 'PIXEL');
+        step('[PIXEL] 换样式：单编号呈示（单圆+虚线环，角标已移除）', sp.ok, sp.why, 'PIXEL');
         cmpStep(step, r);
 
         // ---- 步5 撤销×4（逐帧 STATE+PIXEL+SCREEN）----
@@ -475,7 +479,7 @@ async function runDesktop(opts) {
         const mg4 = (fmt().merges || [])[0];
         const sp4 = unitProbe(t, 'single', mid4, t.col(G[2]), t.col(G[3]));
         step('[STATE] 样式切换：single + 历史「切换单元样式」', !!mg4 && mg4.style === 'single' && store.undoLabel() === '切换单元样式', `style=${mg4 ? mg4.style : '无'} ${t.hist()}`);
-        step('[PIXEL] 单编号呈示（单圆+虚线环+角标）', sp4.ok, sp4.why, 'PIXEL');
+        step('[PIXEL] 单编号呈示（单圆+虚线环，角标已移除）', sp4.ok, sp4.why, 'PIXEL');
         cmpStep(step, r);
 
         // ---- 步5 替换语义：拖 G0 绕行至单元上驻留 → 「胶囊」→ G0|G2 替换 G2|G3 ----

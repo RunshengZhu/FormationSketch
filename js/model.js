@@ -28,8 +28,11 @@ function nextShort(project, role) {
   return String(n);
 }
 // createProject：pairs=「对数」（M/F 交替生成的数量语义，无任何绑定）；grouping=预定义编组方案
-//   'gender'（默认）→ 建「男士」「女士」两组；'none' → 不建组
-export function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, extraF = 0, grouping = 'gender' } = {}) {
+//   'gender'（默认）→ 建「男士」「女士」两组；'none' → 不建组。
+// presetMerged=true → 初始化预设「已组合」：开场队形对每对 addMerge(…,'capsule') 并
+//   collapseUnit 收拢到各对默认点位的中点（保持双横排布局节奏），建档即成 pairs 个合并单元；
+//   两人间距 0 ≤ 合并阈值，呈示为胶囊；拖动/拆开走既有单元原子语义。旧项目载入不受影响。
+export function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, extraF = 0, grouping = 'gender', presetMerged = false } = {}) {
   const project = {
     version: 1,
     meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
@@ -54,8 +57,19 @@ export function createProject({ title = '未命名队列舞', pairs = 6, extraM 
   const f = { id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {} };
   project.formations.push(f);
   genDefaultRows(project, f);
+  if (presetMerged) applyPresetMerged(project, f, pairs);
   syncTimeline(project);
   return project;
+}
+// 「已组合」预设后处理：M_i×F_i 两两合并为 capsule 单元并收拢（位置=各对的默认队形点位中点）。
+// 收拢后间距 0 ≤ 合并阈值 0.8m → 呈示为胶囊徽标；数据形态与手动 merge 完全一致（帧级 merges）。
+function applyPresetMerged(project, f, pairs) {
+  const byName = n => project.dancers.find(d => d.name === n);
+  for (let i = 1; i <= pairs; i++) {
+    const m = byName(`M${i}`), w = byName(`F${i}`);
+    if (!m || !w) continue;
+    if (addMerge(f, m.id, w.id, 'capsule')) collapseUnit(f, m.id, w.id);
+  }
 }
 function genDefaultRows(project, f) {
   const ids = orderedDancers(project);
