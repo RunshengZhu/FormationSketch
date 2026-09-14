@@ -2,6 +2,31 @@
 import { drawScene } from './stage.js';
 import { computeSegments, spb, beatToSec, secToBeat, beatLabel } from './model.js';
 
+// ---------- F-10（UX-10）：chip 触摸长按拖拽排序——纯几何决策（node 可测） ----------
+// 触屏不产生 HTML5 dragstart（UX-10 根因），排序走 Pointer Events 长按路径：
+// 长按 LP_MS 触发拿起态（lift 视觉 + 可选触觉反馈），此后 pointermove 实时预览插入位
+// （transform 平移预览，不动数据），pointerup 才经 hooks.move 提交恰一条「调整队形顺序」历史；
+// pointercancel（浏览器/系统接管）安全回滚：零数据写入、零历史。
+// 鼠标路径不进此状态机（pointerType 判定分流），HTML5 DnD（C-07 既有）不受影响。
+export const TOUCH_DRAG = {
+  LP_MS: 300,     // 长按时长：超过即拿起（research-arrangeus 触摸动线口径 ~300ms）
+  SLOP_PX: 10,    // 拿起前的位移阈值：超了视为滚动/误手势，解除长按（chip 铺满列表，不能吃掉原生滚动）
+  EDGE_PX: 28,    // 拖拽中指针接近容器边缘的判定带
+  EDGE_STEP: 10,  // 边缘自动滚动的每帧步长（px/frame，rAF 驱动）
+};
+// dy（相对拿起的位移，含自动滚动补偿）→ 目标插入位。slotH=chip 高+间距；跨半格换位（中点判定）。
+export function dragTargetIndex(dy, slotH, from, count) {
+  if (!(slotH > 0) || count < 2 || !Number.isFinite(dy)) return from;
+  return Math.max(0, Math.min(count - 1, from + Math.round(dy / slotH)));
+}
+// 预览位移（格数）：被拿起 chip 恒 0（自身位移单独算）；from→to 之间的 chip 让位一格。
+export function shiftSlots(from, to, i) {
+  if (i === from) return 0;
+  if (from < to) return (i > from && i <= to) ? -1 : 0;
+  if (from > to) return (i >= to && i < from) ? 1 : 0;
+  return 0;
+}
+
 // ---------- 编辑模式：队形条 ----------
 export class EditStrip {
   constructor(container, hooks) {
@@ -9,12 +34,17 @@ export class EditStrip {
     this.hooks = hooks; // {select(i), add(), duplicate(), delete(), move(from,to), getProject(), getIndex(), names()}
     this._key = '';
     this._thumbTimer = null;
+    this._td = null;               // F-10 触摸拖拽状态（null=空闲；active=false=长按未生效）
+    this._suppressClickUntil = 0;  // 触摸落位后抑制合成 click 误选（落位=排序，不应改选队形）
     // round23 需求 3：缩略图按容器实测尺寸 × dpr 绘制——容器尺寸变化（窗口缩放、移动端
     // 队形 tab 从 display:none 展开）时按新尺寸重绘，保持舞台纵横比、不拉伸不裁切。
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => this.drawThumbs());
       this._ro.observe(container);
     }
+    // F-10：拿起后必须掐断原生滚动接管（touch-action 在手势开始时已定型，改不回去）——
+    // 拖拽中在容器上以非 passive 监听 touchmove 并 preventDefault；拿起前不拦（列表照常可滚）。
+    container.addEventListener('touchmove', e => { if (this._td && this._td.active) e.preventDefault(); }, { passive: false });
   }
   // 缩略图盒尺寸（CSS px）：宽=列表可用宽（上限 160），高按舞台（含后台）纵横比反推。
   // 高度上限 96：保证 1280×800 桌面下前 3 个 chip 完整落在 #formation-list 可视区内
@@ -44,11 +74,19 @@ export class EditStrip {
       nm.textContent = `${i + 1}. ${f.name}`;
       nm.title = f.name;
       chip.append(cv, nm);
-      chip.addEventListener('click', () => this.hooks.select(i));
+      chip.addEventListener('click', () => {
+        if (performance.now() < this._suppressClickUntil) return; // F-10：触摸排序落位后的合成 click 不改选队形
+        this.hooks.select(i);
+      });
       chip.addEventListener('dragstart', e => { this._dragFrom = i; chip.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
       chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
       chip.addEventListener('dragover', e => { e.preventDefault(); });
       chip.addEventListener('drop', e => { e.preventDefault(); if (this._dragFrom != null && this._dragFrom !== i) this.hooks.move(this._dragFrom, i); this._dragFrom = null; });
+      // F-10：触摸/笔长按拖拽排序（鼠标不进此路径，仍走上面的 HTML5 DnD）
+      chip.addEventListener('pointerdown', e => this._chipPointerDown(e, chip, i));
+      chip.addEventListener('pointermove', e => this._chipPointerMove(e));
+      chip.addEventListener('pointerup', e => this._chipPointerUp(e));
+      chip.addEventListener('pointercancel', e => this._chipPointerCancel(e));
       this.el.append(chip);
     });
     const add = document.createElement('button');
@@ -78,6 +116,108 @@ export class EditStrip {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (f) drawScene(ctx, { x: 0, y: 0, w, h }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [] });
     });
+  }
+
+  // ---------- F-10：触摸长按拖拽排序（触摸/笔专用；鼠标走 HTML5 DnD） ----------
+  _chipPointerDown(e, chip, i) {
+    if (e.pointerType === 'mouse') return;          // 鼠标 = 既有 HTML5 DnD，零改动
+    if (this._td) return;                            // 已有手势进行中（不可能双触摸排序）
+    const td = this._td = {
+      id: e.pointerId, chip, from: i, to: i,
+      startX: e.clientX, startY: e.clientY, lastY: e.clientY,
+      active: false, chips: null, slots: null, slotH: 0, scroll0: 0, raf: 0, lpTimer: 0,
+    };
+    // 捕获指针：后续 move/up/cancel 全部回到 chip，手指滑出列表也能继续拖
+    try { chip.setPointerCapture(e.pointerId); } catch { this._td = null; return; }
+    td.lpTimer = setTimeout(() => this._lift(td), TOUCH_DRAG.LP_MS);
+  }
+  _lift(td) { // 长按生效：拿起态（视觉抬升 + 可选触觉反馈），开始边缘自动滚动循环
+    if (this._td !== td) return;
+    const chips = [...this.el.querySelectorAll('.es-chip')];
+    if (chips.length < 2 || chips[td.from] !== td.chip) { this._td = null; return; }
+    td.active = true;
+    td.chips = chips;
+    // 基准几何（未加变换时的布局位）：此后换位判定与预览全部以此为参照
+    td.slots = chips.map(c => { const r = c.getBoundingClientRect(); return { top: r.top, h: r.height }; });
+    td.slotH = chips.length > 1
+      ? (td.slots[1].top - td.slots[0].top)      // 相邻 chip 布局位差 = 高 + gap（均匀格）
+      : (td.slots[0].h + 6);
+    td.scroll0 = this.el.scrollTop;
+    td.chip.classList.add('lift');
+    [...chips].forEach(c => { if (c !== td.chip) c.classList.add('tshift'); });
+    try { navigator.vibrate && navigator.vibrate(10); } catch {} // 触觉反馈：可选、失败静默
+    const step = () => {  // 边缘自动滚动：拖拽中指针压住容器上/下边缘时按帧推进列表
+      if (this._td !== td || !td.active) return;
+      const r = this.el.getBoundingClientRect();
+      let d = 0;
+      if (td.lastY < r.top + TOUCH_DRAG.EDGE_PX) d = -TOUCH_DRAG.EDGE_STEP;
+      else if (td.lastY > r.bottom - TOUCH_DRAG.EDGE_PX) d = TOUCH_DRAG.EDGE_STEP;
+      if (d) {
+        const before = this.el.scrollTop;
+        this.el.scrollTop = before + d;
+        const real = this.el.scrollTop - before;
+        // scroll0 必须冻结为拿起时刻的 scrollTop：_applyPreview 的 dy=(lastY-startY)+(scrollTop-scroll0)
+        // 本身已含增量 real（世界坐标补偿）；若再回写 scroll0 会把 real 双计，chip 以 2× 滚速脱手。
+        if (real) this._applyPreview(td);
+      }
+      td.raf = requestAnimationFrame(step);
+    };
+    td.raf = requestAnimationFrame(step);
+    this._applyPreview(td);
+  }
+  _chipPointerMove(e) {
+    const td = this._td;
+    if (!td || e.pointerId !== td.id) return;
+    td.lastY = e.clientY;
+    if (!td.active) {
+      // 长按生效前位移超阈值：判定为滚动/误手势，解除长按（不拦原生滚动）
+      if (Math.hypot(e.clientX - td.startX, e.clientY - td.startY) > TOUCH_DRAG.SLOP_PX) {
+        clearTimeout(td.lpTimer);
+        try { td.chip.releasePointerCapture(td.id); } catch {}
+        this._td = null;
+      }
+      return;
+    }
+    this._applyPreview(td);
+  }
+  _applyPreview(td) { // 实时预览：只动 transform，不写数据
+    if (!td.active || !td.chips) return;
+    const n = td.chips.length;
+    const dy = (td.lastY - td.startY) + (this.el.scrollTop - td.scroll0); // 含自动滚动补偿
+    td.to = dragTargetIndex(dy, td.slotH, td.from, n);
+    const maxDy = (n - 1 - td.from) * td.slotH, minDy = -td.from * td.slotH;
+    const y = Math.max(minDy, Math.min(maxDy, dy));
+    td.chip.style.transform = `translateY(${y}px)`;
+    for (let k = 0; k < n; k++) {
+      if (k === td.from) continue;
+      const s = shiftSlots(td.from, td.to, k) * td.slotH;
+      td.chips[k].style.transform = s ? `translateY(${s}px)` : '';
+    }
+  }
+  _chipPointerUp(e) {  // 落位：提交恰一条「调整队形顺序」历史（render 经 store 订阅自动重建）
+    const td = this._td;
+    if (!td || e.pointerId !== td.id) return;
+    const { from, to, chips, active } = td;
+    this._teardown(td);
+    const count = this.hooks.getProject()?.formations.length;
+    if (active && chips && count === chips.length && to !== from) {
+      this._suppressClickUntil = performance.now() + 400;
+      this.hooks.move(from, to);
+    }
+  }
+  _chipPointerCancel(e) { // 轮10纪律：浏览器/系统中途接管 → 安全回滚（零数据写入、零历史）
+    const td = this._td;
+    if (!td || e.pointerId !== td.id) return;
+    this._teardown(td);
+  }
+  _teardown(td) {
+    clearTimeout(td.lpTimer);
+    cancelAnimationFrame(td.raf);
+    if (td.active && td.chips) {
+      for (const c of td.chips) { c.style.transform = ''; c.classList.remove('lift', 'tshift'); }
+    }
+    try { td.chip.releasePointerCapture(td.id); } catch {}
+    if (this._td === td) this._td = null;
   }
 }
 

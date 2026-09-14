@@ -95,6 +95,10 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 .es-chip.active{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 2px 8px rgba(56,189,248,.18)}
 .es-chip.active .es-name{color:var(--acc);font-weight:600}
 .es-chip.dragging{opacity:.45;border-style:dashed}
+/* F-10（UX-10）：触摸长按拖拽排序——lift=拿起态（抬升投影），tshift=让位预览的平移过渡
+   （位移本体由 JS 内联 transform 写入；被拿起的 chip 不加 tshift，跟随手指零延迟） */
+.es-chip.lift{z-index:6;opacity:.95;border-color:var(--acc);box-shadow:0 10px 24px rgba(0,0,0,.5);cursor:grabbing}
+.es-chip.tshift{transition:transform .13s ease-out}
 .es-chip canvas{display:block;margin:0 auto;border-radius:4px;background:#f8fafc}
 .es-chip .es-name{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;color:var(--fg)}
 

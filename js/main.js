@@ -8,11 +8,14 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
-window.__MAIN_BUILD = 'build-23-r23ux';
-const BUILD_TAG = window.__MAIN_BUILD;
+// Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-24-skill';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-23-r23ux');
 
 const $ = id => document.getElementById(id);
-const audio = new AudioController();
+// Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
+// 延迟判存——浏览器恒有 Audio，行为零变化；Node 下置 null（boot 不会执行，null 永不被使用）。
+const audio = typeof Audio !== 'undefined' ? new AudioController() : null;
 let player, stageView, leftStrip, musicTl;
 let propsKey = '', audioPanelBuilt = false;
 
@@ -278,6 +281,117 @@ function wireContextMenu() {
   });
 }
 
+// ---------- Phase 4 · 深链导入（docs/choreo-skill-plan.md Phase 4，与 skill 线 publish.mjs 的契约） ----------
+// 契约 URL：GET /apps/wuzhen/index.html?import=<encodeURIComponent(项目 JSON 的 URL)>
+// 行为：boot（store init 完成后）解析 import 参数 → fetch（仅同源 http / 任意 https，见
+// resolveImportUrl）→ JSON → M.validateProject → store.importProject（新建 id、标题加「（副本）」，
+// 不覆盖既有项目）→ history.replaceState 剥掉 import 参数（防刷新重导入）→ toast「已导入项目 X」。
+// 显式深链优先于 lastProject 自动恢复（深链在 init 之后执行、整体覆盖状态）；失败路径 toast 明确
+// 错误并正常进应用既有视图，不 crash、无未捕获异常（本函数全部错误都在内部转成结果对象）。
+// SW 侧配套：dist/sw.js 对导航请求 cache.match(..., {ignoreSearch:true}) + './' 回退——带 query
+// 的深链在断网时也能打开（scripts/build-single.mjs swSource）。
+// 纯函数 + 依赖注入（fetchImpl/validate/importProject/toast/replaceState），node 可测。
+export function parseImportParam(hrefOrSearch) {
+  if (typeof hrefOrSearch !== 'string' || !hrefOrSearch) return null;
+  const qi = hrefOrSearch.indexOf('?');
+  if (qi === -1) return null;
+  let search = hrefOrSearch.slice(qi);
+  const hi = search.indexOf('#');
+  if (hi !== -1) search = search.slice(0, hi); // hash 不属于 query 值
+  try {
+    const v = new URLSearchParams(search).get('import');
+    return v && v.trim() ? v : null;
+  } catch { return null; }
+}
+export function stripImportParam(href) { // 只摘 import 参数，其余 query/hash 原样保留
+  if (typeof href !== 'string' || !href) return href;
+  const hi = href.indexOf('#');
+  const hash = hi === -1 ? '' : href.slice(hi);
+  const noHash = hi === -1 ? href : href.slice(0, hi);
+  const qi = noHash.indexOf('?');
+  if (qi === -1) return href;
+  let sp;
+  try { sp = new URLSearchParams(noHash.slice(qi)); } catch { return href; }
+  if (!sp.has('import')) return href;
+  sp.delete('import');
+  const rest = sp.toString();
+  let head = noHash.slice(0, qi);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(head)) { // 绝对 URL → 同文档相对形态（pathname 起，replaceState 更稳）
+    try { head = new URL(head).pathname; } catch {}
+  }
+  return head + (rest ? '?' + rest : '') + hash;
+}
+export function resolveImportUrl(raw, baseUrl) { // 仅 https（任意 host）或 http 同源；其余拒绝
+  try {
+    const u = new URL(raw, baseUrl || undefined);
+    if (u.protocol === 'https:') return u;
+    if (u.protocol === 'http:') {
+      const origin = (typeof location !== 'undefined' && location.origin) || (baseUrl ? new URL(baseUrl).origin : '');
+      if (origin && u.origin === origin) return u;
+    }
+    return null;
+  } catch { return null; }
+}
+export async function runDeeplinkImport(deps) {
+  const url = typeof deps.url === 'string' ? deps.url : '';
+  const raw = parseImportParam(url);
+  if (raw == null) return { status: 'none' };
+  const cleaned = stripImportParam(url);
+  const done = res => {
+    try { deps.replaceState?.(cleaned); } catch {} // 成败都清参：刷新不再重导入/重报错
+    if (res.status === 'error' && res.message) deps.toast?.(res.message);
+    return res;
+  };
+  const u = resolveImportUrl(raw, deps.baseUrl || url);
+  if (!u) return done({ status: 'error', reason: 'scheme', message: '深链导入失败：项目文件地址仅支持同源或 https' });
+  let resp;
+  try { resp = await deps.fetchImpl(u.href, { redirect: 'follow' }); }
+  catch (e) { return done({ status: 'error', reason: 'network', message: `深链导入失败：无法获取项目文件（${e?.message || '网络异常'}）` }); }
+  if (!resp.ok) return done({ status: 'error', reason: 'http', httpStatus: resp.status, message: `深链导入失败：项目文件无法获取（HTTP ${resp.status}）` });
+  let json;
+  try { json = JSON.parse(await resp.text()); }
+  catch { return done({ status: 'error', reason: 'parse', message: '深链导入失败：文件不是合法 JSON' }); }
+  // v2 项目文件可内嵌音乐（dataBase64）：validateProject 会剥离该字段，先还原为 Blob，导入后回填
+  let audioBlob = null;
+  try {
+    if (json && json.audio && json.audio.dataBase64) {
+      const bin = atob(String(json.audio.dataBase64));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      audioBlob = new Blob([bytes], { type: json.audio.dataFormat || 'audio/mpeg' });
+      delete json.audio.dataBase64;
+      delete json.audio.dataFormat;
+    }
+  } catch { audioBlob = null; }
+  const r = deps.validate(json);
+  if (!r.ok) return done({ status: 'error', reason: 'validate', errors: r.errors, message: `深链导入失败：${r.errors[0] || '项目校验未通过'}` });
+  deps.importProject(r.project);
+  if (audioBlob) { try { await deps.onAudio?.(audioBlob); } catch {} }
+  const title = r.project.meta.title || '导入项目';
+  deps.toast?.(`已导入项目：${title}${audioBlob ? '（音乐已恢复）' : ''}`);
+  return done({ status: 'imported', title, hasAudio: !!audioBlob, project: r.project });
+}
+async function wireDeeplinkImport() {
+  try {
+    await runDeeplinkImport({
+      url: location.href,
+      baseUrl: location.href,
+      fetchImpl: (u, o) => fetch(u, o),
+      validate: M.validateProject,
+      importProject: p => { player?.stop(); store.importProject(p); },
+      onAudio: async blob => { // 与「导入项目文件…」同语义：内嵌音乐回填到新项目 id
+        await store.storage.putAudio(store.getState().projectId, blob);
+        await restoreAudio();
+      },
+      toast,
+      replaceState: cleaned => history.replaceState(null, '', cleaned),
+    });
+  } catch (e) {
+    console.error('深链导入异常', e);
+    toast('深链导入失败：应用内部错误');
+  }
+}
+
 // ---------- 启动 ----------
 async function boot() {
   buildStage();
@@ -302,6 +416,7 @@ async function boot() {
     store.setUI({ view: 'library' });
   }
   await restoreAudio(); // 自动恢复上次项目时同步恢复音频
+  await wireDeeplinkImport(); // Phase 4 深链：在 init 之后执行 → 显式 import 参数优先于 lastProject 自动恢复
   render(store.getState());
   store.subscribe(render);
 }
@@ -1273,9 +1388,10 @@ function render(state) {
   stageView.requestDraw();
 }
 
-boot();
+// Node 单测直接 import 本模块（深链纯函数）：以下浏览器专属副作用一律判存后再执行
+if (typeof document !== 'undefined') boot();
 // 可见版本徽标：防止旧缓存页面误导验证
-requestAnimationFrame(() => {
+if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => {
   const bt = document.getElementById('build-tag');
   if (bt) bt.textContent = BUILD_TAG;
 });
@@ -1291,7 +1407,7 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
 }
 
 // 自动化测试钩子（不影响正常使用）：注入音频、读取状态
-window.__fs = {
+if (typeof window !== 'undefined') window.__fs = {
   store, player: () => player, audio, M, shapes, exp,
   stageView: () => stageView,
   musicTl: () => musicTl,
