@@ -103,6 +103,10 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 .es-chip.active{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 2px 8px rgba(56,189,248,.18)}
 .es-chip.active .es-name{color:var(--acc);font-weight:600}
 .es-chip.dragging{opacity:.45;border-style:dashed}
+/* F-10（UX-10）：触摸长按拖拽排序——lift=拿起态（抬升投影），tshift=让位预览的平移过渡
+   （位移本体由 JS 内联 transform 写入；被拿起的 chip 不加 tshift，跟随手指零延迟） */
+.es-chip.lift{z-index:6;opacity:.95;border-color:var(--acc);box-shadow:0 10px 24px rgba(0,0,0,.5);cursor:grabbing}
+.es-chip.tshift{transition:transform .13s ease-out}
 .es-chip canvas{display:block;margin:0 auto;border-radius:4px;background:#f8fafc}
 .es-chip .es-name{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;color:var(--fg)}
 
@@ -463,7 +467,10 @@ body[data-mtab="formations"] #tl-scroll{display:none}
   <div id="toasts"></div>
 </div>
 <script>
-/* Formation Studio 单文件版 —— 由 scripts/build-single.mjs 生成，勿手改 */
+/* Formation Studio 单文件版 —— 由 scripts/build-single.mjs 生成，勿手改
+   深链契约（Phase 4）：/apps/wuzhen/index.html?import=<encodeURIComponent(项目 JSON 的 URL)>
+   打开即导入（同源或 https；新建副本 id 不覆盖既有项目；query 用后即清）。
+   由 runDeeplinkImport（main 模块）实现，publish.mjs 按此形态产出深链。 */
 window.FS = window.FS || {};
 
 /* ===== module: model ===== */
@@ -2782,6 +2789,31 @@ const { computeSegments, spb, beatToSec, secToBeat, beatLabel } = FS.model;
 // 时间线：编辑模式队形条（缩略图+拖拽排序） / 音乐模式波形时间线（块拖拽、节拍吸附、播放头）
 /* import from stage */
 /* import from model */
+// ---------- F-10（UX-10）：chip 触摸长按拖拽排序——纯几何决策（node 可测） ----------
+// 触屏不产生 HTML5 dragstart（UX-10 根因），排序走 Pointer Events 长按路径：
+// 长按 LP_MS 触发拿起态（lift 视觉 + 可选触觉反馈），此后 pointermove 实时预览插入位
+// （transform 平移预览，不动数据），pointerup 才经 hooks.move 提交恰一条「调整队形顺序」历史；
+// pointercancel（浏览器/系统接管）安全回滚：零数据写入、零历史。
+// 鼠标路径不进此状态机（pointerType 判定分流），HTML5 DnD（C-07 既有）不受影响。
+const TOUCH_DRAG = {
+  LP_MS: 300,     // 长按时长：超过即拿起（research-arrangeus 触摸动线口径 ~300ms）
+  SLOP_PX: 10,    // 拿起前的位移阈值：超了视为滚动/误手势，解除长按（chip 铺满列表，不能吃掉原生滚动）
+  EDGE_PX: 28,    // 拖拽中指针接近容器边缘的判定带
+  EDGE_STEP: 10,  // 边缘自动滚动的每帧步长（px/frame，rAF 驱动）
+};
+// dy（相对拿起的位移，含自动滚动补偿）→ 目标插入位。slotH=chip 高+间距；跨半格换位（中点判定）。
+function dragTargetIndex(dy, slotH, from, count) {
+  if (!(slotH > 0) || count < 2 || !Number.isFinite(dy)) return from;
+  return Math.max(0, Math.min(count - 1, from + Math.round(dy / slotH)));
+}
+// 预览位移（格数）：被拿起 chip 恒 0（自身位移单独算）；from→to 之间的 chip 让位一格。
+function shiftSlots(from, to, i) {
+  if (i === from) return 0;
+  if (from < to) return (i > from && i <= to) ? -1 : 0;
+  if (from > to) return (i >= to && i < from) ? 1 : 0;
+  return 0;
+}
+
 // ---------- 编辑模式：队形条 ----------
 class EditStrip {
   constructor(container, hooks) {
@@ -2789,12 +2821,17 @@ class EditStrip {
     this.hooks = hooks; // {select(i), add(), duplicate(), delete(), move(from,to), getProject(), getIndex(), names()}
     this._key = '';
     this._thumbTimer = null;
+    this._td = null;               // F-10 触摸拖拽状态（null=空闲；active=false=长按未生效）
+    this._suppressClickUntil = 0;  // 触摸落位后抑制合成 click 误选（落位=排序，不应改选队形）
     // round23 需求 3：缩略图按容器实测尺寸 × dpr 绘制——容器尺寸变化（窗口缩放、移动端
     // 队形 tab 从 display:none 展开）时按新尺寸重绘，保持舞台纵横比、不拉伸不裁切。
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => this.drawThumbs());
       this._ro.observe(container);
     }
+    // F-10：拿起后必须掐断原生滚动接管（touch-action 在手势开始时已定型，改不回去）——
+    // 拖拽中在容器上以非 passive 监听 touchmove 并 preventDefault；拿起前不拦（列表照常可滚）。
+    container.addEventListener('touchmove', e => { if (this._td && this._td.active) e.preventDefault(); }, { passive: false });
   }
   // 缩略图盒尺寸（CSS px）：宽=列表可用宽（上限 160），高按舞台（含后台）纵横比反推。
   // 高度上限 96：保证 1280×800 桌面下前 3 个 chip 完整落在 #formation-list 可视区内
@@ -2824,11 +2861,19 @@ class EditStrip {
       nm.textContent = `${i + 1}. ${f.name}`;
       nm.title = f.name;
       chip.append(cv, nm);
-      chip.addEventListener('click', () => this.hooks.select(i));
+      chip.addEventListener('click', () => {
+        if (performance.now() < this._suppressClickUntil) return; // F-10：触摸排序落位后的合成 click 不改选队形
+        this.hooks.select(i);
+      });
       chip.addEventListener('dragstart', e => { this._dragFrom = i; chip.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
       chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
       chip.addEventListener('dragover', e => { e.preventDefault(); });
       chip.addEventListener('drop', e => { e.preventDefault(); if (this._dragFrom != null && this._dragFrom !== i) this.hooks.move(this._dragFrom, i); this._dragFrom = null; });
+      // F-10：触摸/笔长按拖拽排序（鼠标不进此路径，仍走上面的 HTML5 DnD）
+      chip.addEventListener('pointerdown', e => this._chipPointerDown(e, chip, i));
+      chip.addEventListener('pointermove', e => this._chipPointerMove(e));
+      chip.addEventListener('pointerup', e => this._chipPointerUp(e));
+      chip.addEventListener('pointercancel', e => this._chipPointerCancel(e));
       this.el.append(chip);
     });
     const add = document.createElement('button');
@@ -2858,6 +2903,108 @@ class EditStrip {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (f) drawScene(ctx, { x: 0, y: 0, w, h }, p, f.positions, { minimal: true, pad: 4, merges: f.merges || [] });
     });
+  }
+
+  // ---------- F-10：触摸长按拖拽排序（触摸/笔专用；鼠标走 HTML5 DnD） ----------
+  _chipPointerDown(e, chip, i) {
+    if (e.pointerType === 'mouse') return;          // 鼠标 = 既有 HTML5 DnD，零改动
+    if (this._td) return;                            // 已有手势进行中（不可能双触摸排序）
+    const td = this._td = {
+      id: e.pointerId, chip, from: i, to: i,
+      startX: e.clientX, startY: e.clientY, lastY: e.clientY,
+      active: false, chips: null, slots: null, slotH: 0, scroll0: 0, raf: 0, lpTimer: 0,
+    };
+    // 捕获指针：后续 move/up/cancel 全部回到 chip，手指滑出列表也能继续拖
+    try { chip.setPointerCapture(e.pointerId); } catch { this._td = null; return; }
+    td.lpTimer = setTimeout(() => this._lift(td), TOUCH_DRAG.LP_MS);
+  }
+  _lift(td) { // 长按生效：拿起态（视觉抬升 + 可选触觉反馈），开始边缘自动滚动循环
+    if (this._td !== td) return;
+    const chips = [...this.el.querySelectorAll('.es-chip')];
+    if (chips.length < 2 || chips[td.from] !== td.chip) { this._td = null; return; }
+    td.active = true;
+    td.chips = chips;
+    // 基准几何（未加变换时的布局位）：此后换位判定与预览全部以此为参照
+    td.slots = chips.map(c => { const r = c.getBoundingClientRect(); return { top: r.top, h: r.height }; });
+    td.slotH = chips.length > 1
+      ? (td.slots[1].top - td.slots[0].top)      // 相邻 chip 布局位差 = 高 + gap（均匀格）
+      : (td.slots[0].h + 6);
+    td.scroll0 = this.el.scrollTop;
+    td.chip.classList.add('lift');
+    [...chips].forEach(c => { if (c !== td.chip) c.classList.add('tshift'); });
+    try { navigator.vibrate && navigator.vibrate(10); } catch {} // 触觉反馈：可选、失败静默
+    const step = () => {  // 边缘自动滚动：拖拽中指针压住容器上/下边缘时按帧推进列表
+      if (this._td !== td || !td.active) return;
+      const r = this.el.getBoundingClientRect();
+      let d = 0;
+      if (td.lastY < r.top + TOUCH_DRAG.EDGE_PX) d = -TOUCH_DRAG.EDGE_STEP;
+      else if (td.lastY > r.bottom - TOUCH_DRAG.EDGE_PX) d = TOUCH_DRAG.EDGE_STEP;
+      if (d) {
+        const before = this.el.scrollTop;
+        this.el.scrollTop = before + d;
+        const real = this.el.scrollTop - before;
+        // scroll0 必须冻结为拿起时刻的 scrollTop：_applyPreview 的 dy=(lastY-startY)+(scrollTop-scroll0)
+        // 本身已含增量 real（世界坐标补偿）；若再回写 scroll0 会把 real 双计，chip 以 2× 滚速脱手。
+        if (real) this._applyPreview(td);
+      }
+      td.raf = requestAnimationFrame(step);
+    };
+    td.raf = requestAnimationFrame(step);
+    this._applyPreview(td);
+  }
+  _chipPointerMove(e) {
+    const td = this._td;
+    if (!td || e.pointerId !== td.id) return;
+    td.lastY = e.clientY;
+    if (!td.active) {
+      // 长按生效前位移超阈值：判定为滚动/误手势，解除长按（不拦原生滚动）
+      if (Math.hypot(e.clientX - td.startX, e.clientY - td.startY) > TOUCH_DRAG.SLOP_PX) {
+        clearTimeout(td.lpTimer);
+        try { td.chip.releasePointerCapture(td.id); } catch {}
+        this._td = null;
+      }
+      return;
+    }
+    this._applyPreview(td);
+  }
+  _applyPreview(td) { // 实时预览：只动 transform，不写数据
+    if (!td.active || !td.chips) return;
+    const n = td.chips.length;
+    const dy = (td.lastY - td.startY) + (this.el.scrollTop - td.scroll0); // 含自动滚动补偿
+    td.to = dragTargetIndex(dy, td.slotH, td.from, n);
+    const maxDy = (n - 1 - td.from) * td.slotH, minDy = -td.from * td.slotH;
+    const y = Math.max(minDy, Math.min(maxDy, dy));
+    td.chip.style.transform = `translateY(${y}px)`;
+    for (let k = 0; k < n; k++) {
+      if (k === td.from) continue;
+      const s = shiftSlots(td.from, td.to, k) * td.slotH;
+      td.chips[k].style.transform = s ? `translateY(${s}px)` : '';
+    }
+  }
+  _chipPointerUp(e) {  // 落位：提交恰一条「调整队形顺序」历史（render 经 store 订阅自动重建）
+    const td = this._td;
+    if (!td || e.pointerId !== td.id) return;
+    const { from, to, chips, active } = td;
+    this._teardown(td);
+    const count = this.hooks.getProject()?.formations.length;
+    if (active && chips && count === chips.length && to !== from) {
+      this._suppressClickUntil = performance.now() + 400;
+      this.hooks.move(from, to);
+    }
+  }
+  _chipPointerCancel(e) { // 轮10纪律：浏览器/系统中途接管 → 安全回滚（零数据写入、零历史）
+    const td = this._td;
+    if (!td || e.pointerId !== td.id) return;
+    this._teardown(td);
+  }
+  _teardown(td) {
+    clearTimeout(td.lpTimer);
+    cancelAnimationFrame(td.raf);
+    if (td.active && td.chips) {
+      for (const c of td.chips) { c.style.transform = ''; c.classList.remove('lift', 'tshift'); }
+    }
+    try { td.chip.releasePointerCapture(td.id); } catch {}
+    if (this._td === td) this._td = null;
   }
 }
 
@@ -3217,7 +3364,7 @@ class MusicTimeline {
   }
 }
 
-Object.assign(FS.timeline, { EditStrip, MusicTimeline });
+Object.assign(FS.timeline, { TOUCH_DRAG, dragTargetIndex, shiftSlots, EditStrip, MusicTimeline });
 })();
 
 /* ===== module: export ===== */
@@ -3641,11 +3788,14 @@ const { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHis
 /* import from player */
 /* import from export */
 /* import from ui */
-window.__MAIN_BUILD = 'build-23-r23ux';
-const BUILD_TAG = window.__MAIN_BUILD;
+// Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-24-skill';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-23-r23ux');
 
 const $ = id => document.getElementById(id);
-const audio = new AudioController();
+// Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
+// 延迟判存——浏览器恒有 Audio，行为零变化；Node 下置 null（boot 不会执行，null 永不被使用）。
+const audio = typeof Audio !== 'undefined' ? new AudioController() : null;
 let player, stageView, leftStrip, musicTl;
 let propsKey = '', audioPanelBuilt = false;
 
@@ -3911,6 +4061,117 @@ function wireContextMenu() {
   });
 }
 
+// ---------- Phase 4 · 深链导入（docs/choreo-skill-plan.md Phase 4，与 skill 线 publish.mjs 的契约） ----------
+// 契约 URL：GET /apps/wuzhen/index.html?import=<encodeURIComponent(项目 JSON 的 URL)>
+// 行为：boot（store init 完成后）解析 import 参数 → fetch（仅同源 http / 任意 https，见
+// resolveImportUrl）→ JSON → M.validateProject → store.importProject（新建 id、标题加「（副本）」，
+// 不覆盖既有项目）→ history.replaceState 剥掉 import 参数（防刷新重导入）→ toast「已导入项目 X」。
+// 显式深链优先于 lastProject 自动恢复（深链在 init 之后执行、整体覆盖状态）；失败路径 toast 明确
+// 错误并正常进应用既有视图，不 crash、无未捕获异常（本函数全部错误都在内部转成结果对象）。
+// SW 侧配套：dist/sw.js 对导航请求 cache.match(..., {ignoreSearch:true}) + './' 回退——带 query
+// 的深链在断网时也能打开（scripts/build-single.mjs swSource）。
+// 纯函数 + 依赖注入（fetchImpl/validate/importProject/toast/replaceState），node 可测。
+function parseImportParam(hrefOrSearch) {
+  if (typeof hrefOrSearch !== 'string' || !hrefOrSearch) return null;
+  const qi = hrefOrSearch.indexOf('?');
+  if (qi === -1) return null;
+  let search = hrefOrSearch.slice(qi);
+  const hi = search.indexOf('#');
+  if (hi !== -1) search = search.slice(0, hi); // hash 不属于 query 值
+  try {
+    const v = new URLSearchParams(search).get('import');
+    return v && v.trim() ? v : null;
+  } catch { return null; }
+}
+function stripImportParam(href) { // 只摘 import 参数，其余 query/hash 原样保留
+  if (typeof href !== 'string' || !href) return href;
+  const hi = href.indexOf('#');
+  const hash = hi === -1 ? '' : href.slice(hi);
+  const noHash = hi === -1 ? href : href.slice(0, hi);
+  const qi = noHash.indexOf('?');
+  if (qi === -1) return href;
+  let sp;
+  try { sp = new URLSearchParams(noHash.slice(qi)); } catch { return href; }
+  if (!sp.has('import')) return href;
+  sp.delete('import');
+  const rest = sp.toString();
+  let head = noHash.slice(0, qi);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(head)) { // 绝对 URL → 同文档相对形态（pathname 起，replaceState 更稳）
+    try { head = new URL(head).pathname; } catch {}
+  }
+  return head + (rest ? '?' + rest : '') + hash;
+}
+function resolveImportUrl(raw, baseUrl) { // 仅 https（任意 host）或 http 同源；其余拒绝
+  try {
+    const u = new URL(raw, baseUrl || undefined);
+    if (u.protocol === 'https:') return u;
+    if (u.protocol === 'http:') {
+      const origin = (typeof location !== 'undefined' && location.origin) || (baseUrl ? new URL(baseUrl).origin : '');
+      if (origin && u.origin === origin) return u;
+    }
+    return null;
+  } catch { return null; }
+}
+async function runDeeplinkImport(deps) {
+  const url = typeof deps.url === 'string' ? deps.url : '';
+  const raw = parseImportParam(url);
+  if (raw == null) return { status: 'none' };
+  const cleaned = stripImportParam(url);
+  const done = res => {
+    try { deps.replaceState?.(cleaned); } catch {} // 成败都清参：刷新不再重导入/重报错
+    if (res.status === 'error' && res.message) deps.toast?.(res.message);
+    return res;
+  };
+  const u = resolveImportUrl(raw, deps.baseUrl || url);
+  if (!u) return done({ status: 'error', reason: 'scheme', message: '深链导入失败：项目文件地址仅支持同源或 https' });
+  let resp;
+  try { resp = await deps.fetchImpl(u.href, { redirect: 'follow' }); }
+  catch (e) { return done({ status: 'error', reason: 'network', message: `深链导入失败：无法获取项目文件（${e?.message || '网络异常'}）` }); }
+  if (!resp.ok) return done({ status: 'error', reason: 'http', httpStatus: resp.status, message: `深链导入失败：项目文件无法获取（HTTP ${resp.status}）` });
+  let json;
+  try { json = JSON.parse(await resp.text()); }
+  catch { return done({ status: 'error', reason: 'parse', message: '深链导入失败：文件不是合法 JSON' }); }
+  // v2 项目文件可内嵌音乐（dataBase64）：validateProject 会剥离该字段，先还原为 Blob，导入后回填
+  let audioBlob = null;
+  try {
+    if (json && json.audio && json.audio.dataBase64) {
+      const bin = atob(String(json.audio.dataBase64));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      audioBlob = new Blob([bytes], { type: json.audio.dataFormat || 'audio/mpeg' });
+      delete json.audio.dataBase64;
+      delete json.audio.dataFormat;
+    }
+  } catch { audioBlob = null; }
+  const r = deps.validate(json);
+  if (!r.ok) return done({ status: 'error', reason: 'validate', errors: r.errors, message: `深链导入失败：${r.errors[0] || '项目校验未通过'}` });
+  deps.importProject(r.project);
+  if (audioBlob) { try { await deps.onAudio?.(audioBlob); } catch {} }
+  const title = r.project.meta.title || '导入项目';
+  deps.toast?.(`已导入项目：${title}${audioBlob ? '（音乐已恢复）' : ''}`);
+  return done({ status: 'imported', title, hasAudio: !!audioBlob, project: r.project });
+}
+async function wireDeeplinkImport() {
+  try {
+    await runDeeplinkImport({
+      url: location.href,
+      baseUrl: location.href,
+      fetchImpl: (u, o) => fetch(u, o),
+      validate: M.validateProject,
+      importProject: p => { player?.stop(); store.importProject(p); },
+      onAudio: async blob => { // 与「导入项目文件…」同语义：内嵌音乐回填到新项目 id
+        await store.storage.putAudio(store.getState().projectId, blob);
+        await restoreAudio();
+      },
+      toast,
+      replaceState: cleaned => history.replaceState(null, '', cleaned),
+    });
+  } catch (e) {
+    console.error('深链导入异常', e);
+    toast('深链导入失败：应用内部错误');
+  }
+}
+
 // ---------- 启动 ----------
 async function boot() {
   buildStage();
@@ -3935,6 +4196,7 @@ async function boot() {
     store.setUI({ view: 'library' });
   }
   await restoreAudio(); // 自动恢复上次项目时同步恢复音频
+  await wireDeeplinkImport(); // Phase 4 深链：在 init 之后执行 → 显式 import 参数优先于 lastProject 自动恢复
   render(store.getState());
   store.subscribe(render);
 }
@@ -4906,9 +5168,10 @@ function render(state) {
   stageView.requestDraw();
 }
 
-boot();
+// Node 单测直接 import 本模块（深链纯函数）：以下浏览器专属副作用一律判存后再执行
+if (typeof document !== 'undefined') boot();
 // 可见版本徽标：防止旧缓存页面误导验证
-requestAnimationFrame(() => {
+if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => {
   const bt = document.getElementById('build-tag');
   if (bt) bt.textContent = BUILD_TAG;
 });
@@ -4924,7 +5187,7 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
 }
 
 // 自动化测试钩子（不影响正常使用）：注入音频、读取状态
-window.__fs = {
+if (typeof window !== 'undefined') window.__fs = {
   store, player: () => player, audio, M, shapes, exp,
   stageView: () => stageView,
   musicTl: () => musicTl,
@@ -4950,7 +5213,7 @@ window.__fs = {
   },
 };
 
-
+Object.assign(FS.main, { parseImportParam, stripImportParam, resolveImportUrl, runDeeplinkImport });
 })();
 
 </script>
