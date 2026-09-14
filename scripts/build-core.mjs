@@ -5,13 +5,16 @@
 //   2) 去掉 export 前缀并收集导出名；
 //   3) 按依赖序拼接 + 末尾统一 export 块；
 //   4) 顶层名冲突检查 + 动态 import 产物自检（导出齐全、可执行）。
-// 用法：node scripts/build-core.mjs
+// 用法：node scripts/build-core.mjs [--out <path>]
+//   --out 缺省 dist/core/wuzhen-core.mjs；自定义路径用于防陈旧校验
+//   （dancesport-choreo skill 测试：重建到临时文件与 vendor/ 逐字节比对）。
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = join(root, 'dist', 'core', 'wuzhen-core.mjs');
+const outIdx = process.argv.indexOf('--out');
+const OUT = outIdx >= 0 && process.argv[outIdx + 1] ? resolve(process.argv[outIdx + 1]) : join(root, 'dist', 'core', 'wuzhen-core.mjs');
 // 依赖拓扑序（被依赖者在前）
 const ORDER = ['model', 'shapes', 'choreo-extra'];
 

@@ -29,18 +29,24 @@
 - 脚本骨架（薄包装 core）：`analyze-music.mjs`、`propose-formations.mjs`、`propose-transition.mjs`、`apply.mjs`、`check.mjs`、`export.mjs/import.mjs`。
 - **验收**：示例项目（12 人 6 单元）端到端演练：导入 → 提议 → 人选 → 应用 → 体检 → 导出 → 回 app 打开无损。
 
-## Phase 2 · 能力实现与规则库——目标：候选有据、体检有牙
+## Phase 2 · 能力实现与规则库——目标：候选有据、体检有牙 ✅（2026-09-10 交付）
 
 - `propose-formations`：8 种队形 × 参数（单元感知、行距、朝向 faceAll）→ 候选集 + SVG + 属性（分散度/对称度/与上段移动量）。
-- `propose-transition`：A→B 变体（直接/mirrorH/rotateSelected/插过渡队形）+ `feasibility` 分（需移动距离 ÷ 可用拍数 × BPM ≤ 速度上限）。
+- `propose-transition`：A→B 变体（直接/mirrorH/rotate90/插过渡队形）+ `feasibility` 分（需移动距离 ÷ 可用拍数 × BPM ≤ 速度上限）。
 - `check`：validateProject 硬校验 + 软规则（越界/最小间距/速度上限/拍数对齐），输出决策点清单；**能抓植入违规**（测试注入坏数据必须被拦）。
 - `analyze-music`：BPM+首拍+段落表 → 拍数结构报告（人确认音乐理解）。
-- **验收**：植入违规样例 100% 被抓；候选评分排序稳定可复现。
+- **落地记录**：三能力 + analyze-music 提前落地（density 规则表内置可覆盖）；reviewer 四条加固全落实——
+  ① vendor 防陈旧（build-core 支持逐字节比对，见 Phase 3 测试文件）；② roster 外 id：propose-transition 拒绝生成、
+  check/apply 出 warning 决策点；③ 自报 props 与 core 重算偏差>5% → check/apply warning；
+  ④ propose-transition §13 契约（count≤4/排序稳定可复现/两段 feasibility）逐条测试。测试：`tests/skill-choreo.test.js`。
+- **验收**：植入违规样例 100% 被抓；候选评分排序稳定可复现。✅
 
-## Phase 3 · 音乐匹配落地——目标：段落表变时间轴
+## Phase 3 · 音乐匹配落地——目标：段落表变时间轴 ✅（2026-09-10 交付）
 
 - 段落表（人工提供：前奏 8 拍/主歌 32/副歌 32…）→ 变换密度规则（8/16 拍一变、副歌大调度、主歌小调度、间奏重置）→ 生成 formations + blocks（复用 blocks↔formations 同步与 spb/beatToSec），总拍数=歌曲节拍。
-- **验收**：样例歌曲（BPM 120、128 拍）生成的时间轴在 app 中播放对齐；C-07 回归不受影响。
+- **落地记录**：`scripts/propose-timeline.mjs`（协议第七条：提案+每段候选文件，人拍板后逐段 apply，禁止一键整支舞）；
+  travel 自适应（≤span−1）保证每段变换过 feasibility；apply 采纳候选 block 提示（--all 段落粒度，一段一快照）。
+- **验收**：样例歌曲（BPM 120、120 拍）总拍数对齐、块数与密度规则一致、全部变换 feasibility ok、apply 后 export 往返逐字节无损（tests/skill-choreo.test.js）。✅
 
 ## Phase 4 · 深链交付——目标：点开链接=编排好的项目
 
