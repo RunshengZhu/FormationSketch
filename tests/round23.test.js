@@ -278,11 +278,13 @@ test('B2 数拍入场：countInBeats 生效（负拍推进 → 入场毕转播�
   });
   player.play(0);
   assert.equal(player.countin, true);
-  assert.equal(counts[0], 4, '启动即上报总入场拍');
-  assert.equal(counts[1], 3, '首拍立即计数（剩 3）');
-  assert.ok(player.beat < 0, '入场期间为负拍');
+  assert.equal(counts[0], 4, '启动即上报总入场拍（overlay 先画满 4）');
+  // DEFECT-R28-1 语义修正：首拍不再同 tick 立即计数（旧实现首帧数字被覆盖为 3，
+  // 倒计序列只显示 3,2,1）；改为先画满 n，随节拍间隔逐拍递减（4,3,2,1,0）。
+  assert.deepEqual(counts, [4], '启动仅上报总拍，递减随节拍间隔到来');
   return new Promise(resolve => {
     setTimeout(() => {
+      assert.deepEqual(counts, [4, 3, 2, 1, 0], '逐拍递减序列完整（含收尾 0=隐藏）');
       assert.equal(player.countin, false);
       assert.equal(player.playing, true);
       assert.ok(player.beat >= 0);

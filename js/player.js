@@ -62,7 +62,10 @@ export class Player {
     };
     const ci = countIn && fresh ? (p.timeline.countInBeats || 0) : 0;
     if (ci > 0) {
-      // 数拍入场：负拍虚拟时钟，每拍一声（每小节首拍高音）
+      // 数拍入场：负拍虚拟时钟，每拍一声（每小节首拍高音）。
+      // DEFECT-R28-1：旧实现 onCountin(n) 画满数后同 tick 立即 clickOne()——首帧数字被覆盖为
+      // n-1，倒计序列只显示 3,2,1（4 拍入场只画 3 个数），与文档「依次 4→1→隐藏」不符。
+      // 现改为：先画完整 n，再进入节拍间隔；每拍一声不变，起播时刻=第 n 拍点击后（总时长仍 n 拍）。
       this.countin = true;
       this.playing = false;
       let n = ci;
@@ -78,7 +81,6 @@ export class Player {
         if (n <= 0) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this.beat = 0; doStart(); }
       };
       this.onCountin?.(n);
-      clickOne();
       this._ciTimer = setInterval(clickOne, interval);
     } else {
       doStart();
