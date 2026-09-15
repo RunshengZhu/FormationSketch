@@ -9,8 +9,8 @@ import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-24-skill';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-23-r23ux');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-25-userflows';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-25-userflows');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -381,7 +381,8 @@ async function wireDeeplinkImport() {
       importProject: p => { player?.stop(); store.importProject(p); },
       onAudio: async blob => { // 与「导入项目文件…」同语义：内嵌音乐回填到新项目 id
         await store.storage.putAudio(store.getState().projectId, blob);
-        await restoreAudio();
+        // DEFECT-R26-3 同源：下载版存储往返不可用，直接回填会话音频（在线通道行为不变）
+        await audio.loadBlob(blob, store.getState().project?.audio?.name || blob.name || '').catch(() => {});
       },
       toast,
       replaceState: cleaned => history.replaceState(null, '', cleaned),
@@ -496,7 +497,7 @@ function buildStrips() {
       ripple: () => store.getState().ripple,
       onSelectFormation: i => switchFormation(i),
       mutate: fn => store.mutate(fn, null),
-      commitEdit: label => store.commit(label),
+      commitEdit: label => { store.commit(label); syncLoopAfterBlockEdit(); }, // 拖边改时长后循环区间跟随（DEFECT-R26-4）
       seekBeat: b => player.seekBeat(Math.max(0, b)),
     },
   });
@@ -570,12 +571,19 @@ function wireTopbar() {
   $('exp-print').addEventListener('click', () => {
     try { exp.printFormations(store.getState().project, 'light'); } catch (e) { toast(e.message); }
   });
-  const doExportJSON = async (includeAudio, share) => {
+  // 取「应当随项目导出」的音频 Blob：优先本地存储（在线=IndexedDB）；下载版（file://→localStorage）
+  // 音频不落盘、getAudio 恒为 null → 回退当前会话 AudioController 手里的 Blob（DEFECT-R26-2：
+  // 否则下载版「含音乐导出」永远导不出音乐，文档承诺的「含乐导出兜底配乐不持久」失效）。
+  async function getExportAudioBlob() {
     const s = store.getState();
     let blob = null;
-    if (includeAudio) {
-      try { blob = await store.storage.getAudio(s.projectId); } catch {}
-    }
+    try { blob = await store.storage.getAudio(s.projectId); } catch {}
+    if (!blob && audio?.ready && audio.blob) blob = audio.blob;
+    return blob;
+  }
+  const doExportJSON = async (includeAudio, share) => {
+    const s = store.getState();
+    const blob = includeAudio ? await getExportAudioBlob() : null;
     const res = await exp.exportProjectJSON(s.project, blob, { share });
     if (res === 'cancelled') return;
     const how = res === 'shared' ? '已通过系统分享发送' : '已导出';
@@ -585,15 +593,12 @@ function wireTopbar() {
   $('exp-json-audio').addEventListener('click', async () => {
     const s = store.getState();
     if (!s.project.audio.name) { toast('当前项目未载入音乐，将导出不含音乐的项目文件'); }
-    let blob = null;
-    try { blob = await store.storage.getAudio(s.projectId); } catch {}
+    const blob = await getExportAudioBlob();
     if (!blob) { toast('本地未找到音乐文件，请重新载入后再导出含音乐版本'); }
     await doExportJSON(!!blob, true);
   });
   $('exp-json').addEventListener('click', async () => {
-    const s = store.getState();
-    let blob = null;
-    try { blob = await store.storage.getAudio(s.projectId); } catch {}
+    const blob = await getExportAudioBlob();
     await doExportJSON(!!blob, false);
   });
   $('imp-json').addEventListener('click', async () => {
@@ -606,7 +611,10 @@ function wireTopbar() {
         player.stop();
         if (audioBlob) {
           await store.storage.putAudio(store.getState().projectId, audioBlob);
-          await restoreAudio();
+          // DEFECT-R26-3：直接回填当前会话音频通道，不再依赖存储往返——下载版（file://→localStorage）
+          // putAudio/getAudio 均为 no-op，只走 restoreAudio 会导致「含乐文件导入后音乐仍丢失」，
+          // 与文档「导入成功（音乐已一并恢复）」承诺相悖；在线通道经此路径行为不变。
+          await audio.loadBlob(audioBlob, store.getState().project.audio.name || audioBlob.name || '').catch(() => {});
           toast('导入成功（音乐已一并恢复）');
         } else {
           toast('导入成功（该项目文件不含音乐，请重新载入音乐）');
@@ -782,6 +790,11 @@ function updateLoop() {
   player.setLoop(!!(on && seg), seg ? seg.holdStart : 0, seg ? seg.travelEnd : 0);
   if (on && seg && player.beat < seg.holdStart) player.seekBeat(seg.holdStart);
 }
+// DEFECT-R26-4：播放中改块时长（时间轴拖边 / ± 步进 / 面板输数）不暂停，循环区间若不跟随
+// 新段长，会一直在旧边界内打转（实测 loopEnd=72 vs 新 travelEnd=99）。仅在播放+循环开启时刷新。
+function syncLoopAfterBlockEdit() {
+  if (player?.playing && $('pb-loop')?.checked) updateLoop();
+}
 function togglePlay() {
   if (player.playing) { player.pause(); return; }
   const s = store.getState();
@@ -871,6 +884,7 @@ function wireAudioPanel() {
       if (!b) return;
       b[key] = Math.max(0.5, Math.min(999, (b[key] || 0) + delta));
     }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
+    syncLoopAfterBlockEdit(); // 步进改时长后循环区间跟随（DEFECT-R26-4）
   };
   $('bc-hold-minus').addEventListener('click', () => stepBlock('holdBeats', -1));
   $('bc-hold-plus').addEventListener('click', () => stepBlock('holdBeats', 1));
@@ -966,11 +980,14 @@ function buildProps() {
       (() => {
         const blk = s.project.timeline.blocks[s.formationIndex];
         const hasNext = s.formationIndex < s.project.formations.length - 1;
-        const setDur = (key, v) => store.mutate(p => {
-          const b = p.timeline.blocks[s.formationIndex];
-          const n = Number(v);
-          b[key] = Number.isFinite(n) ? Math.max(0.5, Math.min(999, n)) : b[key];
-        }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
+        const setDur = (key, v) => {
+          store.mutate(p => {
+            const b = p.timeline.blocks[s.formationIndex];
+            const n = Number(v);
+            b[key] = Number.isFinite(n) ? Math.max(0.5, Math.min(999, n)) : b[key];
+          }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
+          syncLoopAfterBlockEdit(); // 面板输数改时长后循环区间跟随（DEFECT-R26-4）
+        };
         return h('div', { class: 'prop-group' },
           h('div', { class: 'pg-title' }, '时间轴时长（拍）'),
           h('div', { class: 'prop-row' }, h('label', {}, '保持到下一队形前'),

@@ -198,7 +198,12 @@ export function createGestureMachine(host) {
     if (e.button === 2) return; // 右键：交给 contextmenu 事件（仅 IDLE 响应），不启动任何手势
     if (state === 'BOX' && g && g.lpBox) return; // 长按框选进行中：忽略新增手指（不转 PINCH/缩放），其抬起同样无效
     pointers.set(e.pointerId, { x: e.px, y: e.py });
-    if (pointers.size === 2) { abortToPinch(); return; }
+    if (pointers.size === 2) {
+      // DEFECT-R26-1：查看模式（readOnly）下手势全禁——双指不得转入 PINCH（缩放/双指平移），
+      // 否则排练演示时误触双指会拖走画面（文档 §3.1 边界：拖动/平移/捏合缩放/长按菜单全不响应）。
+      if (!host.readOnly()) abortToPinch();
+      return;
+    }
     if (pointers.size > 2) return;
     if (host.readOnly()) return;
     // 桌面平移修饰键：中键（button=1）或空格按住+左键。仅在空白起手=平移；

@@ -298,7 +298,7 @@
 | F-07 | ✅已落实 | stage wheel：一律 preventDefault；`|deltaX|>|deltaY|` 且无 ctrl/meta → 舞台水平平移（`panView(-deltaX,0)`，含 Shift 换轴形态）；纵向/捏合缩放语义不变 |
 | F-08 | ✅已落实 | document 级策略：编辑器视图内 contextmenu 一律 preventDefault（含时间轴/播放条/面板/chip，与画布自定义菜单同一防御面）；`input/textarea/select/.roster-table` 豁免保留系统菜单；库视图不拦（归 F-09） |
 | F-09 | ✅已落实 | 库卡片右键=自定义菜单 `[打开/复制/删除/✕]`（复用 `.unit-menu/.um-btn` 风格，fixed 定位钳制视口，点外部/Esc 关闭）；**左键打开不变**；静默复制手势移除 |
-| F-10 | ⏸顺延 | EditStrip 触摸排序路径本轮不做（形态需另行拍板）；`chip.draggable=true` 现状保留，UX-10 维持 P2 登记 |
+| F-10 | ✅已实装（轮14b 更新） | EditStrip 触摸长按拖拽排序已于轮 14b 落地（长按 chip 0.3s 拿起→拖动实时预览→落位重排；blocks 按 formationId 跟随、容器边缘自动滚动、pointercancel 安全回滚。证据：`wuzhen-e2e-lab/out/round14-v3`、探针 `lab/probe-f10-touch-reorder.mjs`、单测 `tests/f10.test.js`）。本行 round20 时点为「⏸顺延（形态需另行拍板）」，实况以本行为准 |
 | F-11 | ✅已落实 | `#stage-canvas,#stage-wrap{-webkit-touch-callout:none}` + `#editor-view{user-select:none}`（`input/textarea/select` 显式豁免；名册弹窗在 #modal-root，不受影响） |
 
 **F-02 touch-action 取值决策（round20 备注 §4/§9）**：在 `none` 与 `pan-x` 之间取 **`none`**。理由：`pan-x` 让横向主导轴的触摸手势继续归浏览器滚动接管——块边缘把手拖拽恰是横拖，起手即便命中 10px 容差也会在滚动接管判定下被 pointercancel，等于触摸拖块依旧不可用；`none` 让 scrub/块拖/选择在触摸端从根上可用。代价：`#tl-scroll` 的触摸横滚让位（滚轮、ctrl+滚轮缩放、＋/−/⤢ 按钮、tap 选块定位全部保留；自适应宽度下溢出本就少见，缩放后可用按钮/滚轮回览）。「编辑操作可用性 > 触摸横滚便利」为裁定依据。

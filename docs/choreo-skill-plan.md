@@ -52,7 +52,8 @@
 
 - app 小改：`/apps/wuzhen/?import=<URL>` boot 时 fetch URL → importProject（SW navigate 缓存需兼容带 query 的入口，实现轮细化）。
 - skill：`publish.mjs` 上传 JSON 到 wuzhen-release 层 → 产出深链（可进微信）。
-- **验收**：公网点深链载入项目；既有离线/持久化回归（IR-06/07）不回归。
+- **前提标注（round26 实测）**：SW 断网缓存（含「断网点深链仍能打开应用本体」）只在 **HTTPS（或 localhost）托管**下生效——当前在线入口为 HTTP 非安全上下文，实测 `navigator.serviceWorker` 不存在，断网即打不开应用（深链抓取本身不受影响，但断网时页面都进不来）。HTTPS 托管后 sw.js 已按 ignoreSearch 兼容带 query 的深链入口。
+- **验收**：公网点深链载入项目；既有离线/持久化回归（IR-06/07）不回归（离线断网能力以 HTTPS 托管为前提，见上）。
 
 ## Phase 5 · 打磨（backlog）
 

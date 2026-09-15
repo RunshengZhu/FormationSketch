@@ -9,6 +9,8 @@ export class AudioController {
     this.url = null;
     this.name = '';
     this.ready = false;
+    this.blob = null;         // 当前会话的音频源 Blob：下载版（file://→localStorage）不落盘，
+                              // 「导出 ▾」含音乐需要从这里兜底取（DEFECT-R26-2，与在线 IndexedDB 行为对齐）
   }
   ensureCtx() {
     if (!this.ctx) {
@@ -20,6 +22,7 @@ export class AudioController {
   }
   async loadBlob(blob, name = '') {
     this.dispose();
+    this.blob = blob; // 会话内保留原始 Blob（导出含乐兜底用；dispose 时清空）
     this.url = URL.createObjectURL(blob);
     this.el.src = this.url;
     this.name = name || blob.name || 'audio';
@@ -66,7 +69,7 @@ export class AudioController {
   dispose() {
     try { this.el.pause(); } catch {}
     if (this.url) URL.revokeObjectURL(this.url);
-    this.url = null; this.peaks = null; this.ready = false; this.duration = 0;
+    this.url = null; this.peaks = null; this.ready = false; this.duration = 0; this.blob = null;
   }
 }
 export function computePeaks(audioBuffer, buckets = 1800) {
