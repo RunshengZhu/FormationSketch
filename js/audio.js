@@ -21,16 +21,29 @@ export class AudioController {
     return this.ctx;
   }
   async loadBlob(blob, name = '') {
-    this.dispose();
+    // 任务#3（报告#3）：失败不破坏当前会话——先在临时 <audio> 上等元数据，成功后才替换旧会话。
+    // 旧实现先 dispose() 再等元数据，损坏音频 reject 后播放器留下 ready=false 的空会话，
+    // 播放中载入即僵死（playing=true 空转）；现在失败时旧音乐照常可用。
+    const el = new Audio();
+    el.preload = 'auto';
+    const url = URL.createObjectURL(blob);
+    el.src = url;
+    try {
+      await new Promise((resolve, reject) => {
+        el.addEventListener('loadedmetadata', resolve, { once: true });
+        el.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
+      });
+    } catch (e) {
+      URL.revokeObjectURL(url);
+      throw e;
+    }
+    this.dispose(); // 元数据确认可解码后才提交：清旧会话（旧 url/blob/peaks/旧元素）
+    this.el = el;
     this.blob = blob; // 会话内保留原始 Blob（导出含乐兜底用；dispose 时清空）
-    this.url = URL.createObjectURL(blob);
-    this.el.src = this.url;
+    this.url = url;
     this.name = name || blob.name || 'audio';
-    await new Promise((resolve, reject) => {
-      const ok = () => { this.duration = this.el.duration || 0; this.ready = true; resolve(); };
-      this.el.addEventListener('loadedmetadata', ok, { once: true });
-      this.el.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
-    });
+    this.duration = this.el.duration || 0;
+    this.ready = true;
     // 波形（失败不阻塞，仅无波形显示）
     try {
       const ab = await blob.arrayBuffer();

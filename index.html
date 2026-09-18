@@ -42,8 +42,8 @@
         <div class="dd-menu" hidden>
           <button id="exp-png">当前队形 PNG</button>
           <button id="exp-print">打印 / PDF（全部队形）</button>
-          <button id="exp-json-audio">项目文件 · 含音乐 (.formation.json)</button>
-          <button id="exp-json">项目文件 · 不含音乐 (.formation.json)</button>
+          <button id="exp-json-audio">导出项目文件（含音乐）</button>
+          <button id="exp-json">导出项目文件（不含音乐）</button>
           <button id="imp-json">导入项目文件…</button>
         </div>
       </div>
@@ -142,7 +142,7 @@
           <select id="pb-speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
         </label>
         <label class="ctl" title="循环当前队形段"><input type="checkbox" id="pb-loop">循环</label>
-        <label class="ctl" title="节拍器"><input type="checkbox" id="pb-metro">节拍器</label>
+        <!-- 节拍器已移至「🎵 音乐与节拍」主行（id=pb-metro 不变，接线与仪器兼容） -->
       </div>
       <div id="timeline-area">
         <div id="block-ctl">
@@ -167,23 +167,30 @@
           <details id="audio-disc" open>
             <summary title="展开/收起音乐设置">🎵 音乐与节拍</summary>
             <div id="audio-panel">
+              <!-- 主行（常驻，服务对齐编辑）：载入/更换音乐、BPM、首拍+对齐、节拍器；缩放服务时间线查看 -->
               <button id="btn-load-audio" class="btn small">载入音乐…</button>
               <input type="file" id="audio-file" accept="audio/*" hidden>
               <span id="audio-name" class="dim">未载入音乐</span>
               <span class="vsep"></span>
               <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" style="width:56px"></label>
-              <button id="btn-tap" class="btn small">点拍</button>
               <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" style="width:64px">s</label>
-              <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
-              <span class="vsep"></span>
-              <label class="ctl">小节 <select id="bpb-select"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
-              <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
-              <label class="ctl"><input type="checkbox" id="ripple-check" checked>连续时长</label>
               <button id="btn-align-playhead" class="btn small" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">⇤ 对齐到播放头</button>
+              <label class="ctl" title="节拍器（播放时每拍一声，小节首拍高音）"><input type="checkbox" id="pb-metro">节拍器</label>
               <span class="spacer"></span>
               <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>
               <button id="tl-zoom-in" class="btn small" title="放大时间线">＋</button>
               <button id="tl-zoom-fit" class="btn small" title="适应宽度">⤢</button>
+              <!-- 校准子行（默认收起）：低频校准工具收进折叠，主行保持对齐编辑动线最短 -->
+              <details id="calib-disc">
+                <summary title="展开/收起校准工具（点拍 / 小节 / 数拍入场 / 试听 / 连续时长）">校准</summary>
+                <div id="calib-panel">
+                  <button id="btn-tap" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
+                  <label class="ctl">小节 <select id="bpb-select"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
+                  <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
+                  <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
+                  <label class="ctl" title="开：改某块保持时长后续块顺延；关：压缩自身过渡、后续块不动"><input type="checkbox" id="ripple-check" checked>连续时长</label>
+                </div>
+              </details>
             </div>
           </details>
           <div id="tl-scroll"><div id="tl-inner">

@@ -18,9 +18,12 @@ export class Player {
     this._virtual = null;         // {baseBeat, t0}
     this._lastIntBeat = null;
     this._stopAt = null;          // 预览过渡时的结束拍
+    this._ciBase = null;          // 数拍起数的基准拍（取消倒计时回到这里）
+    this._audioEnded = false;     // 音频先于时间轴自然结束：true=后续播放由虚拟时钟接管（见 useAudio）
   }
   get useAudio() {
     if (this._forceVirtual) return false;
+    if (this._audioEnded) return false; // 音频已放完：虚拟时钟接管至 totalBeats（重按 ▶ 从当前拍续走）
     const p = this.getProject();
     return !!(p?.audio?.name && this.audio?.ready);
   }
@@ -68,6 +71,7 @@ export class Player {
       // 现改为：先画完整 n，再进入节拍间隔；每拍一声不变，起播时刻=第 n 拍点击后（总时长仍 n 拍）。
       this.countin = true;
       this.playing = false;
+      this._ciBase = this.beat; // 任务#5：取消倒计时回到起数基准拍（回到停止态，不直接起播）
       let n = ci;
       const total = ci;
       const bpb = p.audio.beatsPerBar || 4;
@@ -78,7 +82,7 @@ export class Player {
         this.onCountin?.(n);
         this.beat = -n; // 负拍显示
         this._emit();
-        if (n <= 0) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this.beat = 0; doStart(); }
+        if (n <= 0) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this._ciBase = null; this.beat = 0; doStart(); }
       };
       this.onCountin?.(n);
       this._ciTimer = setInterval(clickOne, interval);
@@ -87,12 +91,23 @@ export class Player {
     }
   }
   _cancelCountin() {
+    // 任务#5：取消倒计回到停止态——基准拍还原（不再停在负拍），返回是否确有倒计被取消
     if (this._ciTimer) {
       clearInterval(this._ciTimer);
       this._ciTimer = null;
-      this.countin = false;
-      this.onCountin?.(0);
     }
+    if (!this.countin) return false;
+    this.countin = false;
+    this.beat = this._ciBase ?? 0;
+    this._ciBase = null;
+    this.onCountin?.(0);
+    return true;
+  }
+  // 数拍中 ▶/空格/Esc/scrub 的统一取消入口：只取消倒计，不直接起播
+  cancelCountin() {
+    const had = this._cancelCountin();
+    if (had) this._emit();
+    return had;
   }
   _restoreLoop() {
     if (this._loopStash) {
@@ -101,7 +116,7 @@ export class Player {
     }
   }
   pause() {
-    if (this._ciTimer) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this.onCountin?.(0); }
+    this._cancelCountin(); // 任务#5：数拍中暂停=取消倒计并回到基准拍（停止态）
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     if (!this.playing) return;
     this.playing = false;
@@ -113,14 +128,25 @@ export class Player {
     this.pause();
     this.beat = 0;
     this._stopAt = null;
+    this._audioEnded = false; // 停止=整体复位：下次 ▶ 恢复音频时钟（从头起播）
     this._forceVirtual = false;    this._restoreLoop();
     if (this.audio?.ready) this.audio.seek(0);
     this.onCountin?.(0);
     this._emit();
   }
   seekBeat(b) {
+    const p = this.getProject();
+    if (p) {
+      // 任务#9（报告#9）：scrub/播放头目标一律钳制 [0, totalBeats]——越界定位不再触发停播/画出波形外
+      const { totalBeats } = computeSegments(p);
+      b = Math.max(0, Math.min(b, totalBeats));
+      // 音频结束态下把播放头拖回音频范围内 → 恢复音频时钟（下次起播重新走 audio 通道）
+      if (this._audioEnded && this.audio?.duration && beatToSec(p, b) < this.audio.duration - 0.02) {
+        this._audioEnded = false;
+      }
+    }
     this.beat = b;
-    if (this.useAudio) this.audio.seek(beatToSec(this.getProject(), b));
+    if (this.useAudio) this.audio.seek(beatToSec(p, b));
     else if (this.playing) this._virtual = { baseBeat: b, t0: performance.now() };
     this._lastIntBeat = null;
     this._emit();
@@ -142,7 +168,14 @@ export class Player {
     if (!this.playing) return;
     const p = this.getProject();
     if (!p) { this.playing = false; return; }
-    if (this.useAudio && !this.audio.playing) { this.pause(); return; }
+    if (this.useAudio && !this.audio.playing) {
+      // 音频通道停了：区分「自然放完」（含 ended 事件抢先的窗口）与「异常中断」（任务#7/#3）
+      this._finish(!!(this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02));
+      return;
+    }
+    // 任务#3（报告#3）：音频会话在播放中消失（载入失败/存储驱逐）→ 干净暂停，
+    // 不再走 beat=this.beat 空转的「僵死播放」态
+    if (!this.useAudio && !this._virtual && !this._forceVirtual) { this.pause(); return; }
     let beat;
     if (this.useAudio && this.audio.playing) {
       beat = secToBeat(p, this.audio.currentTime);
@@ -174,15 +207,38 @@ export class Player {
       this.seekBeat(this.loopStart);
     } else {
       const { totalBeats } = this.segments();
-      if (beat >= totalBeats || (this.useAudio && this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02)) {
+      if (beat >= totalBeats) {
+        // 任务#6（报告#6）：终态统一——两套时钟都停在 totalBeats 并置 ended（不再静默归 0）
         this.pause();
         this.beat = totalBeats;
         this.onStateChange?.({ playing: false, ended: true });
+      } else if (this.useAudio && this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02) {
+        this._finish(true); // 任务#7（报告#8）：音频先于时间轴自然结束（ended 前的采样窗口）
       }
     }
     this._emit();
     // setTimeout 驱动（rAF 在后台/部分环境会被节流导致回放停滞）
     this._timer = setTimeout(() => this._tick(), 16);
+  }
+  // 音频通道结束的收尾：自然放完时把播放头钳在音频末拍（不越过波形）、
+  // 时间轴还没走完则置 _audioEnded（下一次 ▶ 由虚拟时钟从当前拍接管至 totalBeats）
+  _finish(audioEnded) {
+    this.pause();
+    if (!audioEnded) return;
+    const p = this.getProject();
+    if (!p) return;
+    const { totalBeats } = this.segments();
+    const endBeat = Math.max(0, Math.min(secToBeat(p, this.audio.currentTime || this.audio.duration || 0), totalBeats));
+    if (totalBeats - endBeat <= 0.05) {
+      this.beat = totalBeats;
+      this.onStateChange?.({ playing: false, ended: true });
+    } else {
+      this.beat = endBeat;
+      this._audioEnded = true;
+      this._lastIntBeat = null;
+      this.onStateChange?.({ playing: false, ended: true, reason: 'audio' });
+    }
+    this._emit();
   }
   _emit() {
     const p = this.getProject();

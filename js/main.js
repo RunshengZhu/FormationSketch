@@ -10,8 +10,8 @@ import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
 import { renderManual } from './manual.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-27-manual';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-27-manual');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-28-music';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-28-music');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -450,7 +450,8 @@ function buildPlayer() {
     getProject: () => store.getState().project,
     onTick: t => {
       const proj0 = store.getState().project;
-      $('pb-pos').textContent = proj0 ? M.beatLabel(proj0, t.beat) : '—';
+      // 任务#20：数拍期播放头呈「入场」（beatLabel 会把负拍钳成 1.1，这里不覆写 onCountin 的呈示）
+      if (!player.countin) $('pb-pos').textContent = proj0 ? M.beatLabel(proj0, t.beat) : '—';
       const f = store.getState().project?.formations[t.formationIndex];
       $('pb-formation').textContent = f ? `${t.formationIndex + 1}. ${f.name}` : '';
       // 真实播放中高亮跟随节拍；切帧预览/seek 不抢占用户选择的队形
@@ -467,14 +468,25 @@ function buildPlayer() {
       stageView?.requestDraw();
       musicTl?.drawPlayhead();
     },
-    onStateChange: ({ playing }) => {
+    onStateChange: ({ playing, reason }) => {
       $('pb-play').textContent = playing ? '⏸' : '▶';
       if (!playing) renderUndoButtons();
+      // 任务#7（报告#8）：音频先于时间轴自然结束——一次性 toast，播放头停在音频末拍
+      if (reason === 'audio') toast('音乐已结束');
+      updateMusicLock(); // 任务#2：播放/暂停切换即刷新 BPM/首拍锁
     },
     onCountin: n => {
       const ov = $('countin-overlay');
-      if (n > 0) { ov.hidden = false; ov.textContent = n; }
-      else ov.hidden = true;
+      if (n > 0) {
+        ov.hidden = false; ov.textContent = n;
+        // 任务#20（P3 cosmetic）：数拍期播放头显示「入场」、播放键呈 ⏸（可点击=取消倒计）
+        $('pb-pos').textContent = '入场';
+        $('pb-play').textContent = '⏸';
+      } else {
+        ov.hidden = true;
+        $('pb-play').textContent = player.playing ? '⏸' : '▶';
+      }
+      updateMusicLock();
     },
   });
 }
@@ -583,11 +595,12 @@ function wireTopbar() {
   }
   const doExportJSON = async (includeAudio, share) => {
     const s = store.getState();
-    const blob = includeAudio ? await getExportAudioBlob() : null;
+    const blob = includeAudio ? await getExportAudioBlob() : null; // 任务#1：不含乐=明确不取 blob，导出 v1
     const res = await exp.exportProjectJSON(s.project, blob, { share });
     if (res === 'cancelled') return;
     const how = res === 'shared' ? '已通过系统分享发送' : '已导出';
-    const what = includeAudio && blob ? '（含音乐）' : '';
+    // 任务#1（报告#1）：按钮语义与行为严格对齐——不含乐导出在 toast 里明示可后补音乐
+    const what = includeAudio && blob ? '（含音乐）' : '（不含音乐，可稍后重新载入）';
     toast(`${how}项目文件${what}`);
   };
   $('exp-json-audio').addEventListener('click', async () => {
@@ -598,8 +611,9 @@ function wireTopbar() {
     await doExportJSON(!!blob, true);
   });
   $('exp-json').addEventListener('click', async () => {
-    const blob = await getExportAudioBlob();
-    await doExportJSON(!!blob, false);
+    // 任务#1（报告#1）：「不含音乐」按钮此前实际内嵌音乐（与含乐按钮字节相同）——
+    // 现严格按文案导出 v1（无 dataBase64），交付意图不再被静默违背
+    await doExportJSON(false, false);
   });
   $('imp-json').addEventListener('click', async () => {
     const inp = h('input', { type: 'file', accept: '.json,application/json' });
@@ -796,17 +810,24 @@ function syncLoopAfterBlockEdit() {
   if (player?.playing && $('pb-loop')?.checked) updateLoop();
 }
 function togglePlay() {
+  // 任务#5（报告#5）：数拍进行中 ▶/空格 = 取消倒计，回到停止态（不重开倒计、不直接起播）
+  if (player.countin) { player.cancelCountin(); return; }
   if (player.playing) { player.pause(); return; }
   const s = store.getState();
   const { segments } = M.computeSegments(s.project);
   const seg = segments[s.formationIndex];
-  if (player.beat > 0.001 && !playerAtEnd()) {
-    player.play(null, { countIn: false }); // 暂停后续播
+  if (playerAtEnd()) {
+    // 任务#6/#7（报告#6/#7）：全曲播完后再按 ▶ 从头播（不再只重播最后一段/静默归 0）
+    if (audio.ready) player.play(0);
+    else player.play(0, { countIn: false, forceVirtual: true });
+  } else if (player.beat > 0.001) {
+    player.play(null, { countIn: false }); // 暂停后续播（音频结束态经 useAudio=false 由虚拟时钟接管）
   } else if (audio.ready) {
     player.play(seg ? seg.holdStart : 0); // 有音乐：按音乐时钟从当前队形播
   } else {
-    // 无音乐：虚拟时钟，预览当前队形的保持+过渡
-    player.play(seg ? seg.holdStart : 0, { previewStop: seg && seg.hasTravel ? seg.travelEnd : (seg ? seg.holdEnd : 0), countIn: false, forceVirtual: true });
+    // 无音乐：虚拟时钟（任务#6 终态统一）——不再单段预览，同音乐档一样播到 totalBeats
+    // 并置 ended；循环开启时在当前队形段内回绕（虚拟时钟原生支持）
+    player.play(seg ? seg.holdStart : 0, { countIn: false, forceVirtual: true });
   }
   updateLoop();
 }
@@ -824,6 +845,36 @@ function stepFormation(d) {
 
 // ---------- 音乐面板 ----------
 let tapTimes = [];
+// 任务#2（报告#2）：播放/数拍中 BPM 与首拍禁改——UI disabled（title 提示「暂停后可修改」）
+// + 改变路径（输入 change / 点拍写回）一律拦截，双保险消除播放头跳变与切分点脱钩
+const musicLocked = () => !!(player && (player.playing || player.countin));
+const MUSIC_LOCK_TIP = '暂停后可修改';
+// [元素, 名称, 未锁定时的常态 title]（常态 title 与 index.html 一致，锁定时替换为统一提示）
+const MUSIC_LOCK_TARGETS = [
+  ['bpm-input', 'BPM', ''],
+  ['offset-input', '首拍', ''],
+  ['btn-tap', '点拍', '连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）'],
+];
+function updateMusicLock() {
+  const locked = musicLocked();
+  for (const [id, label, tip] of MUSIC_LOCK_TARGETS) {
+    const el = $(id);
+    if (!el) continue;
+    el.disabled = locked;
+    el.title = locked ? `${label}：${MUSIC_LOCK_TIP}` : tip;
+  }
+}
+function rejectLockedMusicEdit() {
+  if (!musicLocked()) return false;
+  toast(`播放中不可修改，${MUSIC_LOCK_TIP}`);
+  // 还原输入框显示值（change 事件已把键入值留在框里）
+  const p = store.getState().project;
+  if (p) {
+    $('bpm-input').value = Math.round(p.audio.bpm);
+    $('offset-input').value = p.audio.firstBeatSec || 0;
+  }
+  return true;
+}
 function wireAudioPanel() {
   audioPanelBuilt = true;
   // 移动端默认收起音乐设置面板，节省纵向空间
@@ -834,8 +885,12 @@ function wireAudioPanel() {
     if (!file) return;
     await loadAudioFile(file);
   });
-  $('bpm-input').addEventListener('change', () => store.mutate(p => { p.audio.bpm = Math.max(30, Math.min(300, +$('bpm-input').value || 120)); }, null));
+  $('bpm-input').addEventListener('change', () => {
+    if (rejectLockedMusicEdit()) return; // 任务#2：播放中拦截（含程序化 change 路径）
+    store.mutate(p => { p.audio.bpm = Math.max(30, Math.min(300, +$('bpm-input').value || 120)); }, null);
+  });
   $('btn-tap').addEventListener('click', () => {
+    if (musicLocked()) { toast(`播放中不可点拍，${MUSIC_LOCK_TIP}`); return; } // 任务#2：点拍也是 BPM 改变路径
     const now = performance.now();
     if (tapTimes.length && now - tapTimes[tapTimes.length - 1] > 2500) tapTimes = [];
     tapTimes.push(now);
@@ -850,7 +905,16 @@ function wireAudioPanel() {
     }
     if (tapTimes.length > 10) tapTimes = tapTimes.slice(-8);
   });
-  $('offset-input').addEventListener('change', () => store.mutate(p => { p.audio.firstBeatSec = Math.max(0, +$('offset-input').value || 0); }, null));
+  $('offset-input').addEventListener('change', () => {
+    if (rejectLockedMusicEdit()) return; // 任务#2：播放中拦截
+    const v = Math.max(0, +$('offset-input').value || 0);
+    store.mutate(p => { p.audio.firstBeatSec = v; }, null);
+    // 任务#10（报告#10）：首拍越界（≥音频时长）一次性 toast 告警，不阻断——
+    // 让「按播放没反应」的配置错误可诊断
+    if (audio.ready && audio.duration && v >= audio.duration) {
+      toast(`首拍（${v}s）已超出音频时长（${audio.duration.toFixed(1)}s），请确认单位为秒`);
+    }
+  });
   $('btn-offset-test').addEventListener('click', () => {
     if (!audio.ready) { toast('请先载入音乐'); return; }
     player.pause();
@@ -896,14 +960,19 @@ function wireAudioPanel() {
   window.addEventListener('resize', () => { stageView?.requestDraw(); musicTl?.render(); });
 }
 async function loadAudioFile(file) {
+  // 任务#21（报告#21）：换曲前先停——旧实现播放中换曲会静默中断且无提示
+  const wasPlaying = !!(player.playing || player.countin);
+  if (wasPlaying) player.pause();
   try {
-    await audio.loadBlob(file);
+    await audio.loadBlob(file); // 任务#3：失败时旧会话原样保留（audio.js 非破坏载入），项目 audio 字段不推进
     const dur = audio.duration;
     store.mutate(p => { p.audio.name = file.name; p.audio.durationSec = dur; }, '载入音乐');
     await store.storage.putAudio(store.getState().projectId, file);
-    toast(`音乐已载入：${file.name}`);
+    toast(`音乐已载入：${file.name}${wasPlaying ? '（播放已停止）' : ''}`);
   } catch (e) {
-    toast('音乐载入失败：' + e.message);
+    // 任务#3（报告#3）：损坏音频不再僵死——播放已停、按钮经 onStateChange 复位 ▶、
+    // 项目 audio 字段保持载入前状态（可继续编辑/重新选择）
+    toast('音频无法播放，已忽略');
   }
 }
 async function restoreAudio() {
@@ -1068,6 +1137,7 @@ function moveFormationRel(d) {
   const s = store.getState();
   const to = s.formationIndex + d;
   if (to < 0 || to >= s.project.formations.length) return;
+  player.pause(); // 任务#16（报告#16）：与左栏拖拽排序（hooks.move）同守卫——播放中重排先暂停，防内容在播放头下换位
   store.mutate(p => { M.moveFormation(p, s.formationIndex, to); }, '调整队形顺序');
   store.setUI({ formationIndex: to, selection: [] });
 }
@@ -1210,7 +1280,10 @@ function wireKeyboard() {
       const ov = $('manual-overlay');
       if (ov && !ov.hidden) { ov.hidden = true; return; }
     }
-    if (e.key === 'Escape') { if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return; }
+    if (e.key === 'Escape') {
+      if (player?.countin && player.cancelCountin()) return; // 任务#5：数拍入场中 Esc=取消倒计（先于其它取消语义）
+      if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return;
+    }
     // RTS 编组快捷键：Ctrl/Cmd+1..9 = 把当前选择存为编组 N（覆盖）——先于其余修饰键放行
     const digit = /^Digit([1-9])$/.exec(e.code || '');
     if (digit && (e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -1414,9 +1487,10 @@ function render(state) {
     $('bc-sec').textContent = `（${M.beatLabel(p, 0)} 起 · 共 ${M.totalDurationSec(p).toFixed(1)}s）`;
   }
   $('audio-name').textContent = audio.ready ? `${p.audio.name} (${(p.audio.durationSec || 0).toFixed(1)}s)` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
+  updateMusicLock(); // 任务#2：随渲染同步 BPM/首拍/点拍锁态（暂停/播放切换的兜底刷新面）
   $('pb-formation').textContent = currentFormation() ? `${state.formationIndex + 1}. ${currentFormation().name}` : '';
-  // 播放暂停后按钮态
-  $('pb-play').textContent = player.playing ? '⏸' : '▶';
+  // 播放/数拍中按钮态（任务#20：数拍期同样呈 ⏸，点击=取消倒计）
+  $('pb-play').textContent = (player.playing || player.countin) ? '⏸' : '▶';
   stageView.requestDraw();
 }
 

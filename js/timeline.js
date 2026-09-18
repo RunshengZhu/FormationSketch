@@ -491,6 +491,10 @@ export class MusicTimeline {
   _down(e) {
     const p = this.hooks.getProject();
     if (!p) return;
+    // 任务#14：数拍入场期间摸时间线（scrub/拖块/切块）= 取消倒计——否则倒计 tick 会把
+    // 播放头重写回负拍，与用户定位互相打架（报告 P3-#14：beat 20↔-6 弹回）
+    const pl = this.hooks.getPlayer?.();
+    if (pl?.countin && pl.cancelCountin) pl.cancelCountin();
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
     const edges = this.edgeHits(x);

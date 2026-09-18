@@ -722,8 +722,9 @@ async function runDesktop(opts) {
         step('[PIXEL] F2 终点呈舞者色', atF2.d < TH_COLOR, `色距 ${atF2.d.toFixed(1)}`, 'PIXEL');
         cmpStep(step, r2);
 
-        // ---- 时间轴播放跨帧（无音乐虚拟时钟：当前块 hold2+travel2，play→travel 插值→previewStop 复位）----
-        store.mutate(p => { const b = p.timeline.blocks[2]; b.holdBeats = 2; b.travelBeats = 2; }, 'C06 缩短块2');
+        // ---- 时间轴播放跨帧（无音乐虚拟时钟：当前块 hold2+travel2，play→travel 插值→播到 totalBeats 终了）----
+        // round32（任务#6）：无音乐 ▶ 不再单段预览复位，统一播到 totalBeats 停止——全部块缩短保持窗口可等
+        store.mutate(p => { for (const b of p.timeline.blocks) { b.holdBeats = 2; b.travelBeats = 2; } }, 'C06 缩短块2');
         await raf2();
         const pb = document.getElementById('pb-play');
         const pbr = pb.getBoundingClientRect();
@@ -746,7 +747,7 @@ async function runDesktop(opts) {
         const r3 = await cmpShot('c06-play-end');
         step('[STATE] 播放启动且进入跨帧过渡（travel 中段）', playing && !!travel, `playing=${playing} beat=${beatSnap != null ? beatSnap.toFixed(2) : '—'} seg=[${seg ? seg.holdEnd : '—'},${seg ? seg.travelEnd : '—'}]`);
         step('[PIXEL] 播放跨帧：插值位置呈舞者色', !!travel && travel.got.d < TH_COLOR, travel ? `beat=${travel.beatSnap.toFixed(2)} t=${travel.tt.toFixed(2)} 色距 ${travel.got.d.toFixed(1)}` : '未捕获', 'PIXEL');
-        step('[STATE] 播放连续：有限段播放到达终点并复位（playing=false, beat=0）', !player.playing && player.beat === 0, `等待 ${Math.round(performance.now() - w2)}ms; playing=${player.playing} beat=${player.beat}`);
+        step('[STATE] 播放连续：播到时间轴末拍终了不归 0（playing=false, beat=totalBeats）', !player.playing && Math.abs(player.beat - M.computeSegments(store.getState().project).totalBeats) < 1e-6, `等待 ${Math.round(performance.now() - w2)}ms; playing=${player.playing} beat=${player.beat}`);
         cmpStep(step, r3);
       },
     },
