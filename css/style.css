@@ -138,6 +138,8 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 #block-ctl .bc-name{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #block-ctl .bc-val{min-width:70px;text-align:center;display:inline-block;background:var(--bg3);border-radius:6px;padding:2px 6px}
 #block-ctl .btn.step{padding:0 9px;line-height:20px;font-size:14px}
+/* ⚑ 打点与 ± 步进同高（避免行高变化挤压舞台几何——D-08 类像素仪器对布局位移敏感） */
+#block-ctl #btn-tag-drop{padding:0 9px;line-height:20px;font-size:14px}
 #music-strip{display:flex;flex-direction:column}
 #audio-disc{border-bottom:1px solid var(--line)}
 #audio-disc summary{cursor:pointer;list-style:none;padding:6px 10px;color:var(--dim);font-size:12px;user-select:none}
@@ -159,6 +161,8 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
    （横拖主导轴判定），none 才能让 scrub/块拖在触摸端可用；容器横滚改由滚轮/按钮/缩放承担 */
 #tl-canvas{touch-action:none}
 #tl-overlay{pointer-events:none}
+/* 时间轴 tag 道内联命名输入（打点/重命名）：钉在 tag 道（尺规 22px 之下），随 #tl-inner 横向滚动 */
+.tl-tag-input{position:absolute;top:23px;left:0;z-index:6;width:110px;font-size:12px;line-height:1.4;padding:1px 5px;border-radius:5px;background:var(--bg2)}
 
 /* ---- 移动端队形索引条 ---- */
 #formation-index{display:none}

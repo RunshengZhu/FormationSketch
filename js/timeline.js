@@ -1,6 +1,7 @@
 // 时间线：编辑模式队形条（缩略图+拖拽排序） / 音乐模式波形时间线（块拖拽、节拍吸附、播放头）
 import { drawScene } from './stage.js';
-import { computeSegments, spb, beatToSec, secToBeat, beatLabel } from './model.js';
+import { computeSegments, spb, beatToSec, secToBeat, beatLabel,
+  addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX } from './model.js';
 
 // ---------- F-10（UX-10）：chip 触摸长按拖拽排序——纯几何决策（node 可测） ----------
 // 触屏不产生 HTML5 dragstart（UX-10 根因），排序走 Pointer Events 长按路径：
@@ -222,12 +223,21 @@ export class EditStrip {
 }
 
 // ---------- 音乐模式：波形时间线 ----------
+// TAG_LANE_H：尺规与队形块之间的窄 tag 道（时间轴标记：打点/改名/拖动/删除/点击跳转，
+// 纯拍位标记不改播放逻辑）。道内交互独立分区：单点旗=预备跳转、拖旗=移动、×=删除、
+// 双击空白=打点、双击旗=改名；道内单击不 scrub 不选块（与尺规/块区互不越界）。
+export const TAG_LANE_H = 18;
 export class MusicTimeline {
   constructor({ canvas, overlay, scroll, hooks }) {
     this.cv = canvas; this.ov = overlay; this.scroll = scroll;
-    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), seekBeat(b), audio}
+    this.inner = canvas.parentElement; // #tl-inner：tag 内联命名输入挂这里（随横向滚动移动）
+    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio}
     this.secPerPx = 0;  // 0 = 自适应
     this.drag = null;
+    this.hoverTag = null;      // 悬停旗点 id（×删除钮 + title 提示）
+    this.activeTag = null;     // 点选旗点 id：×保持可见（触屏无 hover 的删除路径）
+    this._tagGeom = new Map(); // id → {x, delX}（drawTags 落笔几何，命中 × 用）
+    this._tagInput = null;     // 内联命名输入 {el, beat, id, done}
     this._bind();
   }
   pxPerSec() { return this.secPerPx ? 1 / this.secPerPx : 0; }
@@ -255,6 +265,7 @@ export class MusicTimeline {
     this.drawRuler(ctx, p, h);
     this.drawWave(ctx, p, h);
     this.drawBlocks(ctx, p, h);
+    this.drawTags(ctx, p);
     this.drawPlayhead();
   }
 
@@ -417,6 +428,137 @@ export class MusicTimeline {
     ctx.fillRect(x - 5, top + bh / 2 - 7, 10, 14);
     ctx.restore();
   }
+  // ---------- 时间轴标记 tag 道 ----------
+  // 旗点=强调色系（主题蓝），细旗杆+旗面+名称胶囊；名称与前旗/后旗过近时只画旗点
+  // （名称走 title 悬浮/点击跳转/双击改名可见）；悬停显 × 删除。播放头红色、块把手
+  // 蓝/紫均在各自分区，视觉互不混淆。
+  drawTags(ctx, p) {
+    const tags = [...(p.timeline.tags || [])].sort((a, b) => a.beat - b.beat);
+    const top = this.rulerH ?? 22;
+    const pps = this.ppsOf(p);
+    this._tagGeom = new Map();
+    ctx.save();
+    ctx.fillStyle = 'rgba(148,163,184,.07)';
+    ctx.fillRect(0, top, this.W, TAG_LANE_H);
+    ctx.strokeStyle = 'rgba(148,163,184,.22)';
+    ctx.beginPath(); ctx.moveTo(0, top + TAG_LANE_H + .5); ctx.lineTo(this.W, top + TAG_LANE_H + .5); ctx.stroke();
+    ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
+    const ACC = '#38bdf8';
+    let lastEnd = -1e9; // 前一旗名称胶囊右缘（名称防重叠：贪心左→右）
+    for (let k = 0; k < tags.length; k++) {
+      const tag = tags[k];
+      const x = Math.max(1, Math.min(this.W - 1, beatToSec(p, tag.beat) * pps));
+      const nextX = k + 1 < tags.length ? Math.max(1, Math.min(this.W - 1, beatToSec(p, tags[k + 1].beat) * pps)) : this.W;
+      const hovered = this.hoverTag === tag.id;
+      // 旗杆 + 旗面
+      ctx.strokeStyle = ACC; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, top + TAG_LANE_H - 1); ctx.lineTo(x, top + 3); ctx.stroke();
+      ctx.fillStyle = hovered ? '#7dd3fc' : ACC;
+      ctx.beginPath();
+      ctx.moveTo(x + 1, top + 3); ctx.lineTo(x + 9, top + 6.5); ctx.lineTo(x + 1, top + 10);
+      ctx.closePath(); ctx.fill();
+      // 名称胶囊：距前旗名称太近（<20px）或被后旗顶住 → 只画旗点（名称走 title/跳转/改名可见）
+      const nameW = ctx.measureText(tag.name).width;
+      const maxW = Math.min(nextX - x - 14, this.W - x - 2);
+      let delX = x + 11;
+      if (nameW > 0 && x - lastEnd >= 20 && nameW <= maxW) {
+        ctx.fillStyle = 'rgba(56,189,248,.16)';
+        ctx.fillRect(x + 3, top + 2, nameW + 8, TAG_LANE_H - 5);
+        ctx.fillStyle = '#dbeafe';
+        ctx.fillText(tag.name, x + 7, top + TAG_LANE_H / 2 + .5);
+        delX = x + nameW + 13;
+        lastEnd = x + nameW + 10;
+      } else {
+        lastEnd = Math.max(lastEnd, x + 6);
+      }
+      // 悬停/点选 ×（拖拽中不显，防误删）：hover 或 active 保持可见——鼠标移向 × 时
+      // 已离旗点 hover 区（× 在名称末端），靠几何命中维持 hover 不消失（见 _tagGeomHit）
+      if ((hovered || this.activeTag === tag.id) && this.drag?.kind !== 'tag') {
+        ctx.fillStyle = '#f87171';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('×', delX, top + TAG_LANE_H / 2 + .5);
+        ctx.font = '10px sans-serif';
+      }
+      this._tagGeom.set(tag.id, { x, delX });
+    }
+    ctx.restore();
+  }
+  tagAt(x) { // 旗点命中（±9px，取最近）；y 分区由调用方判定
+    const p = this.hooks.getProject();
+    if (!p) return null;
+    const pps = this.ppsOf(p);
+    let best = null;
+    for (const tag of p.timeline.tags || []) {
+      const tx = beatToSec(p, tag.beat) * pps;
+      const d = Math.abs(x - tx);
+      if (d <= 9 && (!best || d < best.d)) best = { tag, x: tx, d };
+    }
+    return best;
+  }
+  _tagGeomHit(x, tol = 6) { // × 落笔几何命中 → tag id（× 在名称末端，与旗点位置解耦）
+    for (const [id, g] of this._tagGeom) if (Math.abs(x - g.delX) <= tol) return id;
+    return null;
+  }
+  inTagLane(y) { return y > (this.rulerH ?? 22) && y <= (this.rulerH ?? 22) + TAG_LANE_H; }
+  _tagTitle(x, y) { // 原生 title：旗点=名称+拍位；×=删除
+    if (!this.inTagLane(y)) { if (this.cv.title) this.cv.title = ''; return; }
+    const p = this.hooks.getProject();
+    const delId = this._tagGeomHit(x, 6);
+    if (delId) {
+      const t = tagById(p, delId);
+      if (t) { this.cv.title = `删除标记「${t.name}」`; return; }
+    }
+    const hit = this.tagAt(x);
+    if (hit) this.cv.title = `${hit.tag.name} · ${beatLabel(p, hit.tag.beat)} 小节（${Math.round(hit.tag.beat * 10) / 10} 拍）· 单击跳转 / 双击改名 / 拖动移位`;
+    else if (this.cv.title) this.cv.title = '';
+  }
+  // 内联命名输入（打点/改名共用）：Enter/失焦提交、Esc 取消；挂 #tl-inner 随横向滚动
+  _openTagInput({ beat = 0, id = null, initial = '' }) {
+    if (this._tagInput) { const st = this._tagInput; st.el.blur(); if (this._tagInput === st) { st.el.remove(); this._tagInput = null; } }
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const src = id ? tagById(p, id) : null;
+    const x = beatToSec(p, (src ? src.beat : beat)) * this.ppsOf(p);
+    const inp = document.createElement('input');
+    inp.className = 'tl-tag-input';
+    inp.type = 'text';
+    inp.value = initial;
+    inp.placeholder = nextTagName(p); // 空提交 → addTag 默认「标记 N」
+    inp.spellcheck = false;
+    inp.style.left = Math.max(0, x - 4) + 'px';
+    const st = this._tagInput = { el: inp, beat, id, done: false };
+    const commit = () => {
+      if (st.done) return;
+      st.done = true;
+      const val = st.el.value.trim().slice(0, TAG_NAME_MAX);
+      st.el.remove();
+      if (this._tagInput === st) this._tagInput = null;
+      if (st.id) {
+        const cur = tagById(this.hooks.getProject(), st.id);
+        if (cur && val && val !== cur.name) this.hooks.mutateLabeled?.(p2 => renameTag(p2, st.id, val), '改标记');
+      } else {
+        this.hooks.mutateLabeled?.(p2 => { addTag(p2, st.beat, val); }, '打标记');
+      }
+    };
+    inp.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); st.done = true; st.el.remove(); if (this._tagInput === st) this._tagInput = null; }
+    });
+    inp.addEventListener('blur', commit);
+    inp.addEventListener('pointerdown', ev => ev.stopPropagation()); // 输入框点击不透给画布
+    this.inner.append(inp);
+    requestAnimationFrame(() => { try { inp.focus(); inp.select(); } catch {} });
+  }
+  // ⚑ 打点：在当前播放头（或 scrub 位置）打标记——只开命名输入、不动播放状态
+  stampTag() {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const beat = Math.max(0, Math.round((this.hooks.getPlayer?.()?.beat || 0) * 100) / 100);
+    const x = beatToSec(p, beat) * this.ppsOf(p);
+    const sc = this.scroll;
+    if (x < sc.scrollLeft + 8 || x > sc.scrollLeft + sc.clientWidth - 130) sc.scrollLeft = Math.max(0, x - 80);
+    this._openTagInput({ beat });
+  }
   drawPlayhead() {
     const p = this.hooks.getProject();
     if (!p) return;
@@ -462,6 +604,7 @@ export class MusicTimeline {
     const cv = this.cv;
     cv.addEventListener('pointerdown', e => this._down(e));
     cv.addEventListener('pointermove', e => this._move(e));
+    cv.addEventListener('dblclick', e => this._dblclick(e));
     window.addEventListener('pointerup', e => this._up(e), { passive: true });
     // F-02（UX-02）：浏览器中途接管（滚动接管/来电横幅/系统手势）会发 pointercancel 而后续
     // pointerup 不再来——不置 drag=null 则拖拽状态卡死，之后无按键的鼠标 hover 路过即持续
@@ -497,6 +640,26 @@ export class MusicTimeline {
     if (pl?.countin && pl.cancelCountin) pl.cancelCountin();
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
+    // tag 道：× 命中=删除（一条「删标记」历史）；旗点命中=预备拖动/单击跳转；
+    // 空白=留给双击打点（单击不动作，不 scrub 不选块）。恰在删除后 400ms 内的双击
+    // 不再当「空白打点」（× 双击=删一次，不应删完又原地加回）。
+    if (this.inTagLane(y)) {
+      const delId = this._tagGeomHit(x, 6);
+      if (delId) {
+        this.hoverTag = null;
+        this.activeTag = null;
+        this._delAt = performance.now();
+        this.hooks.mutateLabeled?.(p2 => removeTag(p2, delId), '删标记');
+        return;
+      }
+      this.activeTag = null;
+      const hit = this.tagAt(x);
+      if (hit) {
+        try { this.cv.setPointerCapture(e.pointerId); } catch {}
+        this.drag = { kind: 'tag', id: hit.tag.id, startX: x, moved: false };
+      }
+      return;
+    }
     const edges = this.edgeHits(x);
     if (edges.length && y > this.rulerH) {
       try { this.cv.setPointerCapture(e.pointerId); } catch {}
@@ -521,24 +684,36 @@ export class MusicTimeline {
   _move(e) {
     const drag = this.drag;
     if (!drag) {
-      // 悬停反馈：边缘光标 + 块高亮
+      // 悬停反馈：边缘光标 + 块高亮 + tag 旗点（光标/title/×）
       const r = this.cv.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
       const edges = this.edgeHits(x);
-      this.cv.style.cursor = edges.length ? 'ew-resize' : 'default';
       let hoverSeg = null;
-      for (const hit of edges) hoverSeg = hit.seg.i;
-      if (hoverSeg === null && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
-        const p = this.hooks.getProject();
-        if (p) {
-          const beat = this.xToBeat(x);
-          for (const s of computeSegments(p).segments) {
-            if (beat >= s.holdStart && beat < s.travelEnd) { hoverSeg = s.i; break; }
+      let hoverTag = null;
+      if (this.inTagLane(y)) {
+        // 旗点或 ×（几何）都算悬停该标记——× 在名称末端，鼠标移过去不能让 × 消失
+        const hit = this.tagAt(x);
+        hoverTag = hit ? hit.tag.id : this._tagGeomHit(x, 8);
+      } else {
+        for (const hit of edges) hoverSeg = hit.seg.i;
+        if (hoverSeg === null && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
+          const p = this.hooks.getProject();
+          if (p) {
+            const beat = this.xToBeat(x);
+            for (const s of computeSegments(p).segments) {
+              if (beat >= s.holdStart && beat < s.travelEnd) { hoverSeg = s.i; break; }
+            }
           }
         }
       }
-      if (this.hoverSeg !== hoverSeg) { this.hoverSeg = hoverSeg; this.render(); }
+      this.cv.style.cursor = hoverTag ? 'pointer' : (edges.length ? 'ew-resize' : 'default');
+      this._tagTitle(x, y);
+      if (this.hoverSeg !== hoverSeg || this.hoverTag !== hoverTag) {
+        this.hoverSeg = hoverSeg;
+        this.hoverTag = hoverTag;
+        this.render();
+      }
       return;
     }
     const p = this.hooks.getProject();
@@ -548,6 +723,15 @@ export class MusicTimeline {
     const minBeats = 0.5;
     if (drag.kind === 'scrub') {
       this.hooks.seekBeat(this.xToBeat(x));
+      return;
+    }
+    if (drag.kind === 'tag') {
+      // 拖旗移位：实时预览（mutate(fn,null) 不进历史），松手在 _up 提交恰一条「移动标记」
+      drag.moved = drag.moved || Math.abs(x - drag.startX) > 2;
+      if (drag.moved) {
+        this.hooks.mutate(proj => { moveTag(proj, drag.id, this.xToBeat(x)); });
+        this.hoverTag = drag.id;
+      }
       return;
     }
     let beat = this.xToBeat(x);
@@ -574,9 +758,37 @@ export class MusicTimeline {
     drag.seg = segments[drag.seg.i];
   }
   _up() {
+    if (this.drag && this.drag.kind === 'tag') {
+      const { id, moved } = this.drag;
+      this.drag = null;
+      if (moved) this.hooks.commitEdit?.('移动标记'); // 预览已写入，提交恰一条历史
+      else {
+        // 单击旗点：播放头跳到该拍（对齐用途）；点选态保持 × 可见（触屏无 hover 的删除路径）
+        const t = tagById(this.hooks.getProject(), id);
+        if (t) {
+          this.activeTag = id;
+          this.hooks.seekBeat(t.beat);
+        }
+      }
+      this.render();
+      return;
+    }
     if (this.drag && (this.drag.kind === 'hold' || this.drag.kind === 'travel')) {
       this.hooks.commitEdit?.('调整时长');
     }
     this.drag = null;
+  }
+  // tag 道双击：空白=在该拍打点（内联命名，默认「标记 N」）；旗点=改名。
+  // × 删除后 400ms 内的双击忽略（双击 × 只删一次，不应原地加回）。
+  _dblclick(e) {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    if (performance.now() - (this._delAt || 0) < 400) return;
+    const r = this.cv.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    if (!this.inTagLane(y)) return;
+    const hit = this.tagAt(x);
+    if (hit) this._openTagInput({ id: hit.tag.id, initial: hit.tag.name });
+    else this._openTagInput({ beat: Math.max(0, Math.round(this.xToBeat(x) * 100) / 100) });
   }
 }

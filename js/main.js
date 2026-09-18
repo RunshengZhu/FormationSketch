@@ -10,8 +10,8 @@ import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
 import { renderManual } from './manual.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-28-music';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-28-music');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-29-tags';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-29-tags');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -511,6 +511,7 @@ function buildStrips() {
       ripple: () => store.getState().ripple,
       onSelectFormation: i => switchFormation(i),
       mutate: fn => store.mutate(fn, null),
+      mutateLabeled: (fn, label) => store.mutate(fn, label), // 标记打点/改名/删除：单操作即时一条历史
       commitEdit: label => { store.commit(label); syncLoopAfterBlockEdit(); }, // 拖边改时长后循环区间跟随（DEFECT-R26-4）
       seekBeat: b => player.seekBeat(Math.max(0, b)),
     },
@@ -954,6 +955,8 @@ function wireAudioPanel() {
   $('bc-hold-plus').addEventListener('click', () => stepBlock('holdBeats', 1));
   $('bc-travel-minus').addEventListener('click', () => stepBlock('travelBeats', -1));
   $('bc-travel-plus').addEventListener('click', () => stepBlock('travelBeats', 1));
+  // ⚑ 打点：在当前播放头/scrub 位置打音乐标记（不打断播放；命名 Enter/失焦提交、Esc 取消）
+  $('btn-tag-drop').addEventListener('click', () => musicTl?.stampTag());
   $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
   $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
   $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
