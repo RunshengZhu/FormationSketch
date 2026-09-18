@@ -112,16 +112,19 @@
 
       <!-- 右：属性 -->
       <aside id="right-panel">
+        <button id="btn-manual-open" class="manual-entry" title="打开使用说明书（全屏阅读）">📖 使用说明书</button>
         <div class="panel-tabs">
           <button class="ptab active" data-tab="formation">队形</button>
           <button class="ptab" data-tab="stage">舞台</button>
           <button class="ptab" data-tab="style">样式</button>
           <button class="ptab" data-tab="groups">编组</button>
+          <button class="mtab" data-tab="manual" title="使用说明书：典型使用动线 / 手势与快捷键速查 / 数据与限制">📖 说明书</button>
         </div>
         <div id="props-formation" class="props-page"></div>
         <div id="props-stage" class="props-page" hidden></div>
         <div id="props-style" class="props-page" hidden></div>
         <div id="props-groups" class="props-page" hidden></div>
+        <div id="props-manual" class="props-page" hidden></div>
       </aside>
     </div>
 
@@ -198,6 +201,15 @@
       <button data-mtab="more">更多</button>
     </nav>
   </section>
+
+  <!-- 说明书全屏覆盖层（移动端「更多」入口打开；桌面与页签复用同一 renderManual 内容） -->
+  <div id="manual-overlay" hidden>
+    <header class="manual-ov-head">
+      <span class="manual-ov-title">📖 使用说明书</span>
+      <button id="btn-manual-close" class="btn small">完成 ✕</button>
+    </header>
+    <div id="manual-overlay-body" class="manual-ov-body"></div>
+  </div>
 
   <!-- 弹窗与提示 -->
   <div id="modal-root" hidden></div>

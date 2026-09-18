@@ -8,9 +8,10 @@ import { AudioController } from './audio.js';
 import { Player } from './player.js';
 import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
+import { renderManual } from './manual.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-26-e2e2';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-26-e2e2');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-27-manual';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-27-manual');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -403,6 +404,7 @@ async function boot() {
   wirePlaybar();
   wireAudioPanel();
   wireMobileTabs();
+  wireManual();
   wireLibrary();
   wireOfflineNote();
   wireKeyboard();
@@ -545,13 +547,11 @@ function deleteFormation() {
 function wireTopbar() {
   $('btn-back').addEventListener('click', async () => { player?.stop(); await store.closeProject(); });
   $('proj-title').addEventListener('change', () => store.mutate(p => { p.meta.title = $('proj-title').value || '未命名'; }, '重命名项目'));
-  // 右面板 Tab 切换（队形/舞台/样式/编组）
-  document.querySelectorAll('.ptab').forEach(b => b.addEventListener('click', () => {
-    document.querySelectorAll('.ptab').forEach(x => x.classList.toggle('active', x === b));
-    $('props-formation').hidden = b.dataset.tab !== 'formation';
-    $('props-stage').hidden = b.dataset.tab !== 'stage';
-    $('props-style').hidden = b.dataset.tab !== 'style';
-    $('props-groups').hidden = b.dataset.tab !== 'groups';
+  // 右面板 Tab 切换（队形/舞台/样式/编组 + 📖 说明书）：页签与页容器按 data-tab/props-<tab> 约定配对，
+  // 说明书页签用独立 class（.mtab，不属于 .ptab 计数——E2E 仪器断言「四页签」）
+  document.querySelectorAll('.panel-tabs button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.panel-tabs button').forEach(x => x.classList.toggle('active', x === b));
+    document.querySelectorAll('#right-panel .props-page').forEach(pg => { pg.hidden = pg.id !== 'props-' + b.dataset.tab; });
   }));
   $('btn-theme').addEventListener('click', () => {
     const next = store.getState().theme === 'light' ? 'dark' : 'light';
@@ -928,6 +928,16 @@ function wireMobileTabs() {
   document.body.dataset.mtab = 'stage';
 }
 
+// ---------- 说明书（桌面页签内容 + 移动端全屏覆盖层，同一 renderManual） ----------
+function wireManual() {
+  const panel = $('props-manual'), body = $('manual-overlay-body');
+  if (!panel || !body) return;
+  panel.append(renderManual({ build: BUILD_TAG }));
+  body.append(renderManual({ build: BUILD_TAG }));
+  $('btn-manual-open')?.addEventListener('click', () => { $('manual-overlay').hidden = false; body.scrollTop = 0; });
+  $('btn-manual-close')?.addEventListener('click', () => { $('manual-overlay').hidden = true; });
+}
+
 // ---------- 项目库 ----------
 function wireLibrary() {
   $('btn-new-project').addEventListener('click', () => showNewProjectModal(opts => { store.createNewProject(opts); player.stop(); }));
@@ -1195,6 +1205,11 @@ function wireKeyboard() {
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
+    // 说明书全屏覆盖层开着时 Esc=先关层（不穿透到舞台手势/选择）
+    if (e.key === 'Escape') {
+      const ov = $('manual-overlay');
+      if (ov && !ov.hidden) { ov.hidden = true; return; }
+    }
     if (e.key === 'Escape') { if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return; }
     // RTS 编组快捷键：Ctrl/Cmd+1..9 = 把当前选择存为编组 N（覆盖）——先于其余修饰键放行
     const digit = /^Digit([1-9])$/.exec(e.code || '');

@@ -13,9 +13,9 @@ const OUT = join(root, 'dist', 'formation-studio.html');
 const OUT_SW = join(root, 'dist', 'sw.js');
 
 // 依赖拓扑序（被依赖者在前）
-const ORDER = ['model', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'timeline', 'export', 'ui', 'main'];
-// 'export' 是保留字，命名空间键用 exporter
-const nsKey = mod => (mod === 'export' ? 'exporter' : mod);
+const ORDER = ['model', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'timeline', 'export', 'ui', 'manual-assets', 'manual', 'main'];
+// 'export' 是保留字，命名空间键用 exporter；'manual-assets' 带连字符，命名空间键用驼峰
+const nsKey = mod => (mod === 'export' ? 'exporter' : mod === 'manual-assets' ? 'manualAssets' : mod);
 
 function transformModule(mod) {
   const file = join(root, 'js', `${mod}.js`);
@@ -25,9 +25,10 @@ function transformModule(mod) {
   const exportNames = [];
 
   // 1) 聚合 import：import * as X from './y.js' / import { A, B as C } from './y.js'
+  //（文件名允许连字符，如 manual-assets.js → FS.manualAssets，见 nsKey）
   const nsAliases = new Map(); // alias -> source
   const namedBySource = new Map(); // source -> Map(localName -> importedName)
-  code = code.replace(/^import\s+(?:\*\s+as\s+(\w+)|\{([^}]*)\})\s+from\s+'\.\/([\w]+)\.js';?\s*$/gm,
+  code = code.replace(/^import\s+(?:\*\s+as\s+(\w+)|\{([^}]*)\})\s+from\s+'\.\/([\w-]+)\.js';?\s*$/gm,
     (m, starName, named, src) => {
       const key = nsKey(src);
       if (starName) nsAliases.set(starName, key);
@@ -176,6 +177,7 @@ for (const mod of ORDER) {
   bundle += `\n`;
 }
 if (/<\/script>/i.test(bundle)) throw new Error('bundle 中含有 </script>，需转义');
+if (/^\s*import\s/m.test(bundle)) throw new Error('bundle 中残留未聚合的 import 语句（模块名可能未被 ORDER/nsKey 覆盖）');
 
 html = html.replace('<link rel="stylesheet" href="css/style.css">', `${MANIFEST_LINK}<style>\n${css}\n</style>`);
 html = html.replace('<script type="module" src="js/main.js"></script>', `<script>\n${bundle}\n</script>`);
