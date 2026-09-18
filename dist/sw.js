@@ -3,7 +3,7 @@
    skipWaiting + clients.claim 立即接管 → activate 清理旧缓存。缓存对象只有页面自身。
    深链契约：/apps/wuzhen/index.html?import=<encodeURIComponent(JSON URL)> ——
    导航 match 带 ignoreSearch:true + './' 回退，带 query 的深链离线可开。 */
-const CACHE = 'wuzhen-build-28-music';
+const CACHE = 'wuzhen-build-29-tags';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./'])).then(() => self.skipWaiting()));

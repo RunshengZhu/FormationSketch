@@ -46,7 +46,7 @@ function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, ex
     audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
     settings: { labelMode: 'no' }, // 项目级显示设置：'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名
     dancers: [], groups: [], formations: [],
-    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1 },
+    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [] },
   };
   for (let i = 1; i <= pairs; i++) {
     addDancer(project, `M${i}`, 'M', String(i));
@@ -313,6 +313,60 @@ function segmentAt(segments, beat) {
   return segments[segments.length - 1];
 }
 
+// ---------- 时间轴标记（音乐时间轴 tag 道：主歌/副歌/间奏等分段记号） ----------
+// 纯拍位标记：beat 为浮点拍，与 blocks 同基准——随 BPM/首拍自然换算秒位（beatToSec），
+// 不参与播放/循环/队形任何逻辑；name 非空、≤ TAG_NAME_MAX 字（超长截断）。
+const TAG_NAME_MAX = 20;
+function cleanTagName(name) { return String(name ?? '').trim().slice(0, TAG_NAME_MAX); }
+// 清洗（validateProject/导入入口共用）：丢弃非合法项——beat 非有限或负值、清洗后 name 为空、
+// 重复 id（保首个弃后续）；id 缺失/空则补 uid。返回新数组，不改输入。
+function sanitizeTags(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const out = [];
+  for (const t of arr) {
+    if (!t || typeof t !== 'object') continue;
+    const beat = Number(t.beat);
+    if (!Number.isFinite(beat) || beat < 0) continue;
+    const name = cleanTagName(t.name);
+    if (!name) continue;
+    const id = (typeof t.id === 'string' && t.id) ? t.id : uid('tag');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, beat, name });
+  }
+  return out;
+}
+function tagById(project, id) { return (project.timeline.tags || []).find(t => t.id === id) || null; }
+// 默认名「标记 N」：N 从现有数量+1 起找第一个未被占用的号（删除后打点不重号）
+function nextTagName(project) {
+  const tags = project.timeline.tags || [];
+  const used = new Set(tags.map(t => t.name));
+  let n = tags.length + 1;
+  while (used.has(`标记 ${n}`)) n++;
+  return `标记 ${n}`;
+}
+function addTag(project, beat, name = '') {
+  project.timeline.tags = project.timeline.tags || [];
+  const b = Number(beat);
+  const t = { id: uid('tag'), beat: Number.isFinite(b) ? Math.max(0, b) : 0, name: cleanTagName(name) || nextTagName(project) };
+  project.timeline.tags.push(t);
+  return t;
+}
+function removeTag(project, id) {
+  project.timeline.tags = (project.timeline.tags || []).filter(t => t.id !== id);
+}
+function renameTag(project, id, name) {
+  const t = tagById(project, id);
+  const n = cleanTagName(name);
+  if (t && n) t.name = n;
+}
+function moveTag(project, id, beat) {
+  const t = tagById(project, id);
+  const b = Number(beat);
+  if (t && Number.isFinite(b)) t.beat = Math.max(0, Math.round(b * 100) / 100);
+}
+
 // ---------- 位置插值 ----------
 function lerpAngle(a, b, t) {
   let d = ((b - a) % 360 + 540) % 360 - 180;
@@ -409,9 +463,10 @@ function validateProject(json) {
   delete p.pairs; // v3：舞对概念退役——旧项目载入时忽略并清除 pairs 字段，不破坏 formations/positions/merges
   p.groups = Array.isArray(p.groups) ? p.groups : [];
   p.formations = Array.isArray(p.formations) ? p.formations : [];
-  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, ...p.timeline };
+  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], ...p.timeline };
   p.timeline.countInBeats = num(p.timeline.countInBeats, 8, 0, 32);
   p.timeline.blocks = Array.isArray(p.timeline.blocks) ? p.timeline.blocks : [];
+  p.timeline.tags = sanitizeTags(p.timeline.tags); // 时间轴标记清洗（旧项目无 tags → []，零迁移成本）
   for (const f of p.formations) f.positions = f.positions || {};
   const ids = new Set();
   for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }
@@ -810,6 +865,14 @@ export {
   computeSegments,
   totalDurationSec,
   segmentAt,
+  TAG_NAME_MAX,
+  sanitizeTags,
+  tagById,
+  nextTagName,
+  addTag,
+  removeTag,
+  renameTag,
+  moveTag,
   lerpAngle,
   posAt,
   currentFormationIndexAt,
