@@ -39,9 +39,11 @@ test('manual.js 源码：入口文案保留实测原文（「合并为单元」�
 });
 
 // ---------- 2. 截图资产：base64 可解码 + 体积受控 ----------
-test('manual-assets：≥6 张图、全部可按 base64 解码为合法 JPEG（FF D8 FF 魔数）', () => {
+test('manual-assets：9 张图、全部可按 base64 解码为合法 JPEG（FF D8 FF 魔数）且带视觉标注', () => {
   const keys = manualImageKeys();
-  assert.ok(keys.length >= 6, `应至少 6 张截图，实得 ${keys.length}`);
+  assert.equal(keys.length, 9, `应为 9 张截图（轮21 v2：九镜头全部裁剪+标注），实得 ${keys.length}`);
+  assert.equal(MANUAL_META.annotated, true, 'meta.annotated 应为 true（v2 资产带 .ux-annot 视觉标注）');
+  assert.equal(MANUAL_META.count, 9, 'meta.count 应为 9');
   for (const k of keys) {
     const uri = MANUAL_IMAGES[k];
     assert.ok(uri.startsWith('data:image/jpeg;base64,'), `${k} 应为 image/jpeg base64 data URI`);
@@ -52,11 +54,11 @@ test('manual-assets：≥6 张图、全部可按 base64 解码为合法 JPEG（F
   }
 });
 
-test('manual-assets：单张 ≤48KB、总体 ≤400KB（压缩预算）', () => {
+test('manual-assets：单张 ≤48KB、总体 ≤224KB（v2 裁剪+标注后预算；v1 全幅为 ≤400KB）', () => {
   const sizes = Object.entries(MANUAL_IMAGES).map(([k, uri]) => [k, Buffer.byteLength(uri.slice('data:image/jpeg;base64,'.length), 'base64')]);
   for (const [k, bytes] of sizes) assert.ok(bytes <= 48 * 1024, `${k} ${bytes}B 超过单张 48KB 上限`);
   const total = sizes.reduce((a, [, b]) => a + b, 0);
-  assert.ok(total <= 400 * 1024, `总体积 ${total}B 超过 400KB 预算`);
+  assert.ok(total <= 224 * 1024, `总体积 ${total}B 超过 224KB 预算`);
 });
 
 test('manual-assets.js 与单一事实源 scripts/manual-assets.json 一致（生成物未漂移）', () => {
