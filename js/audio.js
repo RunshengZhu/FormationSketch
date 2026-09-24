@@ -43,7 +43,6 @@ export class AudioController {
     this.url = url;
     this.name = name || blob.name || 'audio';
     this.duration = this.el.duration || 0;
-    this.ready = true;
     // 波形（失败不阻塞，仅无波形显示）
     try {
       const ab = await blob.arrayBuffer();
@@ -52,12 +51,21 @@ export class AudioController {
       this.peaks = computePeaks(buf, 1800);
       this.duration = buf.duration;
     } catch { this.peaks = null; }
+    // FIX-R34-1：ready 置位移到波形解码之后。旧实现 ready 先置位，而 loadAudioFile 的
+    // 项目字段提交（p.audio.name）要等 loadBlob 返回——中间隔着整段 decodeAudioData
+    //（长曲数百毫秒）。用户在此窗口按 ▶：useAudio 仍为 false → 虚拟时钟起播；随后
+    // name 提交使 useAudio 翻真，_tick 误判「音频通道停了」自愈暂停 → 播放刚起即停。
+    // ready 与项目字段提交顺序对齐后，竞态窗口闭合。
+    this.ready = true;
     return this;
   }
   play(offsetSec, rate = 1) {
     this.el.playbackRate = rate;
     this.el.currentTime = Math.max(0, Math.min(offsetSec, this.duration || offsetSec));
-    return this.el.play();
+    // FIX-R34-2：捕获 play() promise——播放随即被 pause 打断时（换曲先停/快速暂停）会
+    // reject AbortError，旧实现未捕获 → unhandled rejection 冒成 pageerror 噪声。
+    // 真正的播放失败（会话消失/解码失败）仍由 player._tick 的「音频通道停了」自愈兜底。
+    return this.el.play().catch(() => {});
   }
   pause() { this.el.pause(); }
   stop() { this.el.pause(); this.el.currentTime = 0; }
