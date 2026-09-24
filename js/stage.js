@@ -34,19 +34,6 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
   // 背景
   ctx.fillStyle = opts.bg || '#f8fafc';
   ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
-  if (project.stage.bgImage && !opts.minimal) {
-    ctx.save(); ctx.globalAlpha = 0.5;
-    // bgImage 存为 {src, w, h}，按舞台区域拉伸
-    if (drawScene._bg?.src !== project.stage.bgImage.src) {
-      const img = new Image();
-      img.onload = () => { drawScene._bg = { src: project.stage.bgImage.src, img }; if (opts.onImageLoad) opts.onImageLoad(); };
-      img.src = project.stage.bgImage.src;
-      drawScene._bg = { src: project.stage.bgImage.src, img, pending: true };
-    }
-    const bg = drawScene._bg;
-    if (bg?.img?.complete) ctx.drawImage(bg.img, X(0), Y(0), W * s, H * s);
-    ctx.restore();
-  }
 
   // 后台区
   if (bs > 0 && !opts.minimal) {
@@ -65,6 +52,22 @@ export function drawScene(ctx, rect, project, positions, opts = {}) {
     ctx.fillRect(X(0), Y(0), W * s, H * s);
     ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1.5;
     ctx.strokeRect(X(0), Y(0), W * s, H * s);
+  }
+
+  // 背景图（DEFECT-R37-4：原绘制在后台区/舞台白底之前，整幅被白底覆盖——画布永远看不到衬底。
+  // 移到台面/后台底色之后、网格之前：50% alpha 衬底只在舞台区域内可见，网格/舞者照常叠于其上。）
+  if (project.stage.bgImage && !opts.minimal) {
+    ctx.save(); ctx.globalAlpha = 0.5;
+    // bgImage 存为 {src, w, h}，按舞台区域拉伸
+    if (drawScene._bg?.src !== project.stage.bgImage.src) {
+      const img = new Image();
+      img.onload = () => { drawScene._bg = { src: project.stage.bgImage.src, img }; if (opts.onImageLoad) opts.onImageLoad(); };
+      img.src = project.stage.bgImage.src;
+      drawScene._bg = { src: project.stage.bgImage.src, img, pending: true };
+    }
+    const bg = drawScene._bg;
+    if (bg?.img?.complete) ctx.drawImage(bg.img, X(0), Y(0), W * s, H * s);
+    ctx.restore();
   }
 
   // 网格
@@ -402,6 +405,11 @@ export class StageView {
     this.view = drawScene(ctx, { x: 0, y: 0, w: W, h: H }, project, positions, {
       view: this.view,
       ghost, nextPositions,
+      // FIX-R39-2（round39 P6 开关族 E2E 实测发现）：drawScene 的路径绘制以 opts.paths 为门闩
+      //（`if (opts.paths && opts.nextPositions)`），本处此前漏传 → 「路径」按钮/样式页复选在
+      // 交互舞台上零视觉效果（虚线永不存在）。nextPositions 本就由 scene.showPaths 门控，
+      // 这里如实回传 paths 开关即可。
+      paths: !!nextPositions,
       merges: scene.merges || [],
       selection: scene.selection,
       showGrid: scene.showGrid,

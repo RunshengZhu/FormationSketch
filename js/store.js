@@ -128,6 +128,9 @@ export const storage = {
 // ---------- 状态 ----------
 let state = {
   view: 'library',           // library | editor
+  // FIX-R39-1（round39 P6 主题 E2E 实测发现）：对象字面量里 theme 键重复——末尾的
+  // `theme: 'dark'` 覆盖了首行的 localStorage 读值，导致 fs.theme 持久化形同虚设
+  //（刷新必回深色）。删去重复键，恢复「记忆上次主题」语义（TC-P6-12 检查点）。
   theme: (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('fs.theme')) || 'dark',
   project: null,
   projectId: null,
@@ -135,7 +138,6 @@ let state = {
   selection: [],             // dancer ids
   editMode: true,            // 编辑开关（默认开）：舞台可拖动编辑；关闭为查看模式
   multiSelect: false,        // 多选开关（触摸端多选入口）：开启后点按=追加选择
-  theme: 'dark',             // dark | light（持久化到 localStorage）
   showFacingHandle: false,  // 朝向把手（样式类，默认隐藏）
   showGhost: true,
   showPaths: true,

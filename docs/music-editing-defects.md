@@ -268,3 +268,89 @@
 - #20（P3）：数拍期播放头呈「入场」、播放键呈 ⏸。
 
 **backlog（本轮不做）**：#4 的「无音乐无数拍入场」、#8/#11 音频-时间轴失配呈示（溢出区绘制）、#12/#13 过渡期呈示插值、#15 数拍中改 BPM/速度不跟随、#17 拖边循环失步、#18 播放中对齐+过渡拉长、#19 编辑模式暂停呈示、#22 _loopStash 死代码清理。
+
+---
+
+## 九、round34 附表（2026-09-24，P4/P5 全用例 E2E 实测轮，build 工作树 5201046）
+
+本轮以 `docs/test-cases-full.md` P4（36 条）/ P5（26 条）共 62 条用例全量实装驱动（lab/run-userflows-p4.mjs + run-userflows-p5.mjs，证据 `wuzhen-e2e-lab/out/round34-batchA/`），实测当场修复 2 项、「确认为设计合理」5 项。
+
+### 9.1 当场修复（含前后证据）
+
+| # | 级别 | 现象 | 根因 | 修复（diff） | 前后证据 |
+|---|---|---|---|---|---|
+| FIX-R34-1 | P3·竞态 | 载入音乐后**立即**按 ▶：播放刚起即停（playing 翻回 false、beat 冻结 ~0.07），▶ 复位，无提示 | `audio.loadBlob` 在 `decodeAudioData` **之前**置 `ready=true`，而 `loadAudioFile` 的项目字段提交（`p.audio.name`）要等 `loadBlob` 返回——中间隔整段解码（长曲数百 ms）。此窗口按 ▶：`useAudio=false` → 虚拟时钟起播；随后 name 提交使 `useAudio` 翻真 → `player._tick` 走「音频通道停了」自愈暂停 | `js/audio.js` loadBlob：`this.ready = true` 移到波形解码之后（窗口闭合） | 探针 `lab/probe-r34-audiorace.mjs`：修复前 **0/3**（playing=false、beat 0~0.04）；修复后 **3/3**（playing=true、beat≈1.7、零 pageerror）。证据 `out/round34-batchA/audiorace-results.json` |
+| FIX-R34-2 | P3·健壮性 | 播放随即被打断（换曲先停/快速暂停）时 console 冒 `AbortError: The play() request was interrupted by a call to pause()` 的 **unhandled rejection**（E2E 记为 pageerror 噪声） | `audio.play()` 直接返回 `el.play()` promise，被 pause 抢先时 reject 无消费者 | `js/audio.js` play()：`return this.el.play().catch(() => {})`。真正的播放失败仍由 `player._tick` 的「音频通道停了」自愈兜底，行为不变 | 修复前 P4 首轮 36 条中 TC-P4-32/36 因该 pageerror 判 FAIL；修复后两用例「零 pageerror」严格断言通过（36/36 全绿） |
+
+单测回归：`npm test` 232/232 PASS（该套件内 build 步骤已把 dist/formation-studio.html 同步重建，含上述修复）。
+
+### 9.2 「确认为设计合理」附表（不改码，仅记录口径）
+
+| # | 观察点 | 本轮实证口径 | 影响用例 |
+|---|---|---|---|
+| D-1 | 切帧预览不经播放引擎 | 预览=舞台 UI 动画（`startPositionsPreview`），switchFormation 先 `player.pause()`；「切帧预览期间循环挂起」实际语义=播放暂停、循环勾选与 loopOn 保持，▶ 后在新帧段回绕。player 内 `_stopAt/_loopStash` 预览引擎为死代码（round30 已记），行为无碍，清理维持 backlog | TC-P5-04 |
+| D-2 | 停止态切帧不追播放头 | `stepFormation` 仅在 `beat>0.001 且非播放态` 时 `seekFormation`——beat≈0 的干净停止态切帧只改选中、播放头保持 0，防误清用户定位，合理 | TC-P5-18 |
+| D-3 | 「校准」子行默认收起 | 点拍/试听/小节/数拍入场收进 `#calib-disc` 折叠（低频校准工具与主行对齐动线分离）；E2E 需先展开方可点击（仪器口径，与 UF2 一致） | TC-P4-03/04/05/06/26/27/29 |
+| D-4 | 空格双语义延迟到 keyup | keydown 只置 spaceHeld；keyup 未参与指针手势才 togglePlay；window blur 清 spaceHeld 防卡键——设计确认 | TC-P5-26 |
+| D-5 | 数拍取消回停止态基准拍 | ▶/空格/Esc/摸时间线四通道统一 `cancelCountin()`：回 `_ciBase`、不直接起播、不残留负拍（round30 #5/#14 修复语义的回归确认） | TC-P5-20、TC-P4-34 |
+
+
+---
+
+## 十、round37 附表（2026-09-25，P1/P2/P3 全用例 E2E 实测轮，build 工作树 5201046 + 本轮修复）
+
+本轮以 `docs/test-cases-full.md` P1 建档（22 条）/ P2 名册与对象（28 条）/ P3 队形编排（26 条）共 76 条用例全量实装驱动（lab/run-userflows-p1/p2/p3.mjs，证据 `wuzhen-e2e-lab/out/round37-batchB/`），实测当场修复 4 项、「确认为设计合理」6 项。回归：既有全部套件复跑绿（l0/l1/r/gr/realinput/l2/uf1/uf2/p4/p5/音乐/node --test，见 `out/round37-batchB/regression/summary.txt`）。
+
+### 10.1 当场修复（含前后证据）
+
+| # | 级别 | 现象 | 根因 | 修复（diff） | 前后证据 |
+|---|---|---|---|---|---|
+| FIX-R37-1 | P3·交互失效 | 「统一朝向…」下拉无选择=全体时不生效且 console 报 TypeError；F 键无选择同炸（整体旋转滑杆 input 预览同源） | `js/main.js` 三处 `[...currentFormation().positions.keys()]`——positions 是普通对象，没有 `.keys()` 方法；有选择时走 `expandedSelection()` 分支掩盖了该路径 | 三处改 `Object.keys(currentFormation()?.positions \|\| {})`（含空帧守卫） | TC-P3-10 修复前 FAIL（pageerror×2、朝向不动 [0,60,…300]）；修复后面向观众全员 180、F 键多选仅所选生效，26/26 全绿 |
+| FIX-R37-2 | P3·输入健壮性 | 舞台尺寸输 -2 → `stage.widthM=-2`、输 100 → 100 原样入库（几何损坏：负宽/超域）；仅 0/NaN 被挡 | `stageChange` 的 `Number(v) \|\| 原值` 只挡 falsy，min/max 属性对直接键入无约束 | `js/main.js` 新增 `STAGE_RANGE`（宽/深 4..50、后台 0..10、网格 0.1..2）——越界/非法一律回退原值；`propsKey=''` 强制重建舞台页使输入框回显实际生效值 | TC-P3-18 修复前 -2→-2、100→100；修复后均回退 16 且输入框同步（0 仍回退原值，合法值直通） |
+| FIX-R37-3 | P3·数据丢失 | 粒度「仅男士/仅女士」生成后，粒度外舞者被瞬移到舞台中心（首帧场景）；文档预期「仅 role=M 位置改变，F 不动」 | `applyGenerator`→`applySlots` 整表替换 positions，子集外舞者清位后由 `carryPositionsForward` 兜底——首帧无上一帧可顺延，落到中心回退点 | `js/main.js` applyGenerator：子集生成前留存子集外舞者本帧现位，applySlots 后回填（全员生成整体替换语义不变） | TC-P3-02 修复前 F 三人全部落 (6,8)；修复后 F 逐人不位移、仅 M 到横排；TC-P3-24 全员替换语义回归 PASS |
+| FIX-R37-4 | P3·呈示失效 | 「上传背景…」成功入库（dataURL 持久、清除可逆），但舞台画布**永远看不到衬底**——功能自上线起不可见 | `js/stage.js` drawScene 绘制顺序：bgImage 画在后台区/舞台白底**之前**，随即被 `#ffffff` 台面整幅覆盖；该功能此前无任何像素级验证 | bgImage 绘制块移到台面/后台底色之后、网格之前（50% alpha 衬底只在舞台区域可见，网格/舞者照常叠于其上；PNG 导出/打印同源受益） | TC-P3-21 修复前舞台中心 rgb=(218,224,231) 无红；修复后 (237,146,146) 红衬底可见，清除后恢复白底、刷新持久不变 |
+
+单测回归：`npm test` 全绿（见 10.3）；既有 E2E 套件（含 L0/L1/L2/R/GR/RI/UF1/UF2）复跑绿，上述修复未改变任何既有断言口径。
+
+### 10.2 「确认为设计合理」附表（不改码，仅记录口径）
+
+| # | 观察点 | 本轮实证口径 | 影响用例 |
+|---|---|---|---|
+| D-6 | 对数上限 30 仅为提示 | spinner 在 max=30 封顶（ArrowUp 不越界）；直接键入 31 建档按 31 对（62 人）——`Math.max(0,·)` 只钳下界，文档既定口径「30 上限由 input max 提示」 | TC-P1-08 |
+| D-7 | 拖合并成员=整单元位移 | gesture 快照恒为整单元（无单人拉伸路径）：拖 A 与 C 合并时旧单元另一成员 B 随行平移（间距保持、越界钳制），替换合并语义不受影响。文档 TC-P3-25 的「拖单元成员分离呈示」动线据此不可达，本轮以「生成器拆呈示+刚性平移+重新合并合拢」等价覆盖 | TC-P2-24、TC-P3-25 |
+| D-8 | 均布方向切换初值 | `distributeAxis` 初始 undefined → 首次右键固定切到「纵向」（toast 明示），第二次才「横向」——方向状态机有明示文案，无歧义 | TC-P3-04 |
+| D-9 | 切帧动画中点击不吞输入 | 动画=纯舞台 UI（`startPositionsPreview`），点击照常生效（选择/工具），动画自身 ≤0.7s 有限结束落目标帧；与 L2#C-06 已验口径一致，文档「点击打断立即落终态」按此校准 | TC-P3-22 |
+| D-10 | history 哨兵计数与容错 | 哨兵条目恰一条、库⇄编辑器往返不堆积；前进重开已删项目时 `replaceState` 摘标记、留在库不卡死——F-04 决策机行为回归确认 | TC-P1-13、TC-P1-14 |
+| D-11 | single 单编号呈示=单圆+虚线外环 | ×2 角标已移除（round23 决策）：外环 #38bdf8 虚线即单元区分符，像素实测命中 | TC-P2-22 |
+
+### 10.3 回归数字
+
+- 新驱动：P1 22/22、P2 28/28、P3 26/26（`out/round37-batchB/p{1,2,3}-report.md`）。
+- 既有套件复跑：l0 / l1 / r / gr / realinput / l2 / userflows(uf1) / userflows2(uf2) / userflows-p4 / userflows-p5 / 音乐(r23-music) / node --test 全绿（`out/round37-batchB/regression/summary.txt`）。
+
+## 十一、round39 附表（2026-09-24，P6/P7/P8 全用例 E2E 实测轮，build 工作树 5201046 + round37/39 修复，dist 已重建）
+
+本轮以 `docs/test-cases-full.md` P6 视图/移动端/说明书（新增直断言 4 条）/ P7 数据与迁移（新增直断言 11 条）/ P8 skill 辅助（新增直断言 4 条）共 19 条🔵用例落地 + 7 条重点边界扩展（lab/run-userflows-p6/p7/p8.mjs，证据 `wuzhen-e2e-lab/out/round39-batchC/`），实测当场修复 2 项、「确认为设计合理/已知语义」4 项。✅已有 47 条逐条核对断言强度达标（详见 test-cases-full.md round39 证据节）。
+
+### 11.1 当场修复（含前后证据）
+
+| # | 级别 | 现象 | 根因 | 修复（diff） | 前后证据 |
+|---|---|---|---|---|---|
+| FIX-R39-1 | P2·持久化失效 | 主题切换后**刷新必回深色**：顶栏 🌙→☀️、data-theme、meta theme-color 当场全跟随且 localStorage `fs.theme=light` 写入成功，但 F5 后一律 dark——「记忆上次主题」语义形同虚设（TC-P6-12 检查点直接命中） | `js/store.js` state 对象字面量 **`theme` 键重复**：首行读 `localStorage.getItem('fs.theme')`，末尾又写 `theme: 'dark'`——后者覆盖前者，模块加载读值成为死代码 | 删去重复键，保留 localStorage 读值（附注释 FIX-R39-1） | 修复前探针 `probe-r39-p6.mjs`：after reload `{state:"dark", ls:"light"}`；修复后 39C#TC-P6-12 全绿（light 刷新保持 light、切回 dark 再刷新同样记忆，双向验证） |
+| FIX-R39-2 | P2·呈示失效 | 工具栏「路径」按钮与样式页「移动路径（虚线）」复选切换时状态位/按钮样式正常联动，但**舞台画布零视觉变化**（39C#TC-P6-16 [PIXEL] diff=0px）——交互舞台的当前→下一队形移动路径虚线自功能上线起从未渲染过 | `js/stage.js` StageView.draw() 调 drawScene 时传了 `nextPositions` 但**漏传 `paths` 门闩**——drawScene 内 `if (opts.paths && opts.nextPositions)` 永假；「Ghost 虚影」同结构（`opts.ghost`）正常，掩盖了该路径 | drawScene opts 增加 `paths: !!nextPositions`（nextPositions 本就由 scene.showPaths 门控，如实回传） | 修复前 on→off/off→on 画布 diff 均 0px；修复后关路径 diff>50px、重开恢复（与初始帧 diff<50px），[PIXEL] 出现/消失双向断言过 |
+
+单测与回归：`npm test` 全绿；既有全部套件（l0/l1/r/gr/realinput/l2/uf1/uf2/p1..p5/音乐）复跑绿，dist 单文件已重建（含 FIX-R39，file:// 渠道同步受益）。
+
+### 11.2 「确认为设计合理 / 已知语义」附表（不改码，仅记录口径）
+
+| # | 观察点 | 本轮实证口径 | 影响用例 |
+|---|---|---|---|
+| D-12 | 画布配色方案不随主题（舞台画布恒浅底 / 时间轴画布恒深底） | StageView.draw 先铺 `--stage-chrome` 色，随即被 drawScene 的固定浅底 `#f8fafc` 整幅覆盖（实测双主题 (3,3) 像素均 #f8fafc）；时间轴画布硬编码深色系（#0b1220/#131c31，timeline.js）。主题只作用于 DOM chrome（面板/按钮/CSS 变量，TC-P6-12 已断言跟随）。两画布「深浅双底」为既定视觉设计（部署版同口径），未按缺陷处理；如需「画布跟随主题」属新需求 | TC-P6-12 |
+| D-13 | 说明书音乐/播放两图无 tag 道 | 两图摄于 build-28-music 干净快照基线（manual-shots-v2 纪律：不在有并行改动的工作树拍摄），早于 tag 特性并入；图像与 `scripts/manual-assets.json` 单一事实源逐字节同步、版本徽标运行时渲染=当前 build-29-tags。属「截图基线滞后于特性」的已知口径，建议下次干净快照重拍两图 | TC-P6-15、TC-P6-B3 |
+| D-14 | 应用导出保留 `merges:[]` 空数组形态 | cloneBasic 原样导出内存态（createFormationFrom 给帧带 `merges:[]`），而 validateProject 导入时剥离空数组——往返**语义无损**（有无 merges 完全等价），仅字节形态差；skill 侧 roundtrip 两侧都过 validateProject 故逐字节一致。如需应用导出字节级幂等可在 cloneBasic 归一，本轮不改（避免扰动既有 UF1/UF2 文件比对口径） | TC-P7-21 |
+| D-15 | 400ms 防抖窗口内刷新=尽力而为 | mutate 后 <400ms 触发 reload：pagehide flush 的 IDB 事务在页面卸载期不保证提交（实测落点=回退上一收敛态）；≥400ms 经 debounce 正常落盘，visibilitychange/pagehide 强制落盘在正常隐藏路径有效。产品口径「改动 400ms 内自动落盘」按「不 crash 且最终一致」验收，窗口内极速刷新的极端竞态不承诺保留最后一次击键 | TC-P7-B1、A7-14 |
+
+### 11.3 回归数字
+
+- 新驱动：P6 7/7、P7 14/14、P8 5/5（`out/round39-batchC/p{6,7,8}-report.md`；26/26 PASS）。
+- 既有套件复跑：l0 / l1 / r / gr / realinput / l2 / uf1 / uf2 / p1 / p2 / p3 / p4 / p5 / 音乐(r23-music) / node --test（见 `out/round39-batchC/regression/summary.txt`）。

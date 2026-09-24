@@ -10,8 +10,8 @@ import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
 import { renderManual } from './manual.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-29-tags';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-29-tags');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-30-batches';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-30-batches');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -672,7 +672,9 @@ function wireStageTools() {
     const deg = +rot.value;
     $('rot-val').textContent = deg + '°';
     const sel = store.getState().selection;
-    const ids = sel.length ? expandedSelection() : [...currentFormation().positions.keys()];
+    // DEFECT-R37-1：positions 是普通对象（无 .keys() 方法）——无选择=全体时原写法直接 TypeError，
+    // 整体旋转/统一朝向/F 键的「无选择=全体」路径全部静默失效。改 Object.keys，空帧安全。
+    const ids = sel.length ? expandedSelection() : [...Object.keys(currentFormation()?.positions || {})];
     const center = centroid(currentFormation().positions, ids);
     store.mutate(p => {
       const f = p.formations[store.getState().formationIndex];
@@ -754,7 +756,8 @@ function wireStageTools() {
     const t = $('face-target').value;
     if (!t) return;
     const sel = store.getState().selection;
-    const ids = sel.length ? expandedSelection() : [...currentFormation().positions.keys()];
+    // DEFECT-R37-1：同整体旋转——无选择=全体走 Object.keys（positions 为普通对象，.keys() 不存在）
+    const ids = sel.length ? expandedSelection() : [...Object.keys(currentFormation()?.positions || {})];
     store.mutate(p => {
       const f = p.formations[store.getState().formationIndex];
       shapes.faceAll(f.positions, ids, t, { stage: p.stage });
@@ -781,8 +784,17 @@ function applyGenerator(kind) {
     if (unit === 'men') ids = p.dancers.filter(d => d.role === 'M').map(d => d.id);
     else if (unit === 'women') ids = p.dancers.filter(d => d.role === 'F').map(d => d.id);
     else ids = M.orderedDancers(p);
+    // DEFECT-R37-3：粒度=子集编排——「仅男士/仅女士」只应改变所选粒度的位置，其余舞者留在本帧现位。
+    // 原 applySlots 整表替换会把子集外舞者清位、再由 carryPositionsForward 兜底扔到舞台中心（首帧），
+    // 造成「只生成了男士、女士却全员瞬移」的位置丢失。全员生成语义不变（整体替换）。
+    const subset = new Set(ids);
+    const kept = {};
+    if (subset.size > 0 && subset.size < p.dancers.length) {
+      for (const [id, pos] of Object.entries(f.positions)) if (!subset.has(id)) kept[id] = pos;
+    }
     const slots = shapes.genSlots(kind, ids.length, p.stage, { rows, unit });
     shapes.applySlots(f, ids, slots, { current: f.positions });
+    for (const [id, pos] of Object.entries(kept)) if (!f.positions[id]) f.positions[id] = pos;
     M.applyFormationLayout(p, s.formationIndex); // 顺延缺席舞者位置（合并单元仅由手动操作创建）
   }, `生成队形(${kind})`);
 }
@@ -1129,11 +1141,22 @@ function buildProps() {
         st.bgImage ? h('button', { class: 'btn small', onclick: () => stageChange('bgImage', null) }, '清除') : null)));
 }
 const STAGE_NUMERIC_KEYS = new Set(['widthM', 'depthM', 'backstageM', 'gridM']);
+const STAGE_RANGE = { widthM: [4, 50], depthM: [4, 50], backstageM: [0, 10], gridM: [0.1, 2] }; // 与输入框 min/max 同域
 function stageChange(k, v) {
-  // number input 的 value 是字符串：必须转数值，否则坐标拼接/钳制/网格全部损坏
+  // number input 的 value 是字符串：必须转数值，否则坐标拼接/钳制/网格全部损坏。
+  // DEFECT-R37-2：原 `Number(v) || 原值` 只挡 0/NaN——负数/超上限（如 -2、100）会原样写入，
+  // 舞台几何随之损坏（宽为负、超域）。现按各字段文档域钳制：越界/非法一律回退原值，
+  // 并强制重建舞台页让输入框回显实际生效值（不再停留非法键入）。
+  let val = v;
+  if (STAGE_NUMERIC_KEYS.has(k)) {
+    const n = Number(v);
+    const [lo, hi] = STAGE_RANGE[k] || [4, 50];
+    val = (Number.isFinite(n) && n >= lo && n <= hi) ? n : store.getState().project.stage[k];
+    propsKey = ''; // 强制 buildProps 重建（否则输入框停留在被拒的键入值）
+  }
   stageView.view = null; // 先复位视图，再触发重绘
   store.mutate(p => {
-    p.stage[k] = STAGE_NUMERIC_KEYS.has(k) ? (Number(v) || p.stage[k]) : v;
+    p.stage[k] = val;
   }, '舞台设置');
 }
 function moveFormationRel(d) {
@@ -1319,7 +1342,8 @@ function wireKeyboard() {
     if (e.key.toLowerCase() === 'd') { addFormation(); return; }
     if (e.key.toLowerCase() === 'g') { store.mutate(p => { p.stage.snap = !p.stage.snap; }, '切换吸附'); return; }
     if (e.key.toLowerCase() === 'f') {
-      const ids = s.selection.length ? expandedSelection() : [...currentFormation().positions.keys()];
+      // DEFECT-R37-1：同整体旋转——无选择=全体走 Object.keys
+      const ids = s.selection.length ? expandedSelection() : [...Object.keys(currentFormation()?.positions || {})];
       store.mutate(p => {
         shapes.faceAll(p.formations[s.formationIndex].positions, ids, 'audience', { stage: p.stage, project: p });
       }, '面向观众');
