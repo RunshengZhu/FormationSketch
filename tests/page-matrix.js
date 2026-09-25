@@ -52,7 +52,8 @@ function makeCtx(fs, input) {
   const merges = () => fmt().merges || [];
   const mergeOf = (a, b) => merges().find(m => (m.a === a && m.b === b) || (m.a === b && m.b === a));
   const menu = () => document.querySelector('.unit-menu');
-  const menuBtn = tx => [...(menu()?.querySelectorAll('button') || [])].find(b => b.textContent.includes(tx));
+  // 汇合轮改写（图标化）：纯图标钮（✕→关闭）textContent 为空——按 aria-label 兜底匹配
+  const menuBtn = tx => [...(menu()?.querySelectorAll('button') || [])].find(b => b.textContent.includes(tx) || (b.getAttribute('aria-label') || '').includes(tx));
   const pt = (id) => { const p = pos(id); return toClient(p.x, p.y); };
   return { sv, fmt, toClient, pos, merges, mergeOf, menu, menuBtn, pt };
 }
@@ -102,7 +103,7 @@ export function buildCases() {
     const from = c.pt('A'), to = c.pt('B');
     await input.drag([from, to]); // A 拖到 B 上（A-B 未合并状态）
     step('弹窗出现', !!c.menu());
-    const x = c.menuBtn('✕');
+    const x = c.menuBtn('关闭');
     const r = x.getBoundingClientRect();
     await input.click(r.x + r.width / 2, r.y + r.height / 2);
     step('✕关闭且未合并', !c.menu() && !c.mergeOf('A', 'B'));
@@ -228,7 +229,7 @@ export function buildCases() {
     const mid = { x: (c.pt('A').x + c.pt('B').x) / 2, y: c.pt('A').y };
     await input.press(mid.x, mid.y, 700, { hw: 'touch' });
     step('弹窗出现', !!c.menu() && c.menu().textContent.includes('舞对单元'));
-    const x = c.menuBtn('✕');
+    const x = c.menuBtn('关闭');
     const r = x.getBoundingClientRect();
     await input.click(r.x + r.width / 2, r.y + r.height / 2, { hw: 'touch' });
   });
@@ -236,7 +237,7 @@ export function buildCases() {
     const mid = { x: (c.pt('A').x + c.pt('B').x) / 2, y: c.pt('A').y };
     await input.dblclick(mid.x, mid.y, { hw: 'touch' });
     step('弹窗出现', !!c.menu());
-    const x = c.menuBtn('✕');
+    const x = c.menuBtn('关闭');
     const r = x.getBoundingClientRect();
     await input.click(r.x + r.width / 2, r.y + r.height / 2, { hw: 'touch' });
   });
@@ -267,7 +268,7 @@ export function buildCases() {
     const mid = { x: (c.pt('A').x + c.pt('B').x) / 2, y: c.pt('A').y };
     await input.press(mid.x, mid.y, 700, { hw: 'pen' });
     step('弹窗出现', !!c.menu() && c.menu().textContent.includes('舞对单元'));
-    const x = c.menuBtn('✕');
+    const x = c.menuBtn('关闭');
     const r = x.getBoundingClientRect();
     await input.click(r.x + r.width / 2, r.y + r.height / 2);
   });
@@ -293,7 +294,7 @@ export function buildCases() {
     const mr = c.menu()?.getBoundingClientRect();
     step('弹窗在视口内', !!mr && mr.x >= 0 && mr.y >= 0 && mr.right <= window.innerWidth && mr.bottom <= window.innerHeight,
       mr ? JSON.stringify({ x: Math.round(mr.x), y: Math.round(mr.y), r: Math.round(mr.right), b: Math.round(mr.bottom) }) : '无弹窗');
-    const x = c.menuBtn('✕');
+    const x = c.menuBtn('关闭');
     const r = x.getBoundingClientRect();
     await input.click(r.x + r.width / 2, r.y + r.height / 2, { hw: 'touch' });
   });

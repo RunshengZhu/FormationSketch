@@ -444,7 +444,12 @@ export async function runL1(opts = {}) {
       id: 'D-11', hw: 'MT', name: '空白拖动平移（不改数据不改选择）',
       async run(t, { step }) {
         const player = () => window.__fs.player();
-        const playBtn = () => document.getElementById('pb-play')?.textContent;
+        // 汇合轮改写（图标化）：播放键呈 svg[data-icon=play|pause]——翻译回 ▶/⏸ 呈示字，既有断言不动
+        const playBtn = () => {
+          const b = document.getElementById('pb-play');
+          const ic = b?.querySelector('svg[data-icon]')?.getAttribute('data-icon');
+          return ic === 'pause' ? '⏸' : ic === 'play' ? '▶' : (b?.textContent.trim() || '');
+        };
         const A = t.ids[0], B = t.ids[6];
         const data0 = t.data(), sel0 = t.sel();
         const v0 = { ...sv.view };

@@ -47,7 +47,7 @@ function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, ex
     media: { assets: [], activeAssetId: null }, // v3 音乐剪辑：媒体资产库（blob 走存储层，项目记录只存元数据）
     settings: { labelMode: 'no' }, // 项目级显示设置：'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名
     dancers: [], groups: [], formations: [],
-    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [] },
+    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [], tracks: [defaultTrack()] },
   };
   for (let i = 1; i <= pairs; i++) {
     addDancer(project, `M${i}`, 'M', String(i));
@@ -431,7 +431,8 @@ function alignBlockStart(project, index, targetBeat, segments = computeSegments(
 
 // ---------- 媒体资产与音频 clip（v3 音乐剪辑 · 规格 docs/music-clip-ui-spec.md） ----------
 // project.media = { assets: [{id,name,durationSec,size}], activeAssetId }
-// project.timeline.audioClips = [{id,assetId,timelineStartSec,srcStartSec,lengthSec,fadeInSec,fadeOutSec,gain,name,muted?,color?,fadeInAuto?,fadeOutAuto?,autoPair?}]
+// project.timeline.tracks = [{id,name,gain,muted}]（多轨模型 · 见下方「多轨」节）
+// project.timeline.audioClips = [{id,assetId,trackId?,timelineStartSec,srcStartSec,lengthSec,fadeInSec,fadeOutSec,gain,name,muted?,color?,fadeInAuto?,fadeOutAuto?,autoPair?,autoPairIn?,autoPairOut?}]
 // clip=可自由摆放的独立对象：间隙=静音，重叠=自动等功率交叉淡化（fades 记录在 clip 上）。
 const MIN_CLIP_DUR = 0.005;
 const r6c = v => Math.round(v * 1e6) / 1e6;
@@ -461,7 +462,13 @@ function sanitizeMedia(raw) {
 }
 // 音频 clip 清洗：引用有效资产、数值域钳制（时间 ≥0、length>MIN、srcStart+length ≤ 资产时长、
 // 淡化 ≥0 且总量 ≤ length 按比例收缩、gain 0..4）、id 补 uid/去重；数组顺序即 z 序（保持不排序）。
-function sanitizeAudioClips(raw, assets) {
+// autoPair 双缘升级（R47）：autoPairOut/autoPairIn 各记一条交叉淡化缘（out=对后端 clip 淡出、
+// in=对前端 clip 淡入）；旧单字段 autoPair 迁移为双缘等价——只有单侧 auto 缘时按缘归属精确迁移，
+// 双侧 auto 缘并存（链式中段，旧单字段只保留了最后写入的 out 侧）按「末次写入=out 侧」启发式迁移，
+// in 侧陈旧记录留待 prune 的幽灵清理收口。autoPair 单字段保留为兼容镜像（旧版应用读新文件用）。
+// opts.trackIds（Set）+ opts.defaultTrackId：多轨清洗——clip.trackId 非悬挂则保留，悬挂/缺失
+// 回落 defaultTrackId；opts 缺省时保留既有 trackId 字符串（纯清洗入口不强行补轨语义）。
+function sanitizeAudioClips(raw, assets, opts = {}) {
   const durOf = new Map((assets || []).map(a => [a.id, a.durationSec]));
   const seen = new Set();
   const out = [];
@@ -483,6 +490,21 @@ function sanitizeAudioClips(raw, assets) {
     const total = fi + fo;
     if (total > len && total > 0) { const k = len / total; fi *= k; fo *= k; }
     const gain = Number(c.gain);
+    // autoPair 旧单字段 → 双缘迁移（见函数头注释）
+    const legacyPair = (typeof c.autoPair === 'string' && c.autoPair) ? c.autoPair : null;
+    let pairOut = (typeof c.autoPairOut === 'string' && c.autoPairOut) ? c.autoPairOut : null;
+    let pairIn = (typeof c.autoPairIn === 'string' && c.autoPairIn) ? c.autoPairIn : null;
+    if (!pairOut && legacyPair && c.fadeOutAuto) pairOut = legacyPair;            // 单 out 缘 / 双缘末写=out
+    if (!pairIn && legacyPair && c.fadeInAuto && !c.fadeOutAuto) pairIn = legacyPair; // 单 in 缘
+    // trackId：多轨清洗（validate 入口传 trackIds）；悬挂/缺失回落默认轨
+    let trackId = (typeof c.trackId === 'string' && c.trackId) ? c.trackId : null;
+    if (opts.trackIds) {
+      if (!trackId || !opts.trackIds.has(trackId)) {
+        trackId = (opts.defaultTrackId && opts.trackIds.has(opts.defaultTrackId))
+          ? opts.defaultTrackId
+          : [...opts.trackIds][0] || null;
+      }
+    }
     out.push({
       id, assetId,
       timelineStartSec: r6c(start),
@@ -496,7 +518,10 @@ function sanitizeAudioClips(raw, assets) {
       ...(typeof c.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c.color) ? { color: c.color } : {}),
       ...(c.fadeInAuto ? { fadeInAuto: true } : {}),
       ...(c.fadeOutAuto ? { fadeOutAuto: true } : {}),
-      ...(typeof c.autoPair === 'string' && c.autoPair ? { autoPair: c.autoPair } : {}),
+      ...(legacyPair ? { autoPair: legacyPair } : {}),
+      ...(pairOut ? { autoPairOut: pairOut } : {}),
+      ...(pairIn ? { autoPairIn: pairIn } : {}),
+      ...(trackId ? { trackId } : {}),
     });
   }
   return out;
@@ -512,7 +537,7 @@ function migrateLegacyAudio(p) {
   const asset = { id: uid('ast'), name, durationSec: Math.max(0, dur), size: 0 };
   p.media = { assets: [asset], activeAssetId: asset.id };
   p.timeline.audioClips = dur > MIN_CLIP_DUR ? [{
-    id: uid('clip'), assetId: asset.id,
+    id: uid('clip'), assetId: asset.id, trackId: DEFAULT_TRACK_ID,
     timelineStartSec: 0, srcStartSec: 0, lengthSec: r6c(dur),
     fadeInSec: 0, fadeOutSec: 0, gain: 1, name,
   }] : [];
@@ -526,6 +551,111 @@ function activeAssetOf(project) {
 function clipsOf(project) { return project?.timeline?.audioClips || []; }
 // clip 查找/终止点辅助（UI 层共用）
 function clipById(project, id) { return clipsOf(project).find(c => c.id === id) || null; }
+
+// ---------- 多轨（多轨模型 · 本期 2 轨起步） ----------
+// project.timeline.tracks = [{id, name, gain, muted}]。轨是 clip 的容器与混音单元：
+//   gain 0..2 线性（与 ClipTransport.setTrackGain 同域，UI 滑杆 0..1.5）、muted 整轨静音。
+// 上限 4 轨（TRACK_MAX）由 UI 层把守（addTrack 不设限）；模型层只保证数据合法与引用不悬挂。
+// 单轨项目零体验变化：默认恒有 trk1「配乐」，旧项目载入时缺省补建、clip.trackId 缺省迁移到 trk1。
+const TRACK_MAX = 4;
+const TRACK_NAME_MAX = 24;
+const DEFAULT_TRACK_ID = 'trk1';
+const defaultTrack = () => ({ id: DEFAULT_TRACK_ID, name: '配乐', gain: 1, muted: false });
+// 轨清洗：非合法项丢弃；id 缺失补 uid/去重（重复保首个弃后续）；name 非空 ≤24 字；
+// gain 0..2 钳制；muted 布尔归一。返回新数组，不改输入。
+function sanitizeTracks(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const out = [];
+  for (const t of arr) {
+    if (!t || typeof t !== 'object') continue;
+    const id = (typeof t.id === 'string' && t.id) ? t.id : uid('trk');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const gain = Number(t.gain);
+    out.push({
+      id,
+      name: String(t.name ?? '').trim().slice(0, TRACK_NAME_MAX) || `轨 ${out.length + 1}`,
+      gain: Number.isFinite(gain) ? Math.max(0, Math.min(2, gain)) : 1,
+      muted: !!t.muted,
+    });
+  }
+  return out;
+}
+function trackById(project, id) { return (project?.timeline?.tracks || []).find(t => t.id === id) || null; }
+// clip 归属轨（引擎/UI 共用）：trackId 悬挂/缺失回落默认轨→首轨（与 validate 清洗同口径）
+function trackOfClip(project, clip) {
+  const tracks = project?.timeline?.tracks || [];
+  if (!tracks.length) return null;
+  const id = clip?.trackId;
+  return (id && tracks.find(t => t.id === id)) || tracks.find(t => t.id === DEFAULT_TRACK_ID) || tracks[0];
+}
+// 新增轨：命名缺省「轨 N」（N 取未被占用最小号）。上限 TRACK_MAX 由 UI 把守，模型层不设限。
+function addTrack(project, { name = '' } = {}) {
+  project.timeline.tracks = project.timeline.tracks || [];
+  const used = new Set(project.timeline.tracks.map(t => t.name));
+  let n = project.timeline.tracks.length + 1;
+  while (used.has(`轨 ${n}`)) n++;
+  const t = {
+    id: uid('trk'),
+    name: String(name ?? '').trim().slice(0, TRACK_NAME_MAX) || `轨 ${n}`,
+    gain: 1, muted: false,
+  };
+  project.timeline.tracks.push(t);
+  return t;
+}
+// 删除轨：仅允许空轨（无任何 clip 引用；trackId 缺失的 clip 视为归属 trk1）。
+// 非空/不存在/删除后无轨可回退（tracks 至少保留一条供 validate 缺省重建，此处不硬拦最后一轨，
+// 但约定 UI 不提供删最后一轨入口）→ 返回 { ok:false, error }；删除 clip 策略=拒绝（简单安全）。
+function removeTrack(project, trackId) {
+  const tracks = project.timeline.tracks || [];
+  const i = tracks.findIndex(t => t.id === trackId);
+  if (i < 0) return { ok: false, error: '轨不存在' };
+  const referenced = clipsOf(project).some(c => (c.trackId || DEFAULT_TRACK_ID) === trackId);
+  if (referenced) return { ok: false, error: '轨上仍有音频块，不能删除（请先移动或删除音频块）' };
+  const [rm] = tracks.splice(i, 1);
+  return { ok: true, removed: rm };
+}
+function renameTrack(project, trackId, name) {
+  const t = trackById(project, trackId);
+  const n = String(name ?? '').trim().slice(0, TRACK_NAME_MAX);
+  if (!t || !n) return null;
+  t.name = n;
+  return t;
+}
+// 轨增益/静音：模型态写入（0..2 线性）；引擎实时生效由 UI 同步给 ClipTransport
+// （syncTracks / setTrackGainById / setTrackMutedById，setTargetAtTime 平滑）。
+function setTrackGain(project, trackId, gain) {
+  const t = trackById(project, trackId);
+  if (!t) return null;
+  const g = Number(gain);
+  t.gain = Number.isFinite(g) ? Math.max(0, Math.min(2, g)) : t.gain;
+  return t;
+}
+function setTrackMuted(project, trackId, muted) {
+  const t = trackById(project, trackId);
+  if (!t) return null;
+  t.muted = !!muted;
+  return t;
+}
+// clip 换轨：clip 与目标轨都必须存在；成功返回 { ok:true, clip }，否则 { ok:false, error }。
+function moveClipToTrack(project, clipId, trackId) {
+  const clip = clipById(project, clipId);
+  if (!clip) return { ok: false, error: '音频块不存在' };
+  const t = trackById(project, trackId);
+  if (!t) return { ok: false, error: '目标轨不存在' };
+  clip.trackId = t.id;
+  return { ok: true, clip };
+}
+// 「不含音乐」v1 导出剥离助手（汇合轮接线点）：多轨数据不随 v1 轻量文件出户——
+// 返回深拷贝（不改原项目）：去 timeline.tracks、去各 clip.trackId（autoPair 双缘保留，
+// 与轨无关）。v2（含乐）导出随行无需处理（cloneBasic 全量克隆）。
+function stripTracksForV1(project) {
+  const p = JSON.parse(JSON.stringify(project));
+  if (p.timeline) delete p.timeline.tracks;
+  for (const c of p.timeline?.audioClips || []) delete c.trackId;
+  return p;
+}
 
 // ---------- 校验 / 迁移 ----------
 function num(v, def, lo, hi) {
@@ -568,10 +698,17 @@ function validateProject(json) {
   p.timeline.tags = sanitizeTags(p.timeline.tags); // 时间轴标记清洗（旧项目无 tags → []，零迁移成本）
   // 媒体资产与音频 clip（v3 音乐剪辑）：清洗 + v1 单音频迁移（1 asset + 全长 clip，零体验变化）
   p.media = sanitizeMedia(p.media);
-  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets);
+  // 多轨（tracks）：清洗 + 缺省补建 trk1「配乐」（旧项目零体验变化）；clip.trackId 悬挂回落 trk1
+  p.timeline.tracks = sanitizeTracks(p.timeline.tracks);
+  if (!p.timeline.tracks.length) p.timeline.tracks = [defaultTrack()];
+  const trackOpts = {
+    trackIds: new Set(p.timeline.tracks.map(t => t.id)),
+    defaultTrackId: p.timeline.tracks.some(t => t.id === DEFAULT_TRACK_ID) ? DEFAULT_TRACK_ID : p.timeline.tracks[0].id,
+  };
+  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets, trackOpts);
   migrateLegacyAudio(p);
   // 迁移/清洗后再过一遍 clip 清洗（迁移产物引用新 asset，域已合法；此处幂等收口）
-  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets);
+  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets, trackOpts);
   for (const f of p.formations) f.positions = f.positions || {};
   const ids = new Set();
   for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }
@@ -991,6 +1128,20 @@ export {
   activeAssetOf,
   clipsOf,
   clipById,
+  TRACK_MAX,
+  TRACK_NAME_MAX,
+  DEFAULT_TRACK_ID,
+  defaultTrack,
+  sanitizeTracks,
+  trackById,
+  trackOfClip,
+  addTrack,
+  removeTrack,
+  renameTrack,
+  setTrackGain,
+  setTrackMuted,
+  moveClipToTrack,
+  stripTracksForV1,
   validateProject,
   /* shapes.js */
   SHAPE_KINDS,

@@ -4,6 +4,13 @@ import { ROLE_NAME } from './model.js';
 import { subscribe } from './store.js';
 import { drawScene } from './stage.js';
 
+// ---------- 图标库（决策⑤：线性单色 SVG，stroke=currentColor，16/20 两档） ----------
+// 单一事实源 js/icons.js；汇合轮已把 'icons' 加入 scripts/build-single.mjs 的 ORDER（置于
+// 'ui' 之前），本文件改回静态 import 并删除原哨兵拷贝（docs/icon-mapping.md §5）。
+// re-export 保持「manual.js 从 ui.js 取 iconHtml」的既有链（tests/icons.test.js 钉死）。
+import { iconHtml, iconEl } from './icons.js';
+export { iconHtml, iconEl };
+
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -47,7 +54,7 @@ export function fmtDate(iso) {
 // 语义（与「‹ 项目库」按钮严格一致）：进编辑器压入恰一条哨兵条目；浏览器后退到哨兵
 // → 应用内回库（等价点「‹ 项目库」），再次返回才真正离开；应用内回库（按钮路径）时
 // 主动弹掉哨兵并吞掉随之而来的 popstate；前进到哨兵（曾后退过）=重开该项目；
-// 哨兵消费/覆盖式重压 → 库⇄编辑器往返不堆积。
+// 哨兵消费/覆盖式重压 → 库与编辑器往返不堆积。
 export function createHistorySentinel(io = {}) {
   const marked = () => !!(io.state && io.state() && io.state().fs === 'editor');
   let suppress = 0; // 自驱 history.back() 引发的 popstate 需吞掉的次数
@@ -77,7 +84,10 @@ export function closeLibCardMenu() {
 export function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, onDelete}（export 供 node 单测驱动真实监听路径）
   closeLibCardMenu();
   const mk = (label, fn, extra = {}) => {
-    const b = h('button', { class: 'um-btn' + (extra.cls ? ' ' + extra.cls : '') }, label);
+    const b = h('button', {
+      class: 'um-btn' + (extra.cls ? ' ' + extra.cls : ''),
+      ...(extra.aria ? { 'aria-label': extra.aria, title: extra.aria } : {}),
+    }, label);
     if (extra.style) b.style.cssText = extra.style;
     b.addEventListener('click', () => { closeLibCardMenu(); fn(); });
     return b;
@@ -87,7 +97,7 @@ export function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, 
     mk('打开', () => acts.onOpen(p)),
     mk('复制', () => acts.onDuplicate(p)),
     mk('删除', () => acts.onDelete(p), { style: 'color:#ef4444' }),
-    mk('✕', () => {}, { cls: 'um-cancel' }));
+    mk(iconEl('close'), () => {}, { cls: 'um-cancel', aria: '关闭' }));
   menu.style.position = 'fixed'; // 覆盖 .unit-menu 的 absolute（相对卡片无意义，按光标定位）
   menu.style.zIndex = '150';
   libMenuDismiss = ev => { if (!menu.contains(ev.target)) closeLibCardMenu(); };
@@ -121,7 +131,7 @@ export function showMediaLibraryModal({ getProject, acts, toast: t }) {
       const active = p.media.activeAssetId === a.id;
       const missing = !acts.hasBlob?.(a.id);
       return h('div', { class: 'mlib-row' + (active ? ' mlib-active' : ''), draggable: 'true', title: missing ? '该资产音频数据缺失（重新导入文件可恢复）' : '拖到时间轴音轨可在落点生成剪辑' },
-        h('span', { class: 'mlib-name' }, (active ? '🎵 ' : '') + a.name),
+        h('span', { class: 'mlib-name' }, ...(active ? [iconEl('music'), ' '] : []), a.name),
         h('span', { class: 'dim' }, `${(a.durationSec || 0).toFixed(1)}s · ${fmtSize(a.size)}${missing ? ' · 数据缺失' : ''}`),
         h('span', { class: 'grp-ops' },
           active ? h('span', { class: 'chip chip-on' }, '配乐') : h('button', { class: 'btn small', onclick: () => { acts.setActive(a.id); render(); } }, '用作配乐'),
@@ -138,7 +148,7 @@ export function showMediaLibraryModal({ getProject, acts, toast: t }) {
     );
   };
   render();
-  const m = modal('📚 媒体库 · 音乐资产', wrap, [], { onClose: () => { dragDepth = 0; } });
+  const m = modal([iconEl('library', 20), ' 媒体库 · 音乐资产'], wrap, [], { onClose: () => { dragDepth = 0; } });
   // 拖音频文件入弹窗 = 导入（dragover/drop，忽略非音频）
   const back = m.back;
   back.addEventListener('dragover', e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; });
@@ -218,8 +228,8 @@ export function renderLibrary(container, { projects, onOpen, onNew, onDelete, on
           h('span', {}, `${p.dancers.length}人 · ${p.formations.length}队形`),
           h('span', {}, fmtDate(p.meta.updatedAt))),
         h('div', { class: 'lc-meta' },
-          h('span', {}, p.audio?.name ? '🎵 ' + p.audio.name : '无音乐'),
-          h('button', { class: 'lc-del', title: '删除项目', onclick: e => { e.stopPropagation(); onDelete(p); } }, '🗑'))));
+          ...(p.audio?.name ? [h('span', {}, iconEl('music'), ' ' + p.audio.name)] : [h('span', {}, '无音乐')]),
+          h('button', { class: 'lc-del', title: '删除项目', 'aria-label': '删除项目', onclick: e => { e.stopPropagation(); onDelete(p); } }, iconEl('trash')))));
     card.addEventListener('click', () => onOpen(p));
     card.addEventListener('contextmenu', e => {
       e.preventDefault(); // 原生菜单不再静默复制：隐藏手势并入显式菜单（左键打开不变）

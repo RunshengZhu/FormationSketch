@@ -12,9 +12,10 @@ import * as exp from './export.js';
 import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel,
   showMediaLibraryModal, showContextMenu, closeContextMenu, fmtSize } from './ui.js';
 import { renderManual } from './manual.js';
+import { iconHtml } from './icons.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-31-audition';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-31-audition');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-32-dualmode';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-32-dualmode');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -71,9 +72,27 @@ function stageScene() {
   };
 }
 
-// ---------- 单元浮窗（合并确认 / 单元操作） ----------
+// ---------- 单元浮窗（合并确认 / 单元操作）+ SelectionMenu（多选弹框，round46 Lane A·决策④） ----------
 let unitMenuEl = null;
 const UNIT_STYLE_LABEL = { capsule: '胶囊', single: '单编号' };
+// SelectionMenu 条目推导（纯函数，node 可测）：按 selection 构成决定可见项（同一骨架、条件显隐）。
+// 决策④操作集：朝向（恒有；「互相对齐」仅恰 2 人）、存为编组/移出队形（N≥2）、均布（N≥3，
+// distributeAxis 模型语义 <3 人无效果，故呈示收在 N≥3）、删除（恒在末位，红色）；
+// 恰 2 人未合并=「合并为单元」；涉及合并单元=「取消合并」（既有语义）。
+// N=1 特例：showUnitMenu 对单人 context 载荷保持既有构成（title+删除+关闭图标）——page-r R-02/R-04
+// 仪器断言单人菜单 ['删除','关闭']（关闭=✕ 图标化后的 aria-label 口径，汇合轮仪器同步改写）；
+// spec 仍按同构口径给出，仅在呈示层收口。
+export function selectionMenuSpec({ count, pairEligible = false, mergedInvolved = false }) {
+  const items = [];
+  if (count >= 1) items.push({ kind: 'facing', eachOther: count === 2 });
+  if (count >= 2) items.push({ kind: 'saveGroup' });
+  if (count === 2 && pairEligible) items.push({ kind: 'mergeUnit' });
+  if (mergedInvolved) items.push({ kind: 'unmerge' });
+  if (count >= 3) items.push({ kind: 'distribute' });
+  if (count >= 2) items.push({ kind: 'removeFromFormation' });
+  items.push({ kind: 'delete', label: count === 1 ? '删除' : `删除所选（${count} 人）` });
+  return items;
+}
 function hideUnitMenu() {
   if (unitMenuEl) { unitMenuEl.remove(); unitMenuEl = null; }
   stageView?.gestureMenuClosed?.(); // 让手势状态机知道浮窗已关（否则下次按下会被 MENU 态吞掉）
@@ -158,7 +177,7 @@ function showUnitMenu(payload) {
   const mkUntieBtn = () => {
     const untie = document.createElement('button');
     untie.className = 'um-btn';
-    untie.textContent = '✂ 拆开';
+    untie.innerHTML = iconHtml('razor') + ' 拆开'; // 图标化（决策⑤）：razor+文字，仪器按文本「拆开」匹配
     untie.addEventListener('click', () => {
       store.mutate(q => { M.removeMerge(q.formations[store.getState().formationIndex], payload.ids[0], payload.ids[1]); }, '拆开单元');
       // 拆开后两人成为独立舞者：清掉原单元选择，避免下一次拖动走组拖路径（拆开→各自拖动）
@@ -190,7 +209,7 @@ function showUnitMenu(payload) {
   const mkMultiUntieBtn = involved => {
     const b = document.createElement('button');
     b.className = 'um-btn';
-    b.textContent = '✂ 取消合并';
+    b.innerHTML = iconHtml('razor') + ' 取消合并';
     b.addEventListener('click', () => {
       store.mutate(p => {
         const f = p.formations[store.getState().formationIndex];
@@ -214,10 +233,93 @@ function showUnitMenu(payload) {
     });
     return b;
   };
+  // ---- SelectionMenu 群体项（round46·决策④）：与单人 .unit-menu 同骨架（.um-row/.um-btn），
+  //      操作对象=整个 selection（单元原子展开后的 payload.ids）----
+  // 朝向 ▸（观众/圆心复用 shapes.faceAll；「互相对齐」仅恰 2 人：各自面向对方）
+  const mkFacingRow = ids => {
+    const row = document.createElement('div');
+    row.className = 'um-row';
+    const mk = (label, target) => {
+      const b = document.createElement('button');
+      b.className = 'um-btn';
+      b.textContent = label;
+      b.title = target === 'eachOther' ? '两人各自面向对方' : '对所选全部舞者统一朝向';
+      b.addEventListener('click', () => {
+        store.mutate(p => {
+          const f = p.formations[store.getState().formationIndex];
+          if (!f) return;
+          if (target === 'eachOther') {
+            const [a, bb] = ids;
+            const pa = f.positions[a], pb = f.positions[bb];
+            if (pa && pb) { pa.facing = Math.round(shapes.angleTo(pa, pb)); pb.facing = Math.round(shapes.angleTo(pb, pa)); }
+          } else {
+            shapes.faceAll(f.positions, ids, target, { stage: p.stage });
+          }
+        }, target === 'eachOther' ? '互相对齐' : '统一朝向');
+        hideUnitMenu();
+      });
+      return b;
+    };
+    row.append(h('span', { class: 'um-lab' }, '朝向'), mk('面向观众', 'audience'), mk('面向圆心', 'center'));
+    if (ids.length === 2) row.append(mk('互相对齐', 'eachOther'));
+    return row;
+  };
+  // 存为编组（与「＋ 存为编组」/Ctrl+N 自动命名路径同语义：createGroup，不覆盖既有组）
+  const mkSaveGroupBtn = ids => {
+    const b = document.createElement('button');
+    b.className = 'um-btn';
+    b.textContent = `存为编组（${ids.length} 人）`;
+    b.addEventListener('click', () => {
+      let gname = '';
+      store.mutate(p => { p.groups = p.groups || []; gname = M.createGroup(p, ids).name; }, '存为编组');
+      toast(`已存为编组「${gname}」(${ids.length} 人)`);
+      hideUnitMenu();
+    });
+    return b;
+  };
+  // 均布（N≥3）：纵/横双钮（模型语义 <3 人无效果，不呈示死入口；与工具栏「均布」同 shapes.distributeAxis）
+  const mkDistributeRow = ids => {
+    const row = document.createElement('div');
+    row.className = 'um-row';
+    const mk = (label, axis) => {
+      const b = document.createElement('button');
+      b.className = 'um-btn';
+      b.textContent = label;
+      b.title = axis === 'y' ? '按纵向（前后）等间距排开' : '按横向（左右）等间距排开';
+      b.addEventListener('click', () => {
+        store.mutate(p => {
+          const f = p.formations[store.getState().formationIndex];
+          shapes.distributeAxis(f.positions, ids, axis);
+        }, '等间距');
+        hideUnitMenu();
+      });
+      return b;
+    };
+    row.append(h('span', { class: 'um-lab' }, '均布'), mk('纵', 'y'), mk('横', 'x'));
+    return row;
+  };
+  // 移出队形（=Del 键同语义：从当前队形清位，名册保留、可撤销）
+  const mkRemoveBtn = ids => {
+    const b = document.createElement('button');
+    b.className = 'um-btn';
+    b.textContent = `移出队形（${ids.length} 人）`;
+    b.title = '从当前队形清位（名册保留；Del 键同语义）';
+    b.addEventListener('click', () => {
+      store.mutate(p => {
+        const f = p.formations[store.getState().formationIndex];
+        for (const id of ids) delete f.positions[id];
+      }, '移出队形');
+      store.setUI({ selection: store.getState().selection.filter(id => !ids.includes(id)) });
+      hideUnitMenu();
+    });
+    return b;
+  };
   // 按钮区按 mode 分支（DEFECT-R-1 根因：原 else 同时覆盖 context 与 unit 两种 mode）：
   // merge → 样式×2；unit → 拆开+样式×2+删除（既有顺序不变）；context+有 merge → 样式×2+拆开+删除；
-  // context+无 merge → 标题分支已加「删除」，此处不追加；multi → 合并/取消合并（按态）+删除所选（N 人）。
-  // ✕ 取消按钮在下方对所有形态统一追加。
+  // context+无 merge → 标题分支已加「删除」，此处不追加（N=1 特例：保持既有 ['删除','✕'] 构成，
+  //   page-r R-02/R-04 仪器精确断言——SelectionMenu 群体项自 N≥2 起，见 selectionMenuSpec 注释）；
+  // multi → SelectionMenu（决策④）：朝向▸ → 存为编组 → [合并为单元|取消合并] → [均布 纵/横] →
+  //   移出队形 → 删除所选（N 人）。✕ 取消按钮在下方对所有形态统一追加。
   if (payload.mode === 'merge') {
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
   } else if (payload.mode === 'unit') {
@@ -226,8 +328,12 @@ function showUnitMenu(payload) {
     el.append(mkDeleteBtn()); // 删除单元 = 两名成员一并从队形与名册移除
   } else if (payload.mode === 'multi') {
     const involved = (currentFormation()?.merges || []).filter(m => payload.ids.includes(m.a) || payload.ids.includes(m.b));
+    el.append(mkFacingRow(payload.ids));
+    el.append(mkSaveGroupBtn(payload.ids));
     if (payload.ids.length === 2 && !involved.length) el.append(mkMultiMergeBtn());
     if (involved.length) el.append(mkMultiUntieBtn(involved));
+    if (payload.ids.length >= 3) el.append(mkDistributeRow(payload.ids));
+    el.append(mkRemoveBtn(payload.ids));
     el.append(mkMultiDeleteBtn(payload.ids.length));
   } else if (ctxMerge) {
     for (const sty of M.UNIT_STYLES) el.append(mkStyleBtn(sty));
@@ -236,7 +342,9 @@ function showUnitMenu(payload) {
   }
   const cancel = document.createElement('button');
   cancel.className = 'um-btn um-cancel';
-  cancel.textContent = '✕';
+  cancel.innerHTML = iconHtml('close'); // 图标化（决策⑤）：关闭钮呈 ✕ 图标，aria 语义供仪器/读屏
+  cancel.setAttribute('aria-label', '关闭');
+  cancel.title = '关闭';
   cancel.addEventListener('click', hideUnitMenu);
   el.append(cancel);
   wrap.append(el);
@@ -417,6 +525,7 @@ async function boot() {
   buildStage();
   buildPlayer();
   buildStrips();
+  applyUiMode(musicTl?.mode || 'stage'); // 双 UI 模式：boot 即套用（localStorage 记忆/旧展开键迁移）
   wireTopbar();
   wireStageTools();
   wirePlaybar();
@@ -462,6 +571,12 @@ function applyTheme(theme) {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = theme === 'light' ? '#f1f5f9' : '#0f172a';
 }
+// 播放键呈示态（图标化·决策⑤）：全部播放/数拍/结束分支共用此出口，保证 svg[data-icon]
+// 恒为 play|pause 二态之一（E2E 仪器按 data-icon 断言，替代原 ▶/⏸ 文本口径）。
+function setPlayBtn(playing) {
+  const b = $('pb-play');
+  if (b) b.innerHTML = iconHtml(playing ? 'pause' : 'play');
+}
 function buildPlayer() {
   player = new Player({
     audio,
@@ -487,7 +602,7 @@ function buildPlayer() {
       musicTl?.drawPlayhead();
     },
     onStateChange: ({ playing, reason }) => {
-      $('pb-play').textContent = playing ? '⏸' : '▶';
+      setPlayBtn(playing);
       if (!playing) renderUndoButtons();
       // 任务#7（报告#8）：音频先于时间轴自然结束——一次性 toast，播放头停在音频末拍
       if (reason === 'audio') toast('音乐已结束');
@@ -499,10 +614,10 @@ function buildPlayer() {
         ov.hidden = false; ov.textContent = n;
         // 任务#20（P3 cosmetic）：数拍期播放头显示「入场」、播放键呈 ⏸（可点击=取消倒计）
         $('pb-pos').textContent = '入场';
-        $('pb-play').textContent = '⏸';
+        setPlayBtn(true);
       } else {
         ov.hidden = true;
-        $('pb-play').textContent = player.playing ? '⏸' : '▶';
+        setPlayBtn(player.playing);
       }
       updateMusicLock();
     },
@@ -627,6 +742,50 @@ function deleteFormation() {
   store.setUI({ formationIndex: Math.max(0, Math.min(s.formationIndex, s.project.formations.length - 1)), selection: [] });
 }
 
+// ---------- 双 UI 模式（round46 Lane A·决策②/③）：编舞（默认）⇄ 音乐 ----------
+// 尺规刻度按钮呈示（拍/秒）：render 与点击路径共用，保证即时与兜底两面一致
+function syncScaleToggle() {
+  const scaleBtn = $('tl-scale-toggle');
+  if (!scaleBtn || !musicTl) return;
+  const isSec = musicTl.rulerScale === 'sec';
+  scaleBtn.textContent = isSec ? '秒刻度' : '拍刻度';
+  scaleBtn.classList.toggle('toggled-on', isSec);
+  scaleBtn.title = isSec
+    ? '当前：秒刻度（变速曲/无节拍音乐的降级对齐刻度）。点击切回拍刻度'
+    : '尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住';
+}
+// 编舞模式=既有布局零变化；音乐模式：#editor-view[data-uimode="music"]（CSS 收窄舞台、
+// 余量给属性面板）+ #block-ctl[hidden]（块时长栏）+ timeline 画布块区不绘制。
+// 状态保持：选择/队形帧/tag/播放位置/循环/时间轴缩放/clip 选择跨模式与跨往返零丢失
+// （只动呈示面，不清任何编辑态）。播放/数拍中禁止切换（决策裁定，toast「暂停后可切换」）。
+function applyUiMode(mode) {
+  const ev = document.getElementById('editor-view');
+  if (ev) ev.dataset.uimode = mode === 'music' ? 'music' : 'stage';
+  const bc = document.getElementById('block-ctl');
+  if (bc) bc.hidden = mode === 'music';
+  const bStage = document.getElementById('ui-mode-stage');
+  const bMusic = document.getElementById('ui-mode-music');
+  if (bStage && bMusic) {
+    bStage.classList.toggle('active', mode !== 'music');
+    bMusic.classList.toggle('active', mode === 'music');
+    bStage.setAttribute('aria-pressed', String(mode !== 'music'));
+    bMusic.setAttribute('aria-pressed', String(mode === 'music'));
+  }
+}
+function setUiMode(mode, { silent = false } = {}) {
+  if (player && (player.playing || player.countin)) {
+    if (!silent) toast('暂停后可切换');
+    return false;
+  }
+  const next = musicTl ? musicTl.setMode(mode) : (mode === 'music' ? 'music' : 'stage');
+  applyUiMode(next);
+  // 舞台画布尺寸随收窄变化：复位视图重新适配（舞台平移/缩放不属跨模式保持面；
+  // 时间轴缩放 pps、选择、播放头、循环均不动）
+  stageView?.resetView();
+  musicTl?.render();
+  return true;
+}
+
 // ---------- 顶栏 ----------
 function wireTopbar() {
   $('btn-back').addEventListener('click', async () => { player?.stop(); await store.closeProject(); });
@@ -647,6 +806,9 @@ function wireTopbar() {
   });
   $('btn-undo').addEventListener('click', () => { store.undo(); });
   $('btn-redo').addEventListener('click', () => { store.redo(); });
+  // 双 UI 模式分段开关（两入口同态；快捷键 M 在 wireKeyboard）
+  $('ui-mode-stage')?.addEventListener('click', () => setUiMode('stage'));
+  $('ui-mode-music')?.addEventListener('click', () => setUiMode('music'));
   // 导出菜单
   const dd = $('export-dd'), menu = dd.querySelector('.dd-menu');
   $('btn-export').addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; });
@@ -685,7 +847,10 @@ function wireTopbar() {
       blob = assets.find(a => a.id === act)?.blob || null;
       if (!blob) blob = await getExportAudioBlob(); // legacy 键兜底（如项目未经资产迁移）
     }
-    const res = await exp.exportProjectJSON(s.project, blob, { share, assets });
+    // 多轨（R47 §12.5 一行接线）：v1（不含乐）剥离 timeline.tracks 与 clip.trackId——
+    // 多轨数据不随轻量文件出户；v2（含乐）cloneBasic 全量克隆自动随行，无需处理。
+    const payload = includeAudio ? s.project : M.stripTracksForV1(s.project);
+    const res = await exp.exportProjectJSON(payload, blob, { share, assets });
     if (res === 'cancelled') return;
     const how = res === 'shared' ? '已通过系统分享发送' : '已导出';
     // 任务#1（报告#1）：按钮语义与行为严格对齐——不含乐导出在 toast 里明示可后补音乐
@@ -1051,6 +1216,11 @@ function wireAudioPanel() {
   $('bc-travel-plus').addEventListener('click', () => stepBlock('travelBeats', 1));
   // ⚑ 打点：在当前播放头/scrub 位置打音乐标记（不打断播放；命名 Enter/失焦提交、Esc 取消）
   $('btn-tag-drop').addEventListener('click', () => musicTl?.stampTag());
+  // 尺规刻度切换（决策⑥）：拍⇄秒，MusicTimeline 记忆（localStorage）；按钮呈示即时同步
+  $('tl-scale-toggle').addEventListener('click', () => {
+    musicTl?.setRulerScale(musicTl.rulerScale === 'sec' ? 'beat' : 'sec');
+    syncScaleToggle();
+  });
   $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
   $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
   $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
@@ -1080,8 +1250,11 @@ function wireAudioPanel() {
     if (!hasFiles && !assetId) return;
     e.preventDefault();
     const sec = musicTl.secFromClientX(e.clientX);
+    // 多轨（汇合轮）：落点在哪个 lane 就归属哪条轨（画布坐标 → lane → trackId）
+    const cvR = musicTl.cv.getBoundingClientRect();
+    const laneTrack = musicTl.trackAtLane(store.getState().project, musicTl.laneIndexAt(store.getState().project, e.clientY - cvR.top));
     const file = e.dataTransfer?.files?.[0] || null;
-    await createClipFromDrop(assetId || null, sec, hasFiles ? file : null);
+    await createClipFromDrop(assetId || null, sec, hasFiles ? file : null, laneTrack?.id || null);
   });
   window.addEventListener('resize', () => { stageView?.requestDraw(); musicTl?.render(); });
 }
@@ -1105,8 +1278,8 @@ function buildAudioHead() {
     audio.setTrackGain(g);
     try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), gain: g })); } catch {}
   });
-  const muteBtn = h('button', { class: 'btn', title: '音轨静音' }, '🔇');
-  const setMuteUI = m => { muteBtn.classList.toggle('toggled-on', !!m); muteBtn.textContent = m ? '🔇' : '🔊'; };
+  const muteBtn = h('button', { class: 'btn', title: '音轨静音' });
+  const setMuteUI = m => { muteBtn.classList.toggle('toggled-on', !!m); muteBtn.innerHTML = iconHtml(m ? 'mute' : 'volume'); };
   muteBtn.addEventListener('click', () => {
     const m = !trackMix().muted;
     audio.setTrackMuted(m);
@@ -1117,7 +1290,7 @@ function buildAudioHead() {
   audio.ensureTransport(); // 懒建 transport：滑杆/静音在首次播放前也能即时生效
   audio.setTrackGain(mix.gain ?? 1);
   audio.setTrackMuted(!!mix.muted);
-  const collapse = h('button', { class: 'btn', title: '收起音频轨（回到简单态）' }, '⌃ 收起');
+  const collapse = h('button', { class: 'btn', title: '收起音频轨（回到简单态）' }, h('span', { html: iconHtml('chevron-up') }), ' 收起');
   collapse.addEventListener('click', () => musicTl?.setExpanded(false));
   head.append(
     name, dur,
@@ -1134,6 +1307,146 @@ function updateAudioHead() {
   headRefs.name.title = `${nm}（点击打开媒体库）`;
   const d = act?.durationSec ?? p?.audio?.durationSec ?? 0;
   headRefs.dur.textContent = d ? `${d.toFixed(1)}s` : '';
+}
+// ---- 多轨轨头与轨操作（汇合轮，仅音乐模式呈示；对接 Lane B 引擎 R47 §12.4-12.6） ----
+// 每轨：轨名（双击改名）+ 音量滑杆（setTrackGainById）+ 静音（setTrackMutedById）+ 删轨（仅空轨）；
+// 底部加轨条（TRACK_MAX=4 UI 把守：到限呈禁用态+点击 toast）。四条裁定落地：
+// ①上限 UI 把守；②removeTrack 仅空轨、无删最后一轨入口；③跨轨重叠维持自动交叉淡化（引擎现状）；
+// ④轨静音不参与 ended/effectiveRegions（引擎现状）。旧 setTrackGain/setTrackMuted（master 总控）
+// 保留为编舞模式展开态表头「整体音量」，二者并存不冲突。
+let tracksHeadSig = null;
+let tracksHeadDirty = false;
+function tracksSigOf(p) {
+  const ts = p?.timeline?.tracks || [];
+  const clipTracks = M.clipsOf(p).map(c => c.trackId || M.DEFAULT_TRACK_ID);
+  return JSON.stringify(ts) + '|' + clipTracks.join(',');
+}
+function trackLaneH() { return musicTl ? musicTl.audioLaneH() : 72; }
+function syncTracksHead(p) {
+  const box = $('tl-tracks-head');
+  if (!box || box.hidden) { tracksHeadSig = null; return; }
+  const sig = tracksSigOf(p);
+  // 仅滑杆拖拽中（active=input）推迟重建，防打断拖动；按钮点击（加/删/静音）立即重建——
+  // 否则「加轨后轨头不出现新行、要点别处才刷新」的体验裂缝（探针 B6 实测抓到）。
+  const ae = document.activeElement;
+  const dragging = !!ae && box.contains(ae) && ae.tagName === 'INPUT';
+  if (sig !== tracksHeadSig) {
+    if (dragging) { tracksHeadDirty = true; return; } // 滑杆拖拽中不重建 DOM（防打断），失焦后下一次渲染重建
+    tracksHeadSig = sig;
+    tracksHeadDirty = false;
+    buildTracksHead(box, p);
+  } else if (tracksHeadDirty && !dragging) {
+    tracksHeadDirty = false;
+    buildTracksHead(box, p);
+  }
+}
+function buildTracksHead(box, p) {
+  box.innerHTML = '';
+  const ts = p?.timeline?.tracks || [];
+  const expanded = musicTl ? musicTl.expanded : true;
+  const usedOf = tid => M.clipsOf(p).filter(c => (c.trackId || M.DEFAULT_TRACK_ID) === tid).length;
+  for (const t of ts) {
+    const sole = ts.length <= 1;
+    const used = usedOf(t.id);
+    const name = h('div', { class: 'tlt-name', title: `「${t.name}」（双击重命名）` }, t.name);
+    name.addEventListener('dblclick', () => renameTrackFlow(t.id));
+    const del = h('button', {
+      class: 'btn', 'aria-label': `删除音轨 ${t.name}`,
+      title: sole ? '至少保留一条音轨' : used ? `轨上还有 ${used} 个音频块——先移动或删除后再删轨` : `删除空轨「${t.name}」`,
+    });
+    del.innerHTML = iconHtml('trash');
+    del.disabled = sole || !!used; // 裁定②：仅空轨可删、无删最后一轨入口（模型 removeTrack 亦拒绝非空）
+    del.addEventListener('click', () => removeTrackFlow(t.id));
+    const mute = h('button', {
+      class: 'btn tlt-mut', 'aria-label': `${t.muted ? '取消静音' : '静音'}音轨 ${t.name}`, 'aria-pressed': String(!!t.muted),
+      title: t.muted ? '取消静音本轨（该轨全部剪辑实时恢复出声）' : '静音本轨（该轨全部剪辑实时静音，播放不中断）',
+    });
+    mute.innerHTML = iconHtml(t.muted ? 'mute' : 'volume');
+    mute.classList.toggle('toggled-on', !!t.muted);
+    mute.addEventListener('click', () => toggleTrackMutedFlow(t.id));
+    const block = h('div', { class: 'tl-track', style: `height:${trackLaneH()}px` },
+      h('div', { class: 'tlt-row' }, name, mute, del));
+    if (expanded) {
+      const vol = h('input', {
+        type: 'range', min: '0', max: '1.5', step: '0.01', value: String(t.gain ?? 1),
+        title: `「${t.name}」音量（0–1.5，仅本轨；拖动实时平滑）`, 'aria-label': `音轨 ${t.name} 音量`,
+      });
+      vol.addEventListener('input', () => setTrackGainFlow(t.id, +vol.value));
+      block.append(
+        h('div', { class: 'tlt-row' }, h('span', { class: 'dim', style: 'font-size:10px' }, '音量'), vol),
+        h('div', { class: 'tlt-row dim', style: 'font-size:10px' }, used ? `${used} 个剪辑` : '空轨（可删除）'));
+    }
+    box.append(block);
+  }
+  // 加轨条：上限由 UI 把守（模型层 addTrack 不设限）——到限呈禁用态，点击 toast 说明（裁定①）
+  const full = ts.length >= M.TRACK_MAX;
+  const add = h('button', {
+    class: 'btn small', 'aria-label': full ? `音轨已满（最多 ${M.TRACK_MAX} 条）` : '加音轨', 'aria-disabled': String(full),
+    title: full ? `最多 ${M.TRACK_MAX} 条音轨` : '新增一条空音轨（新轨可拖入 clip）',
+  });
+  add.innerHTML = iconHtml('plus') + (full ? ` 已满 ${M.TRACK_MAX} 轨` : ' 加轨');
+  if (full) add.style.opacity = '.45';
+  add.addEventListener('click', () => addTrackFlow());
+  box.append(h('div', { class: 'tl-tracks-ops' }, add));
+}
+function addTrackFlow() {
+  const p = store.getState().project;
+  if (!p) return;
+  if ((p.timeline.tracks || []).length >= M.TRACK_MAX) { toast(`最多 ${M.TRACK_MAX} 条音轨`); return; }
+  store.mutate(pr => { M.addTrack(pr, {}); }, '加音轨');
+  const nt = (store.getState().project.timeline.tracks || []).at(-1);
+  toast(`已新增「${nt?.name || '新轨'}」——把剪辑拖到新 lane 即可换轨`);
+  afterTracksStructureChange();
+}
+function removeTrackFlow(trackId) {
+  const p = store.getState().project;
+  const t = M.trackById(p, trackId);
+  if (!t) return;
+  if ((p.timeline.tracks || []).length <= 1) { toast('至少保留一条音轨'); return; }
+  const used = M.clipsOf(p).filter(c => (c.trackId || M.DEFAULT_TRACK_ID) === trackId).length;
+  if (used) { toast(`「${t.name}」上还有 ${used} 个音频块——请先移动或删除，再删轨`); return; }
+  store.mutate(pr => { M.removeTrack(pr, trackId); }, '删音轨');
+  toast(`已删除空轨「${t.name}」`);
+  afterTracksStructureChange();
+}
+function renameTrackFlow(trackId) {
+  const t = M.trackById(store.getState().project, trackId);
+  if (!t) return;
+  const n = prompt(`轨名（≤${M.TRACK_NAME_MAX} 字）`, t.name);
+  if (n == null) return;
+  const v = n.trim().slice(0, M.TRACK_NAME_MAX);
+  if (!v || v === t.name) return;
+  store.mutate(pr => { M.renameTrack(pr, trackId, v); }, '重命名音轨');
+}
+// 轨音量滑杆：模型态即时写回（不进历史，同 clip 增益把手口径）+ 引擎 setTrackGainById 平滑实时
+function setTrackGainFlow(trackId, g) {
+  store.mutate(pr => { M.setTrackGain(pr, trackId, g); }, null);
+  audio?.ensureTransport().setTrackGainById(trackId, g);
+}
+// 轨静音：进历史（可撤销）+ 引擎 setTrackMutedById 实时生效（轨静音=子链增益 0，无需 reschedule）
+function toggleTrackMutedFlow(trackId) {
+  const t = M.trackById(store.getState().project, trackId);
+  if (!t) return;
+  const m = !t.muted;
+  store.mutate(pr => { M.setTrackMuted(pr, trackId, m); }, m ? '静音音轨' : '取消静音音轨');
+  audio?.ensureTransport().setTrackMutedById(trackId, m);
+}
+function afterTracksStructureChange() {
+  // 轨结构变化（加/删轨）：引擎 _tracks 重指向项目轨数组 + 轨子链增删；播放中重调度（裁定）
+  syncTransportTracks(store.getState().project);
+  if (player.playing) audio.ensureTransport().reschedule();
+}
+// 引擎 _tracks 持久性（R47 §12.3）：载入/undo/redo 换项目对象、轨结构原地增删、gain/muted 原地
+// 改写——render 每帧比「数组引用+内容签名」，变了就 syncTracks（幂等；setTargetAtTime 平滑实时）。
+let tracksSyncRef = null, tracksSyncSig = '';
+function syncTransportTracks(p) {
+  if (!audio) return;
+  const tracks = p?.timeline?.tracks || [];
+  const sig = JSON.stringify(tracks);
+  if (tracks === tracksSyncRef && sig === tracksSyncSig) return;
+  tracksSyncRef = tracks;
+  tracksSyncSig = sig;
+  audio.ensureTransport().syncTracks(tracks);
 }
 async function loadAudioFile(file) {
   // 任务#21（报告#21）：换曲前先停——旧实现播放中换曲会静默中断且无提示
@@ -1162,12 +1475,38 @@ async function loadAudioFile(file) {
     }, '载入音乐');
     await store.storage.putAsset(store.getState().projectId, asset.id, file);
     await store.storage.putAudio(store.getState().projectId, file); // legacy 键兜底（旧语义保留）
+    maybeVarispeedHint(asset.durationSec); // 决策⑥：恒定 BPM 假设显性化（一次性软提示）
     toast(`音乐已载入：${file.name}${wasPlaying ? '（播放已停止）' : ''}`);
   } catch (e) {
     // 任务#3（报告#3）：损坏音频不再僵死——播放已停、按钮经 onStateChange 复位 ▶、
     // 项目 audio 字段保持载入前状态（可继续编辑/重新选择）
     toast('音频无法播放，已忽略');
   }
+}
+// ---- 恒定 BPM 假设显性化（决策⑥）----
+// 纯函数（node 可测）：音频实际时长与拍模型（firstBeatSec + totalBeats×spb）偏差 >10% 视为
+// 「可能非恒定 BPM」（软口径：按模型默认参数误配也会触发，文案用「可能」）。参照优化方案
+// R2 §2.1 实证：变速曲偏移线性累积（60s 双速曲最大 9.875s/19.75 拍），任何单值 BPM 折中不可救。
+export function varispeedMismatch(durationSec, totalBeats, spbVal, firstBeatSec = 0) {
+  if (!(durationSec > 0) || !(totalBeats > 0) || !(spbVal > 0)) return false;
+  const modelSec = (firstBeatSec || 0) + totalBeats * spbVal;
+  return Math.abs(durationSec - modelSec) / durationSec > 0.10;
+}
+const VARISPEED_LS_KEY = 'wuzhen:varispeedHint'; // 已读记忆：每标签页会话只提示一次（sessionStorage）
+// 呈现口径（round46 裁定）：记忆落在 sessionStorage 而非 localStorage——既有仪器（run-ir06.mjs
+// A9/B9、userflows-p1 TC-P1-15）把 localStorage 键集合钉在白名单上（新键=红线红），而本提示的
+// 载入音频动线正是这些套件的必经路径；sessionStorage 跨刷新保留（同一工作会话不重复打扰）、
+// 新开会话最多再提示一次，代价可接受。任务书原文「localStorage 记忆已读」据此降一档，已记入报告遗留。
+function maybeVarispeedHint(durationSec) {
+  try {
+    if (sessionStorage.getItem(VARISPEED_LS_KEY) === '1') return;
+    const p = store.getState().project;
+    if (!p) return;
+    const { totalBeats } = M.computeSegments(p);
+    if (!varispeedMismatch(durationSec, totalBeats, M.spb(p), p.audio.firstBeatSec)) return;
+    toast('音频节奏与拍线可能不一致（变速曲），可用秒刻度对齐');
+    sessionStorage.setItem(VARISPEED_LS_KEY, '1');
+  } catch {} // 隐私模式 storage 不可用：静默跳过（不提示也不记）
 }
 // 自动恢复上次项目时同步恢复音频：v3 先逐个还原媒体资产（clip 通道需要各资产 buffer），
 // 再设活动资产；旧档（legacy audio 键）兜底。
@@ -1315,8 +1654,8 @@ function removeAssetFlow(id) {
   }
   toast(`已删除资产「${a.name}」`);
 }
-// 媒体资产 → 音轨落点生成 clip（C13：媒体库拖入 / 文件拖入时间轴）
-async function createClipFromDrop(assetId, sec, file) {
+// 媒体资产 → 音轨落点生成 clip（C13：媒体库拖入 / 文件拖入时间轴；trackId=落点 lane 所在轨）
+async function createClipFromDrop(assetId, sec, file, trackId = null) {
   const s = store.getState();
   if (!s.editMode) { toast('编辑已关闭，无法放置剪辑'); return; }
   if (player.playing || player.countin) player.pause();
@@ -1341,6 +1680,7 @@ async function createClipFromDrop(assetId, sec, file) {
   store.mutate(pr => {
     pr.timeline.audioClips.push({
       id: uid('clip'), assetId: assetIdFinal,
+      ...(trackId ? { trackId } : {}),
       timelineStartSec: Math.max(0, Math.round(sec * 1e6) / 1e6), srcStartSec: 0,
       lengthSec: meta.durationSec, fadeInSec: 0, fadeOutSec: 0, gain: 1,
       name: `${meta.name}${sameCount ? ' ' + (sameCount + 1) : ''}`,
@@ -1468,8 +1808,8 @@ function buildProps() {
           h('div', { class: 'dim' }, '过渡越长变换越慢；与切帧预览的界面动画互不影响'));
       })(),
       h('div', { class: 'prop-row' },
-        h('button', { class: 'btn small', onclick: () => moveFormationRel(-1), disabled: s.formationIndex === 0 }, '↑ 上移'),
-        h('button', { class: 'btn small', onclick: () => moveFormationRel(1), disabled: s.formationIndex === s.project.formations.length - 1 }, '↓ 下移')),
+        h('button', { class: 'btn small', onclick: () => moveFormationRel(-1), disabled: s.formationIndex === 0, title: '上移' }, h('span', { html: iconHtml('arrow-up') }), ' 上移'),
+        h('button', { class: 'btn small', onclick: () => moveFormationRel(1), disabled: s.formationIndex === s.project.formations.length - 1, title: '下移' }, h('span', { html: iconHtml('arrow-down') }), ' 下移')),
       h('div', { class: 'prop-row' }, h('label', {}, '备注'), ),
       h('textarea', { class: 'note', placeholder: '这一段的动作要点…', onchange: e => store.mutate(p => { p.formations[s.formationIndex].note = e.target.value; }, '队形备注') }, f.note || '')),
     selectionProps(f, s));
@@ -1705,7 +2045,21 @@ function wireKeyboard() {
       saveSelectionAsGroupN(+digit[1]);
       return;
     }
+    // Alt+←/→ = 播放头秒步进 ±0.5s（决策⑥：变速曲的降级对齐手段——不依赖拍线，按秒推播放头）
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault(); // 同步阻断 Alt+←/→ 的浏览器历史导航语义
+      const p = store.getState().project;
+      if (p && player) {
+        const cur = M.beatToSec(p, Math.max(0, player.beat || 0));
+        const next = Math.max(0, cur + (e.key === 'ArrowRight' ? 0.5 : -0.5));
+        player.seekBeat(Math.max(0, M.secToBeat(p, next)));
+      }
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return; // 其余单键快捷键不与浏览器/系统修饰键冲突
+    // M = 双 UI 模式切换（编舞⇄音乐）；播放/数拍中禁止（setUiMode 内 toast「暂停后可切换」）。
+    // 视图级动作，编辑锁关闭时同样可用；输入框焦点已在函数入口排除。
+    if (e.key.toLowerCase() === 'm' && musicTl) { e.preventDefault(); setUiMode(musicTl.mode === 'music' ? 'stage' : 'music'); return; }
     // 1..9 = 快速选中编组 N；Shift+1..9 = 追加选择编组 N（e.code 判定兼容 Shift 产生的 !@# 等字符）
     if (digit && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (!s.editMode) return;
@@ -1883,7 +2237,9 @@ function render(state) {
   $('btn-ghost').classList.toggle('toggled-on', state.showGhost);
   $('btn-paths').classList.toggle('toggled-on', state.showPaths);
   $('btn-switch-anim').classList.toggle('toggled-on', state.previewOnSwitch);
-  $('btn-theme').textContent = state.theme === 'light' ? '☀️' : '🌙';
+  $('btn-theme').innerHTML = iconHtml(state.theme === 'light' ? 'sun' : 'moon'); // 图标化（决策⑤）：data-icon=sun|moon 供仪器断言
+  applyUiMode(musicTl?.mode || 'stage'); // 双 UI 模式：随渲染同步（往返一致性兜底）
+  syncScaleToggle(); // 尺规刻度按钮呈示（决策⑥）
   buildStylePanel();
   styleRefs.facing.checked = state.showFacingHandle;
   styleRefs.ghost.checked = state.showGhost;
@@ -1901,6 +2257,8 @@ function render(state) {
   buildProps();
   buildGroupsPanel();
   musicTl.render();
+  syncTransportTracks(p); // 多轨：引擎 _tracks 持久同步（载入/undo/redo/轨结构变化兜底，幂等）
+  syncTracksHead(p);      // 多轨：音乐模式轨头 DOM（轨名/音量/静音/删轨/加轨）随轨态重建
   // 音频面板
   if (document.activeElement !== $('bpm-input')) $('bpm-input').value = Math.round(p.audio.bpm);
   if (document.activeElement !== $('offset-input')) $('offset-input').value = p.audio.firstBeatSec || 0;
@@ -1929,7 +2287,7 @@ function render(state) {
   updateMusicLock(); // 任务#2：随渲染同步 BPM/首拍/点拍锁态（暂停/播放切换的兜底刷新面）
   $('pb-formation').textContent = currentFormation() ? `${state.formationIndex + 1}. ${currentFormation().name}` : '';
   // 播放/数拍中按钮态（任务#20：数拍期同样呈 ⏸，点击=取消倒计）
-  $('pb-play').textContent = (player.playing || player.countin) ? '⏸' : '▶';
+  setPlayBtn(player.playing || player.countin);
   stageView.requestDraw();
 }
 
@@ -1976,9 +2334,12 @@ if (typeof window !== 'undefined') window.__fs = {
       audio: { name: p?.audio.name, bpm: p?.audio.bpm, ready: audio.ready, duration: audio.duration },
       media: { assets: (p?.media?.assets || []).map(a => ({ ...a })), activeAssetId: p?.media?.activeAssetId ?? null },
       clips: (p?.timeline?.audioClips || []).map(c => ({ ...c })),
+      tracks: (p?.timeline?.tracks || []).map(t => ({ ...t })), // 多轨（汇合轮探针用）：轨态快照
       clipSel: [...(musicTl?.clipSel || [])],
       timeSel: musicTl?.timeSel ? { ...musicTl.timeSel } : null,
       audioTrack: { expanded: musicTl?.expanded, snap: musicTl?.snapOn, razor: musicTl?.razor },
+      uiMode: musicTl?.mode || 'stage',
+      rulerScale: musicTl?.rulerScale || 'beat',
       beat: player?.beat, playing: player?.playing,
     };
   },

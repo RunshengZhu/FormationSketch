@@ -71,7 +71,8 @@ test('manual-assets.js 与单一事实源 scripts/manual-assets.json 一致（�
 // ---------- 3. tab 接线存在 ----------
 test('index.html：说明书页签/页容器/移动端入口/全屏覆盖层齐备，且既有 .ptab 恰 4 个（仪器断言保护）', () => {
   const html = read('index.html');
-  assert.match(html, /<button class="mtab" data-tab="manual"[^>]*>📖 说明书<\/button>/, '应有 .mtab 说明书页签（与四页签平齐）');
+  // 汇合轮改写（图标化决策⑤）：原「>📖 说明书</button>」文本断言 → 页签含 book 图标 +「说明书」文字
+  assert.match(html, /<button class="mtab" data-tab="manual"[^>]*><svg[^>]*data-icon="book"[\s\S]*? 说明书<\/button>/, '应有 .mtab 说明书页签（book 图标 + 文字，与四页签平齐）');
   assert.match(html, /<div id="props-manual" class="props-page" hidden><\/div>/, '应有 props-manual 页容器');
   assert.match(html, /id="btn-manual-open"/, '应有移动端「更多」入口按钮');
   assert.match(html, /id="manual-overlay"[^>]*hidden>/, '应有全屏覆盖层（默认隐藏）');

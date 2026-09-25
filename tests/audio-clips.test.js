@@ -3,10 +3,16 @@
 // split/波纹删除/时间选区修剪、自动等功率交叉淡化（建立/拖开还原/手动淡化不受影响）、
 // 淡化包络互补性、有效事件区间（段间静音）、磁吸候选与最近邻、零交叉、波形包络、
 // 按队形段自动切（幂等）、ClipTransport 双时钟调度（假 AudioContext）与 Player clip 通道终态。
+// 多轨（R47）：tracks 数据形态与 trk1 迁移（旧项目零体验变化）、轨操作 API（removeTrack
+// 拒绝非空轨）、双轨同时调度与每轨 Gain 子链路由、轨静音/gain 实时语义、autoPair 双缘
+// 升级（链式 A-B、B-C 共享 B 场景）与旧单字段迁移、导出导入往返含 tracks / v1 剥离。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createProject, validateProject, migrateLegacyAudio, sanitizeMedia, sanitizeAudioClips,
+  sanitizeTracks, defaultTrack, DEFAULT_TRACK_ID, TRACK_MAX,
+  addTrack, removeTrack, renameTrack, setTrackGain, setTrackMuted, moveClipToTrack,
+  trackById, trackOfClip, stripTracksForV1,
 } from '../js/model.js';
 import {
   clipEnd, lastClipEndSec, effectiveRegions, capFades, fadeEnvAt, clipGainAt,
@@ -521,4 +527,263 @@ test('Player clip 通道：totalBeats 先到 → 统一终态（beat=totalBeats�
   assert.deepEqual(audio.calls.seekClips, [2], 'seekBeat=4 拍 → 2s');
   p.stop();
   assert.equal(audio.calls.stopClips >= 1, true, 'stop 停 clip 通道');
+});
+
+// ---------- 10) 多轨数据模型（R47：timeline.tracks + clip.trackId） ----------
+test('多轨迁移：旧项目（无 tracks）载入 → 缺省补建 trk1「配乐」，clip.trackId 缺省/悬挂 → trk1（零体验变化）', () => {
+  const p = createProject({ pairs: 1 });
+  assert.deepEqual(p.timeline.tracks, [defaultTrack()], '新建项目恒带默认轨 trk1');
+  assert.equal(DEFAULT_TRACK_ID, 'trk1');
+  assert.equal(TRACK_MAX, 4, '上限常量=4（UI 层把守，模型不强制）');
+  // 旧项目形态：timeline 无 tracks 字段、clip 无 trackId（v0.9.x 存量数据）
+  const legacy = JSON.parse(JSON.stringify(p));
+  delete legacy.timeline.tracks;
+  legacy.media = { assets: [{ id: 'a1', name: 'a.wav', durationSec: 30, size: 1 }], activeAssetId: 'a1' };
+  legacy.timeline.audioClips = [
+    { id: 'c1', assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 10 },                  // 无 trackId
+    { id: 'c2', assetId: 'a1', timelineStartSec: 10, srcStartSec: 0, lengthSec: 5, trackId: 'trk9' }, // 悬挂引用
+  ];
+  const r = validateProject(legacy);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.project.timeline.tracks, [defaultTrack()], '缺省补建 trk1「配乐」');
+  assert.equal(r.project.timeline.audioClips[0].trackId, 'trk1', '缺省迁移 → trk1');
+  assert.equal(r.project.timeline.audioClips[1].trackId, 'trk1', '悬挂 trackId 回落 trk1');
+  // 幂等：二次校验逐字节一致
+  const r2 = validateProject(JSON.parse(JSON.stringify(r.project)));
+  assert.deepEqual(r2.project.timeline.tracks, r.project.timeline.tracks);
+  assert.deepEqual(r2.project.timeline.audioClips, r.project.timeline.audioClips);
+  // 旧 clip 播放语义零变化：trackId 不进增益数学（clipGainAt 不含轨增益）
+  assert.equal(clipGainAt(r.project.timeline.audioClips[0], 1), 1);
+});
+
+test('sanitizeTracks / validateProject 轨清洗：去重保首个、非法项丢弃、gain 0..2 钳制、空列表缺省补建', () => {
+  const ts = sanitizeTracks([
+    { id: 'trk1', name: '  配乐改名  ', gain: 9, muted: 1 },
+    { id: 'trk1', name: '重复id', gain: 1 },   // 重复 id → 弃
+    { id: '', name: '无id' },                  // 空 id → 补 uid
+    'junk', null,
+    { name: '' },                              // 无 id 无名 → 补 uid + 默认名
+  ]);
+  assert.equal(ts.length, 3);
+  assert.equal(ts[0].name, '配乐改名', 'name trim');
+  assert.equal(ts[0].gain, 2, 'gain 钳 0..2');
+  assert.equal(ts[0].muted, true);
+  assert.notEqual(ts[1].id, 'trk1', '重复项已弃，后续照常入库');
+  assert.equal(ts[1].name, '无id');
+  assert.ok(ts[2].id);
+  assert.equal(ts[2].name, '轨 3', '缺省名按入库序号');
+  assert.equal(sanitizeTracks(null).length, 0);
+  // validate 入口：空 tracks → 补建默认轨
+  const raw = createProject({ pairs: 1 });
+  raw.timeline.tracks = [];
+  const r = validateProject(raw);
+  assert.deepEqual(r.project.timeline.tracks, [defaultTrack()]);
+});
+
+test('多轨操作 API：addTrack/renameTrack/setTrackGain/setTrackMuted/moveClipToTrack', () => {
+  const p = createProject({ pairs: 1 });
+  p.media = { assets: [{ id: 'a1', name: 'a.wav', durationSec: 60, size: 1 }], activeAssetId: 'a1' };
+  p.timeline.audioClips = [{ id: 'c1', assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 10 }];
+  const t2 = addTrack(p, { name: '音效' });
+  assert.equal(p.timeline.tracks.length, 2);
+  assert.equal(t2.gain, 1);
+  assert.equal(addTrack(p).name, '轨 3', '缺省名避开占用');
+  assert.equal(renameTrack(p, t2.id, ''), null, '空名不改');
+  assert.equal(renameTrack(p, t2.id, '环境声').name, '环境声');
+  assert.equal(setTrackGain(p, t2.id, 5).gain, 2, '钳上限 2');
+  assert.equal(setTrackGain(p, t2.id, -1).gain, 0, '钳下限 0');
+  assert.equal(setTrackGain(p, 'ghost', 1), null, '未知轨返回 null');
+  assert.equal(setTrackMuted(p, t2.id, true).muted, true);
+  assert.equal(trackById(p, t2.id).name, '环境声');
+  // moveClipToTrack：成功 / clip 不存在 / 轨不存在
+  assert.equal(moveClipToTrack(p, 'c1', t2.id).ok, true);
+  assert.equal(p.timeline.audioClips[0].trackId, t2.id);
+  assert.equal(moveClipToTrack(p, 'ghost', t2.id).ok, false);
+  assert.equal(moveClipToTrack(p, 'c1', 'ghost').ok, false);
+  // trackOfClip：悬挂/缺失回落 trk1 → 首轨
+  p.timeline.audioClips[0].trackId = 'trk9';
+  assert.equal(trackOfClip(p, p.timeline.audioClips[0]).id, 'trk1');
+  delete p.timeline.audioClips[0].trackId;
+  assert.equal(trackOfClip(p, p.timeline.audioClips[0]).id, 'trk1');
+  assert.equal(trackOfClip(p, null).id, 'trk1', '无 clip 也回落默认轨（引擎路由兜底）');
+});
+
+test('removeTrack：仅允许空轨（非空拒绝、缺 trackId 的 clip 视为归属 trk1）、不存在报错', () => {
+  const p = createProject({ pairs: 1 });
+  p.media = { assets: [{ id: 'a1', name: 'a.wav', durationSec: 60, size: 1 }], activeAssetId: 'a1' };
+  p.timeline.audioClips = [
+    { id: 'c1', assetId: 'a1', trackId: 'trk1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 10 },
+    { id: 'c2', assetId: 'a1', timelineStartSec: 20, srcStartSec: 0, lengthSec: 5 }, // 无 trackId → 视为 trk1
+  ];
+  const t2 = addTrack(p, { name: '音效' });
+  moveClipToTrack(p, 'c2', t2.id);
+  let r = removeTrack(p, t2.id);
+  assert.equal(r.ok, false, '非空轨拒绝');
+  assert.match(r.error, /仍有音频块/);
+  assert.equal(p.timeline.tracks.length, 2, '拒绝时不删');
+  moveClipToTrack(p, 'c2', 'trk1');
+  r = removeTrack(p, t2.id);
+  assert.equal(r.ok, true, '空轨可删');
+  assert.equal(p.timeline.tracks.length, 1);
+  r = removeTrack(p, 'trk1');
+  assert.equal(r.ok, false, 'trk1 上有 clip → 拒绝（含缺 trackId 视同归属）');
+  r = removeTrack(p, 'ghost');
+  assert.equal(r.ok, false, '轨不存在');
+});
+
+// ---------- 11) autoPair 双缘升级（R47：链式三 clip 场景） ----------
+test('R47 链式 autoPair：A-B、B-C 共享 B 建对后拖走 C，A-B 对不受扰（双缘精确匹配）', () => {
+  const clips = [
+    mkClip({ id: 'A', timelineStartSec: 0, lengthSec: 10 }),
+    mkClip({ id: 'B', timelineStartSec: 8, lengthSec: 10 }),
+    mkClip({ id: 'C', timelineStartSec: 16, lengthSec: 10 }),
+  ];
+  applyAutoCrossfades(clips, ['A', 'B', 'C']);
+  const [A, B, C] = clips;
+  assert.equal(A.fadeOutSec, 2);
+  assert.equal(B.fadeInSec, 2, 'A-B 对（B 淡入缘）');
+  assert.equal(B.fadeOutSec, 2, 'B-C 对（B 淡出缘）——两条缘并存');
+  assert.equal(C.fadeInSec, 2);
+  assert.equal(A.autoPairOut, 'B');
+  assert.equal(B.autoPairIn, 'A');
+  assert.equal(B.autoPairOut, 'C', '中段 clip 双缘各自记录（旧单字段此处被覆写为 C）');
+  assert.equal(C.autoPairIn, 'B');
+  // 拖走 C：只清 B-C 对，A-B 对逐字节不受扰
+  C.timelineStartSec = 30;
+  const cleared = pruneAutoCrossfades(clips, 'C');
+  assert.ok(cleared.has('C') && cleared.has('B'));
+  assert.equal(C.fadeInSec, 0);
+  assert.equal(B.fadeOutSec, 0, 'B 侧淡出缘随 C 拖开还原');
+  assert.equal(B.fadeOutAuto, false);
+  assert.equal(B.fadeInSec, 2, 'A-B 对不受扰（旧实现此处被误清）');
+  assert.equal(B.fadeInAuto, true);
+  assert.equal(B.autoPairIn, 'A');
+  assert.equal(A.fadeOutSec, 2, 'A 侧淡出保留');
+  assert.equal(A.fadeOutAuto, true);
+  // 再拖走 A：A-B 对整体还原
+  A.timelineStartSec = 40;
+  const cleared2 = pruneAutoCrossfades(clips, 'A');
+  assert.ok(cleared2.has('A') && cleared2.has('B'));
+  assert.equal(A.fadeOutSec, 0);
+  assert.equal(B.fadeInSec, 0);
+  assert.equal(B.fadeInAuto, false);
+});
+
+test('R47 autoPair 迁移：旧单字段 → 双缘等价（按缘归属精确迁移；双缘并存按末写=out 启发式）；清洗幂等', () => {
+  const assets = [{ id: 'a1', durationSec: 60 }];
+  const clips = sanitizeAudioClips([
+    { id: 'i1', assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 10, fadeInSec: 2, fadeInAuto: true, autoPair: 'prev' },
+    { id: 'o1', assetId: 'a1', timelineStartSec: 20, srcStartSec: 0, lengthSec: 10, fadeOutSec: 2, fadeOutAuto: true, autoPair: 'next' },
+    { id: 'mid', assetId: 'a1', timelineStartSec: 40, srcStartSec: 0, lengthSec: 10, fadeInSec: 1, fadeInAuto: true,
+      fadeOutSec: 1, fadeOutAuto: true, autoPair: 'later' },
+    { id: 'plain', assetId: 'a1', timelineStartSec: 60, srcStartSec: 0, lengthSec: 10 },
+  ], assets);
+  assert.equal(clips[0].autoPairIn, 'prev', '单 in 缘 → autoPairIn');
+  assert.equal(clips[0].autoPairOut, undefined);
+  assert.equal(clips[1].autoPairOut, 'next', '单 out 缘 → autoPairOut');
+  assert.equal(clips[1].autoPairIn, undefined);
+  assert.equal(clips[2].autoPairOut, 'later', '双缘并存：末次写入=淡出缘对端（启发式）');
+  assert.equal(clips[2].autoPairIn, undefined, 'in 侧陈旧记录不可考，留待 prune 幽灵清理收口');
+  assert.equal(clips[0].autoPair, 'prev', '旧字段保留为兼容镜像（旧版应用读新文件用）');
+  assert.equal(clips[3].autoPair, undefined, '无对记录不虚构');
+  const again = sanitizeAudioClips(JSON.parse(JSON.stringify(clips)), assets);
+  assert.deepEqual(again, clips, '双缘形态清洗幂等');
+  // 幽灵清理：双缘指向已删除的对端 → 该缘还原
+  const duo = [
+    mkClip({ id: 'x', timelineStartSec: 0, lengthSec: 10 }),
+    mkClip({ id: 'y', timelineStartSec: 8, lengthSec: 10 }),
+  ];
+  applyAutoCrossfades(duo, ['x', 'y']);
+  duo.splice(0, 1); // 删 x（未经 prune）
+  const cleared = pruneAutoCrossfades(duo, 'y');
+  assert.ok(cleared.has('y'), 'y 的 in 缘指向幽灵 x → 还原');
+  assert.equal(duo[0].fadeInSec, 0);
+  assert.equal(duo[0].fadeInAuto, false);
+});
+
+// ---------- 12) ClipTransport 多轨引擎（每轨 Gain 子链） ----------
+test('ClipTransport 多轨：双轨同时调度（调度数学逐 clip 独立）、Gain 链挂每轨子链、轨静音/gain 实时', () => {
+  const clips = [
+    mkClip({ id: 't1a', timelineStartSec: 0, srcStartSec: 1, lengthSec: 4, trackId: 'trk1' }),
+    mkClip({ id: 't2a', timelineStartSec: 0, srcStartSec: 2, lengthSec: 4, trackId: 'trk2' }),
+  ];
+  const tracks = [
+    { id: 'trk1', name: '配乐', gain: 1, muted: false },
+    { id: 'trk2', name: '音效', gain: 0.5, muted: true },
+  ];
+  const { ctx, t } = setupTransport(clips);
+  try {
+    assert.equal(t.play(clips, { from: 0, rate: 1, tracks, resolveBuffer: () => ({ duration: 30 }) }), true);
+    assert.equal(ctx.sources.length, 2, '跨轨同时调度：双轨各一 clip 同一 tick 全部起调');
+    // 调度数学逐 clip 独立（与单轨同式：off=srcStart、dur=时间线时长×rate）
+    assert.equal(ctx.sources[0].started.off, 1);
+    assert.ok(Math.abs(ctx.sources[0].started.dur - 4) < 0.02);
+    assert.equal(ctx.sources[1].started.off, 2);
+    assert.ok(Math.abs(ctx.sources[1].started.dur - 4) < 0.02);
+    // Gain 链拓扑：master → [每轨持久子链] ← clip gain；创建序 master、clip1、trk1、clip2、trk2
+    const [master, gClip1, gTrk1, gClip2, gTrk2] = ctx.gains;
+    assert.equal(gTrk1._to, master, 'trk1 子链挂 master');
+    assert.equal(gClip1._to, gTrk1, 'clip1 → trk1 子链');
+    assert.equal(gClip2._to, gTrk2, 'clip2 → trk2 子链（按 clip.trackId 分组路由）');
+    assert.equal(gTrk2.gain.value, 0, '静音轨=子链增益 0（照常调度、实时可逆）');
+    assert.equal(gTrk1.gain.value, 1);
+    // 实时语义：setTargetAtTime 平滑生效（无需 reschedule）
+    assert.equal(t.setTrackGainById('trk1', 0.8), true);
+    assert.ok(gTrk1.gain.ops.some(o => o[0] === 'target' && o[1] === 0.8), '轨 gain 实时');
+    assert.equal(t.setTrackMutedById('trk2', false), true);
+    assert.ok(gTrk2.gain.ops.some(o => o[0] === 'target' && o[1] === 0.5), '取消静音实时还原到轨增益');
+    assert.equal(t.setTrackGainById('ghost', 1), false, '未知轨拒绝');
+    assert.equal(t._tracks[0].gain, 0.8, '轨态写回（与项目模型同源）');
+    assert.equal(t._tracks[1].muted, false);
+    // legacy 总控不受多轨影响（master 恒直通）
+    assert.equal(master.gain.value, 1);
+  } finally { t.stopInternal(); }
+});
+
+test('ClipTransport 多轨：trackId 悬挂回落首轨；syncTracks(null) 回 legacy（clipGain 直连 master）', () => {
+  const clips = [{ ...mkClip({ id: 'd1', timelineStartSec: 0, lengthSec: 4 }), trackId: 'trk9' }];
+  const tracks = [{ id: 'trkA', name: '唯一', gain: 0.6, muted: false }];
+  const { ctx, t } = setupTransport(clips);
+  try {
+    t.play(clips, { from: 0, tracks, resolveBuffer: () => ({ duration: 30 }) });
+    assert.equal(ctx.sources.length, 1);
+    const [master, gClip, gTrkA] = ctx.gains;
+    assert.equal(gClip._to, gTrkA, '悬挂 trackId → 首轨子链');
+    assert.equal(gTrkA.gain.value, 0.6, '子链初值=轨增益');
+    assert.equal(gTrkA._to, master);
+    // 拆多轨 → 回 legacy 单链：后续调度直连 master（master 持久复用，不重建）
+    t.syncTracks(null);
+    ctx.sources.length = 0; ctx.gains.length = 0;
+    t.reschedule(clips);
+    assert.equal(ctx.sources.length, 1);
+    assert.equal(ctx.gains.length, 1, '仅新建 clip gain（master 复用）');
+    assert.equal(ctx.gains[0]._to, master, 'clipGain 直连 master（旧链路逐字节兼容）');
+  } finally { t.stopInternal(); }
+});
+
+// ---------- 13) 导出导入往返含 tracks / v1 剥离 ----------
+test('导出导入往返含 tracks（轨态/clip 归属无损）；stripTracksForV1 剥离多轨数据（原项目不动）', () => {
+  const p = createProject({ pairs: 1 });
+  const t2 = addTrack(p, { name: '音效' });
+  setTrackGain(p, t2.id, 0.75);
+  setTrackMuted(p, 'trk1', true);
+  p.media = { assets: [{ id: 'a1', name: 'a.wav', durationSec: 60, size: 1 }], activeAssetId: 'a1' };
+  p.timeline.audioClips = [
+    { id: 'c1', assetId: 'a1', trackId: 'trk1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 10 },
+    { id: 'c2', assetId: 'a1', trackId: t2.id, timelineStartSec: 5, srcStartSec: 0, lengthSec: 5 },
+  ];
+  const r1 = validateProject(JSON.parse(JSON.stringify(p)));
+  assert.equal(r1.ok, true);
+  assert.equal(r1.project.timeline.tracks.length, 2);
+  assert.equal(r1.project.timeline.tracks[0].muted, true);
+  assert.equal(r1.project.timeline.tracks[1].gain, 0.75);
+  const r2 = validateProject(JSON.parse(JSON.stringify(r1.project)));
+  assert.deepEqual(r2.project.timeline.tracks, r1.project.timeline.tracks, '轨往返无损');
+  assert.deepEqual(r2.project.timeline.audioClips.map(c => c.trackId), r1.project.timeline.audioClips.map(c => c.trackId), 'clip 归属往返无损');
+  // v1（不含音乐）轻量文件剥离：tracks/trackId 不出户，autoPair 双缘保留，原项目不被修改
+  const v1 = stripTracksForV1(r1.project);
+  assert.equal(v1.timeline.tracks, undefined);
+  assert.equal(v1.timeline.audioClips.every(c => c.trackId === undefined), true);
+  assert.equal(r1.project.timeline.tracks.length, 2, 'strip 返回深拷贝，原项目不动');
+  assert.equal(r1.project.timeline.audioClips[0].trackId, 'trk1');
 });

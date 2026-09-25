@@ -76,13 +76,16 @@ export async function runR(opts = {}) {
     return {
       el, rect: r,
       title: el.querySelector('.um-title')?.textContent || '',
-      btns: [...el.querySelectorAll('.um-btn')].map(b => b.textContent.trim()),
+      // 汇合轮改写（图标化决策⑤）：关闭钮 ✕ 文本 → SVG 图标（aria-label=关闭）——
+      // btns 收集加 aria-label 兜底，图标钮呈「关闭」而非空串
+      btns: [...el.querySelectorAll('.um-btn')].map(b => b.textContent.trim() || b.getAttribute('aria-label') || ''),
       text: el.textContent.slice(0, 60),
     };
   };
   const rectDist = (r, pt) => Math.hypot(Math.max(r.left - pt.x, 0, pt.x - r.right), Math.max(r.top - pt.y, 0, pt.y - r.bottom));
   async function clickMenuBtn(m, text) {
-    const btn = m && [...m.el.querySelectorAll('.um-btn')].find(b => b.textContent.includes(text));
+    // 图标化后「拆开」等按钮=razor 图标+文字（textContent 含目标词）；aria 兜底覆盖纯图标钮
+    const btn = m && [...m.el.querySelectorAll('.um-btn')].find(b => b.textContent.includes(text) || (b.getAttribute('aria-label') || '').includes(text));
     if (!btn) return false;
     const r = btn.getBoundingClientRect();
     await inp.click(r.left + r.width / 2, r.top + r.height / 2, { hw: HW });
@@ -185,7 +188,7 @@ export async function runR(opts = {}) {
         let border = null, r1 = null;
         if (m1) { r1 = await cmpShot('r01-menu', inflate(m1.rect)); border = await menuBorder(r1.b64, m1); }
         step('[DOM] 右键徽标弹单元菜单（v3 title=合并单元）', !!m1 && m1.title === '合并单元', m1 ? `title="${m1.title}" btns=[${m1.btns}]` : '无 .unit-menu', 'DOM');
-        step('[DOM] 按钮齐备（✂ 拆开/胶囊/单编号/删除/✕）', !!m1 && ['✂ 拆开', '胶囊', '单编号', '删除'].every(x => m1.btns.includes(x)) && m1.btns.includes('✕'),
+        step('[DOM] 按钮齐备（拆开/胶囊/单编号/删除/关闭——图标化后 ✂→razor 图标、✕→aria 关闭）', !!m1 && ['拆开', '胶囊', '单编号', '删除'].every(x => m1.btns.includes(x)) && m1.btns.includes('关闭'),
           m1 ? `btns=[${m1.btns}]` : '—', 'DOM');
         if (m1) {
           // 定位钳制断言：应用公式（main.js showUnitMenu）= left=max(4,min(screen.x-40, wrapW-w-4))，
@@ -257,7 +260,7 @@ export async function runR(opts = {}) {
         const backOK = state().project.dancers.length === n0 && state().project.dancers.some(d => d.id === E) && E in fmt().positions;
         store.redo(); await raf2();
         step('[STATE] undo 还原舞者、redo 重放删除', backOK && store.undoLabel() === '删除舞者' && state().project.dancers.length === n0 - 1, `undo 后 dancers=${state().project.dancers.length}`);
-        step('[DOM] 菜单组成=仅「删除」+✕（无拆开/样式入口）', !!btnsSnapshot && JSON.stringify(btnsSnapshot) === JSON.stringify(['删除', '✕']), `btns=[${btnsSnapshot ? btnsSnapshot.join(',') : '—'}]`, 'DOM');
+        step('[DOM] 菜单组成=仅「删除」+关闭（图标化后 ✕→aria 关闭；无拆开/样式入口）', !!btnsSnapshot && JSON.stringify(btnsSnapshot) === JSON.stringify(['删除', '关闭']), `btns=[${btnsSnapshot ? btnsSnapshot.join(',') : '—'}]`, 'DOM');
       },
     },
 
@@ -338,7 +341,7 @@ export async function runR(opts = {}) {
           `E=(${pE.x.toFixed(6)},${pE.y.toFixed(6)}) ${t.hist()}`);
         const r2 = await cmpShot('r04-dragged');
         cmpStep(step, r2);
-        step('[DOM] 菜单组成=仅「删除」+✕（无拆开/样式入口）', !!btnsSnapshot && JSON.stringify(btnsSnapshot) === JSON.stringify(['删除', '✕']), `btns=[${btnsSnapshot ? btnsSnapshot.join(',') : '—'}]`, 'DOM');
+        step('[DOM] 菜单组成=仅「删除」+关闭（图标化后 ✕→aria 关闭；无拆开/样式入口）', !!btnsSnapshot && JSON.stringify(btnsSnapshot) === JSON.stringify(['删除', '关闭']), `btns=[${btnsSnapshot ? btnsSnapshot.join(',') : '—'}]`, 'DOM');
       },
     },
 

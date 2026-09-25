@@ -354,3 +354,118 @@
 
 - 新驱动：P6 7/7、P7 14/14、P8 5/5（`out/round39-batchC/p{6,7,8}-report.md`；26/26 PASS）。
 - 既有套件复跑：l0 / l1 / r / gr / realinput / l2 / uf1 / uf2 / p1 / p2 / p3 / p4 / p5 / 音乐(r23-music) / node --test（见 `out/round39-batchC/regression/summary.txt`）。
+
+---
+
+## 十二、多轨模型（R47 · 2026-09-24，真·多轨数据模型与引擎层落地，Lane B）
+
+用户拍板：**真·多轨，两步走——本期 2 轨起步、上限 4 轨；solo 暂不做**。本节记录已落地的数据形态、迁移规则、引擎语义与拒绝策略（实现全部 additive：js/model.js + js/audio-clips.js，main.js/timeline.js/audio.js/index.html/css 零改动）。UI 渲染（时间轴多 lane）留给汇合轮（Lane A 音乐模式 UI + 本引擎对接）。
+
+### 12.1 数据形态
+
+```
+project.timeline.tracks = [{ id, name, gain, muted }]
+  id      轨标识（默认轨恒为 'trk1'；新增轨 uid('trk')）
+  name    非空 ≤24 字（默认轨「配乐」；新增缺省「轨 N」避开占用名）
+  gain    0..2 线性（与 ClipTransport 总控同域；UI 滑杆 0..1.5）
+  muted   整轨静音布尔
+
+project.timeline.audioClips[i].trackId   clip 归属轨；缺失/悬挂在清洗时回落 trk1
+```
+
+- 常量：`TRACK_MAX=4`（**上限由 UI 层把守，模型层不设限**）、`TRACK_NAME_MAX=24`、`DEFAULT_TRACK_ID='trk1'`。
+- `createProject` 恒建 `tracks:[trk1「配乐」]`；`validateProject` 对空/缺失 tracks 缺省补建——**单轨旧项目零体验变化**。
+- clip 增益数学不含轨增益：`clipGainAt`（淡化/clip gain/静音）与轨增益分属两级 Gain 节点，`trackOfClip` 提供悬挂回落（trk1 → 首轨）。
+
+### 12.2 迁移与清洗（validateProject，导入/载入/保存收口）
+
+| 输入形态 | 行为 |
+|---|---|
+| timeline 无 tracks / 空数组 | 补建 `[{id:'trk1', name:'配乐', gain:1, muted:false}]` |
+| track 重复 id | 保首个、弃后续（同 tags/groups 口径） |
+| track 非法项（非对象/无 id 补 uid 后照常入库；gain 越界钳 0..2） | 清洗 |
+| clip.trackId 缺失 / 悬挂（指向不存在轨、轨上限外被删轨等） | 回落 `trk1`（无 trk1 时回落首轨） |
+| 旧单字段 `autoPair` | 升级双缘：`autoPairOut`（淡出缘对端）/`autoPairIn`（淡入缘对端）；单侧 auto 缘按缘精确归属；双侧 auto 缘并存（链式中段被旧单字段覆写过）按「末次写入=淡出缘」启发式归 out，in 侧陈旧记录留待 prune 幽灵清理收口；旧字段保留为兼容镜像（旧版应用读新文件不丢信息） |
+
+清洗幂等：二次 validate 逐字节一致（单测覆盖）。
+
+### 12.3 引擎语义（ClipTransport，js/audio-clips.js）
+
+- **Gain 链**：`src → clipGain（淡化/clip 增益自动化）→ trackGain(id)（轨 gain×muted，每轨一条持久子链）→ master → destination`。轨子链挂既有 master 入口，audio.js 不需要任何改动（`playClips` 照旧）。
+- **激活开关**：`syncTracks(tracks)` 或 `play(clips, { tracks })` 激活多轨；`syncTracks(null)` 拆子链回 legacy 单链。**未激活时链路与旧版逐字节一致**（`clipGain` 直连 master）——既止单轨调用面与全部既有单测不受扰。
+- **跨轨同时调度**：调度器按时间域工作，与轨无关；双轨各一 clip 落在同一前瞻窗即同 tick 全部起调（离线渲染实测双源）。
+- **轨静音=该轨全部 clip 静音（实时生效）**：表达为子链增益 0——该轨 clip 照常调度（与 clip 级 muted 的「不调度」语义不同），取消静音立即出声，无需 reschedule；轨 gain 变更 `setTargetAtTime`（τ=10ms）平滑实时。
+- **旧总控不动**：`setTrackGain/setTrackMuted`（C15 单轨总控）仍作用于 master，多轨下语义=全局微调；汇合轮 UI 应改用 `setTrackGainById/setTrackMutedById`。
+- 段间静音判定（`effectiveRegions`）与 ended 判定暂按 clip 级 muted 口径，不感知轨静音（轨静音的「时间轴事件」语义留汇合轮裁定，见 12.6）。
+
+### 12.4 操作 API（model.js 纯函数，node 可测，供汇合轮 UI 调用）
+
+| API | 语义 | 拒绝条件 |
+|---|---|---|
+| `addTrack(project, {name})` | 新增轨（gain 1、不静音、名「轨 N」避让） | 无（TRACK_MAX 由 UI 把守） |
+| `removeTrack(project, trackId)` | 删除空轨 | **非空拒绝**（轨上有 clip，含缺 trackId 视同归属 trk1）；轨不存在；删除 clip 策略=拒绝（简单安全） |
+| `renameTrack(project, trackId, name)` | 重命名 ≤24 字 | 轨不存在/空名 → null |
+| `setTrackGain(project, trackId, gain)` | 0..2 钳制写入 | 轨不存在 → null |
+| `setTrackMuted(project, trackId, muted)` | 布尔写入 | 轨不存在 → null |
+| `moveClipToTrack(project, clipId, trackId)` | clip 换轨 | clip/轨不存在 → `{ok:false,error}` |
+| `stripTracksForV1(project)` | **v1 剥离助手**：深拷贝去掉 timeline.tracks 与 clip.trackId（原项目不动） | — |
+
+引擎侧对应：`syncTracks(tracks)` / `setTrackGainById(trackId, g)` / `setTrackMutedById(trackId, m)`（轨不存在返回 false）。
+
+### 12.5 导出 / 导入
+
+- **v2（含乐）随行**：`exportProjectJSON` 走 `cloneBasic` 全量克隆，tracks/trackId 自动随行，无需改动。
+- **v1（不含乐）剥离**：导出侧 `cloneBasic` 同样全量克隆，因此剥离需在导出入口接线——已提供纯函数 `stripTracksForV1(project)`，汇合轮在 `doExportJSON(false, …)` 路径（main.js）或 `exportProjectJSON`（export.js）内一行接入即可（两个文件本轮均属并行禁区，未动）。现状：v1 文件携带 tracks 数据，旧版应用导入时未知字段被 spread 保留但不参与任何逻辑，**行为无害**，仅不够整洁。
+- 往返：导出→导入 validate 后轨态/clip 归属逐字段无损（单测覆盖）。
+
+### 12.6 上限与边界策略备忘（汇合轮裁定项）
+
+1. 4 轨上限在 UI 层把守（addTrack 按钮 disabled / toast）；模型层超 4 轨数据不清洗不拒载（防御性宽容）。
+2. `removeTrack` 只允许空轨、删 clip 拒绝——UI 侧需先引导移动/删除 clip 再删轨。
+3. 跨轨重叠是否套用自动交叉淡化（`applyAutoCrossfades` 现按时间域对全部 clip 生效，不分轨）：建议汇合轮裁定「跨轨不自动淡化」（混音语义应保留叠加），如裁定成立需给 computeOverlaps 加轨过滤（一处小改）。
+4. 轨静音是否参与 `effectiveRegions`（段间静音判定/ended）与时间轴呈示：建议「不参与」（静音≠无事件，走带语义稳定），与 12.3 现状一致。
+5. legacy 单轨总控（音轨表头音量/静音滑杆，localStorage `wuzhen:audioTrackMix`）与 per-track API 并存期语义：master 微调 vs trk1 轨控，汇合轮切 UI 时二选一收口。
+
+### 12.7 验证记录
+
+- 单测：`tests/audio-clips.test.js` 24→**33**（+9：迁移/轨清洗/操作 API/removeTrack 拒绝/链式 autoPair 双缘/autoPair 迁移/双轨调度与 Gain 链拓扑/悬挂回落与 legacy 回退/导出往返与 v1 剥离），33/33 绿。
+- 全量：`node --test tests/*.test.js` 基线 HEAD 256/256 → 本轮 265 测试 264 绿 + 1 预期失败（skill-choreo「vendor 防陈旧」：model.js 变更后 vendor 待编排层同步，`node scripts/build-core.mjs && cp dist/core/wuzhen-core.mjs ~/.agents/skills/dancesport-choreo/vendor/`，skill 目录本轮禁区未动）。隔离对照（clean worktree @a43dd1b + 仅本轮三文件）同为 264+1，证明无其他扰动。
+- `node scripts/build-core.mjs`：dist/core/wuzhen-core.mjs 已再生（48.6 KB，97 导出，自检通过）。
+- 离线渲染对拍（`wuzhen-e2e-lab/probe-round47-multitrack.mjs`，真实 OfflineAudioContext，13/13 PASS）：双轨同时调度双源；trk2 gain 0.5 实链 -6.01dB（理论 -6.02）；重叠窗功率叠加 +0.96dB（理论 +0.97）；轨态静音重叠窗回落 -0.02dB≈0、S 窗 -Inf；实时静音打在 t=2.0 → 已调度 S 源尾段 -Inf 且重叠窗不受扰（未 reschedule）。证据 `out/round47-multitrack/multitrack-numerics.json`。
+
+---
+
+## 十二、round46 附表（2026-09-24，Lane A·双 UI 模式 + 多选弹框 + 恒定 BPM 显性化，build `build-32-dualmode`，基准 HEAD `a43dd1b`）
+
+本节由 round46 Lane A（核心交互线）追加，覆盖三件事：①「恒定 BPM 假设」从隐性缺陷转为**显性契约 + 降级路径**（决策⑥）；②「编辑器双 UI 模式」（编舞⇄音乐，决策②/③）；③多选弹框与单人同构（决策④）。实证依据：`docs/optimization-plan-r2.md` §1.3/§2.1/§2.2（60s 双速曲 120→160BPM 单值 BPM 模型下拍线偏移线性累积至 9.875s/19.75 拍、后半段 80 乐拍仅 1 拍落在拍线、最佳拟合 BPM 仍残 4.378s；clip 引擎全秒制天然免疫）。
+
+### 12.1 已知限制（建档为显性契约，不再按缺陷处理）
+
+| # | 限制 | 口径 | 降级路径（round46 已落地） |
+|---|---|---|---|
+| L-BPM-1 | 拍↔秒换算仅在**全曲恒定 BPM** 时成立；变速曲（现场版/渐快渐慢/多段 BPM）下拍线、tag、块边界、节拍器、数拍全部随时间线性漂移，**无法靠调单值 BPM 救回**（两段各自仍偏） | 队形层保留拍制（八拍是编舞领域母语，方案 B 全面秒制已否决）；clip/剪辑层本就全秒制、无节拍绑定 | ① **载入体检**：载入音频后实际时长与拍模型（首拍+总拍数×拍长）偏差 >10% → 一次性 toast「音频节奏与拍线可能不一致（变速曲），可用秒刻度对齐」（已读记忆落 sessionStorage `wuzhen:varispeedHint`：同一标签页会话（含刷新）不重复提示，新会话最多再提示一次——**未用 localStorage**，因既有仪器 run-ir06.mjs A9/B9 与 userflows-p1 TC-P1-15 将 localStorage 键集合钉在白名单上（新键即红），硬回归门禁优先，属任务书「localStorage 记忆已读」的降一档执行，软提示不阻断，存在强节奏但 IOI 方差大曲风的误报可能——文案用「可能」）；② **尺规秒刻度**：「拍刻度/秒刻度」按钮切换（`wuzhen:rulerScale` 记忆，默认拍；秒刻度=NICE 秒族主刻度+1/5 细分）；③ **Alt+←/→ 播放头秒步进 ±0.5s**（不依赖拍线按秒对位）；④ 应用外先把变速曲恒速化再载入。节奏图（分段 BPM 表，方案 C）为 P1 可选演进，等需求拍板单独立项 |
+| L-BPM-2 | 「按队形段自动切」的切点来自拍模型（beatToSec），非恒速曲上切点随拍线漂移 | 剪切引擎忠实于输入秒值（垃圾进垃圾出），引擎本身无缺陷 | 同 L-BPM-1（体检提示 + 秒刻度人工核位） |
+| L-BPM-3 | 节拍器/数拍按单值 spb 定频，变速曲下与音乐脱拍且相位持续漂移 | 数拍保留（走表不依赖音乐内容，是「给演员听的入场」） | 体检判定非恒速时以 toast 提示后按秒刻度人工对位；节拍器仅供恒速曲 |
+
+### 12.2 双 UI 模式（编舞⇄音乐）与多选弹框的回归口径
+
+- **编舞模式（默认）= 既有行为零变化**（几何/交互/视觉）：`tlTotalHeight('stage',·)` 与旧公式逐值一致（桌面简单 150 / 移动 120 / 展开桌面 160）；既有全部 E2E 套件跑在该模式上保持绿。
+- **音乐模式**：隐藏队形块区（canvas 不绘制、命中/拖边/磁吸候选关闭）与块时长栏（`#block-ctl[hidden]`）；保留尺规（拍/秒刻度）/tag 道/音频轨（简单态+可展开）/播放头/播放条；舞台画面保留但收窄（桌面 `#stage-col` 320px、移动 42%，余量给属性面板）。切换入口=顶栏「编舞 | 音乐」分段开关或快捷键 M；**播放/数拍中禁止切换**（toast「暂停后可切换」）。状态保持：选择/tag/播放位置/循环/时间轴缩放/clip 选择跨模式与跨往返零丢失（`localStorage 'wuzhen:uiMode'` 记忆；旧 `wuzhen:audioTrackExpanded=1` 迁移为音乐模式）。
+- **多选弹框（SelectionMenu，N≥2）**：朝向▸（观众/圆心/互相对齐——互对仅恰 2 人）、存为编组、合并为单元（恰 2 人未合并）、取消合并（涉合并，既有语义）、均布 纵/横（N≥3，模型语义 <3 人无效果故不呈示）、移出队形（=Del 键语义：清位不删名册）、删除所选（N 人）。**单人上下文菜单保持既有构成 `['删除','✕']`**——page-r R-02/R-04 仪器精确断言（硬回归门禁优先于「恒有朝向」的理想构成；同构骨架与条件显隐机制已就位，后续如改仪器口径可一键放开）。
+
+### 12.8 汇合轮（2026-09-26，Lane A/B/C 集成收尾，build build-32-dualmode 工作树）
+
+多轨 UI 已接入音乐模式（对接 12.3-12.6 引擎/API），§12.6 五条裁定项全部落定：
+
+1. **TRACK_MAX=4 UI 把守**：音乐模式轨头底部「＋加轨」条——到限呈禁用态（`aria-disabled`+置灰）仍可点，点击 toast「最多 4 条音轨」；模型层不设限（维持）。
+2. **removeTrack 仅空轨**：非空轨删除钮 disabled（title 引导「先移动或删除音频块」），无删最后一轨入口（剩 1 轨时 disabled）；模型拒绝语义保持为最后防线。
+3. **跨轨重叠维持自动交叉淡化**：`computeOverlaps` 不加轨过滤（实现最简、听感合理）；菱形手柄画在 ov.a 所在 lane。
+4. **轨静音不参与 ended/effectiveRegions**：维持引擎现状（静音≠无事件）。
+5. **legacy 单轨总控收口**：master 滑杆（`setTrackGain/setTrackMuted`）保留为编舞模式展开态表头「整体音量」；音乐模式每轨轨头走 `setTrackGainById/setTrackMutedById`——二者并存不冲突。
+
+**实现要点**：
+- 布局：音乐模式音频区=每轨一条 lane（简单 26px/展开 72px，随既有展开开关），轨分隔线+轨头 DOM（`#tl-tracks-head`，120px 列：轨名双击改名/音量滑杆 0–1.5/静音钮/删轨钮+底部加轨条 26px）；`tlTotalHeight('music',…)`=音频轨底+12+26（编舞 150/120/160 不动，lane-a G2 同步改值）。编舞模式恒单 lane 呈示（多轨数据不改舞台几何）。
+- 引擎接线：`render()` 每帧比「tracks 数组引用+内容签名」调 `transport.syncTracks`（载入/undo/redo/结构变化兜底，幂等、setTargetAtTime 平滑）；滑杆/静音直走 `setTrackGainById/setTrackMutedById`（实时，不 reschedule）；加/删轨后结构 reschedule（播放中）；clip 跨轨拖拽=模型 `moveClipToTrack`+提交后 reschedule；拖入落点按 lane 归属轨（`createClipFromDrop(…, trackId)`）。
+- 轨操作历史：加轨/删轨/改名/静音各成一条（「加音轨/删音轨/重命名音轨/静音音轨」）；轨音量滑杆不进历史（同 clip 增益把手口径）。
+- v1 导出剥离：`doExportJSON(false,…)` 路径一行接 `stripTracksForV1`（12.5 预留接线点）；探针实测不含乐文件无 `timeline.tracks`/`clip.trackId`、含乐文件随行。
+- 探针：`lab/probe-merge-multitrack.mjs` 27/27 PASS（图标化呈示断言 6 + 多轨动线 18 + v1 剥离 + 说明书 9 图解码 + 零 pageerror；证据 `out/merge-multitrack/`）。

@@ -50,6 +50,30 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 .dd-menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 10px;border-radius:6px}
 .dd-menu button:hover{background:var(--bg3)}
 
+/* ---- 双 UI 模式（round46 Lane A）----
+   编舞模式（默认）= 既有布局零变化；音乐模式 = #editor-view[data-uimode="music"]：
+   舞台列收窄为侧看版（画面保留、播放照常联动），横向余量让给属性面板；
+   队形块区（canvas 内）与块时长栏（#block-ctl[hidden]）由 JS 隐藏。
+   断言口径：切换往返两侧状态零丢失（选择/tag/播放位置/循环/时间轴缩放）。 */
+.seg{display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:var(--rad);overflow:hidden;flex:none}
+.seg .seg-btn{background:transparent;border:0;border-radius:0;padding:5px 12px;color:var(--dim);font-size:13px;line-height:1.4}
+.seg .seg-btn + .seg-btn{border-left:1px solid var(--line)}
+.seg .seg-btn:hover:not(.active){color:var(--fg);background:var(--bg3)}
+.seg .seg-btn.active{background:var(--bg3);color:var(--acc);font-weight:600}
+.seg-short{display:none}
+#editor-view[data-uimode="music"] #stage-col{flex:0 0 320px}
+#editor-view[data-uimode="music"] #right-panel{flex:1 1 auto;width:auto;min-width:250px}
+@media (max-width:1023.5px){
+  #editor-view[data-uimode="music"] #stage-col{flex:0 0 42%}
+  /* 移动端顶栏紧凑：模式开关呈单字（编/乐）；顶栏过挤时内部横滚（同 #stage-tools 既有模式，
+     scrollWidth 仍 ≤375，L2 C-09a 口径不破） */
+  .seg-full{display:none}
+  .seg-short{display:inline}
+  #ui-mode-seg .seg-btn{padding:5px 8px}
+  #topbar{overflow-x:auto;scrollbar-width:none}
+  #topbar::-webkit-scrollbar{display:none}
+}
+
 /* ---- 项目库 ---- */
 #library-view{display:flex;flex-direction:column;overflow:auto}
 .offline-note{display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 16px;font-size:12.5px;color:var(--dim);background:var(--bg3);border-bottom:1px solid var(--line)}
@@ -169,6 +193,22 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 #tl-head input[type=range]{width:52px;padding:0;height:14px}
 #tl-head .btn{padding:0 6px;line-height:16px;font-size:11px}
 #tl-audio-empty{position:absolute;left:32px;z-index:7;display:flex;align-items:center;gap:8px}
+#audio-disc summary .ic{margin-bottom:-1px}/* 图标化行高补偿：svg 行内框比原 emoji 字形高 1px，吸收之保持 audio-disc/舞台视口几何与图标化前逐值一致（stage 视口尺度进 E2E 像素/几何基线） */
+/* 图标化几何补偿（汇合轮）：⚑→SVG 后按钮宽 +7.6px，375px 视口 #block-ctl 行内放不下 flex
+   spacer → spacer 独占一行令整条高 10px（舞台画布随之变矮，L2 移动端几何/半径基线依赖旧值）。
+   移动端 spacer 本为 0.7px 视觉空隙，隐藏之恢复单行布局（与图标化前逐像素一致）。 */
+@media (max-width:1023.5px){#block-ctl .spacer{display:none}}
+/* 多轨轨头（汇合轮，音乐模式）：每轨 轨名/音量/静音/删轨 + 底部加轨条；容器 top/height 由 timeline.syncAudioDom 设定 */
+#tl-tracks-head{position:absolute;left:0;z-index:7;width:120px;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;font-size:11px;overflow:hidden}
+#tl-tracks-head .tl-track{border-top:1px solid var(--line);padding:2px 6px;display:flex;flex-direction:column;justify-content:flex-start;gap:2px;overflow:hidden}
+#tl-tracks-head .tl-track:first-child{border-top:none}
+#tl-tracks-head .tlt-row{display:flex;align-items:center;gap:3px;min-width:0}
+#tl-tracks-head .tlt-name{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+#tl-tracks-head .tlt-row input[type=range]{width:46px;padding:0;height:14px;flex:1}
+#tl-tracks-head .btn{padding:0 5px;line-height:16px;font-size:11px}
+#tl-tracks-head .btn:disabled{opacity:.35}
+#tl-tracks-head .tlt-mut.toggled-on{color:var(--acc)}
+#tl-tracks-head .tl-tracks-ops{height:26px;display:flex;align-items:center;gap:4px;padding:0 6px;border-top:1px solid var(--line)}
 /* 音频剪辑右键菜单（与 .unit-menu 同风格，固定定位跟光标） */
 #clip-ctx-menu .um-btn{display:block;width:100%;text-align:left}
 #clip-ctx-menu .ctx-swatches{display:flex;gap:4px;padding:4px 6px}
@@ -315,6 +355,7 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .unit-menu{position:absolute;z-index:50;background:var(--bg2);border:1px solid var(--acc);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px;box-shadow:0 8px 24px rgba(0,0,0,.35);min-width:150px}
 .unit-menu .um-title{font-size:12px;color:var(--dim);font-weight:600}
 .unit-menu .um-row{display:flex;gap:4px}
+.unit-menu .um-lab{font-size:12px;color:var(--dim);align-self:center;white-space:nowrap}
 .unit-menu .um-btn{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:5px 10px;color:var(--fg);white-space:nowrap}
 .unit-menu .um-btn:hover{border-color:var(--acc);color:var(--acc)}
 .unit-menu .um-btn.um-cur{border-color:var(--acc);color:var(--acc);font-weight:600}

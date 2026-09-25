@@ -6,6 +6,9 @@
 //     每个 clip 只调度一次完整剩余区间（不是切片），停止统一 stop()；
 //     增益自动化走 setValueCurveAtTime 分段（常量段 setValueAtTime 首尾相接，无曲线重叠）。
 // 交叉淡化：等功率（sin/cos 互补，功率和恒 1）——重叠区两 clip 同时出声，波形按包络收窄。
+// 多轨（R47）：数据模型在 model.js（timeline.tracks + clip.trackId）；引擎侧每轨一条持久
+// Gain 子链挂既有 master 入口（syncTracks/setTrackGainById/setTrackMutedById），未激活时
+// 链路与旧版逐字节一致（audio.js 与 main.js 均零改动）。
 import { uid, MIN_CLIP_DUR } from './model.js';
 
 export { MIN_CLIP_DUR };
@@ -82,59 +85,84 @@ export function computeOverlaps(clips) {
   return out;
 }
 // 移动/trim 后调用：重叠处建立等功率交叉淡化对（auto:true，拖开后自动还原）。
-// 每侧 auto 淡化带对级记录 autoPair=对端 clip id（R41-D1/D2）：prune 据此只清
-// 真正构成对的两端；同对先后序翻转（拖移越过对端仍重叠）时先清反向陈旧 auto 再建对。
+// 每侧 auto 淡化带「缘级」对端记录（R47 双缘升级）：autoPairOut=淡出缘对端（本 clip 较早、
+// 对端较晚）、autoPairIn=淡入缘对端（本 clip 较晚、对端较早）——链式三 clip（A-B、B-C 共享 B）
+// 下 B 的两条缘各自独立记录，单字段 autoPair（已废弃但保留为兼容镜像，语义=末次写入的对端）
+// 会互相覆写导致拖 C 误清 A-B 对；prune 据双缘精确匹配，只清真正构成对的那条缘。
 export function applyAutoCrossfades(clips, targetIds) {
   const touched = new Set();
   const ids = targetIds instanceof Set ? targetIds : new Set(targetIds || []);
   for (const ov of computeOverlaps(clips)) {
     if (!(ids.has(ov.a.id) || ids.has(ov.b.id))) continue;
-    if (ov.a.fadeInAuto && ov.a.autoPair === ov.b.id) { ov.a.fadeInSec = 0; ov.a.fadeInAuto = false; }
-    if (ov.b.fadeOutAuto && ov.b.autoPair === ov.a.id) { ov.b.fadeOutSec = 0; ov.b.fadeOutAuto = false; }
+    // 既有 auto 对与本对同缘匹配 → 先还原（先后序翻转的陈旧反向缘；按缘精确匹配）
+    if (ov.a.fadeInAuto && ov.a.autoPairIn === ov.b.id) { ov.a.fadeInSec = 0; ov.a.fadeInAuto = false; }
+    if (ov.b.fadeOutAuto && ov.b.autoPairOut === ov.a.id) { ov.b.fadeOutSec = 0; ov.b.fadeOutAuto = false; }
     const dur = r6(ov.end - ov.start);
-    ov.a.fadeOutSec = dur; ov.a.fadeOutAuto = true; ov.a.autoPair = ov.b.id;
-    ov.b.fadeInSec = dur; ov.b.fadeInAuto = true; ov.b.autoPair = ov.a.id;
+    ov.a.fadeOutSec = dur; ov.a.fadeOutAuto = true; ov.a.autoPairOut = ov.b.id; ov.a.autoPair = ov.b.id;
+    ov.b.fadeInSec = dur; ov.b.fadeInAuto = true; ov.b.autoPairIn = ov.a.id; ov.b.autoPair = ov.a.id;
     capFades(ov.a); capFades(ov.b);
     touched.add(ov.a.id); touched.add(ov.b.id);
   }
   return touched;
 }
 // 交叉对被拖开（不再重叠）后，auto 淡化还原为 0（手动淡化不受影响）。
-// 只处理与 target 构成对（任一侧 auto 淡化的 autoPair 指向对方；旧数据无 autoPair 时
-// 按「先者 fadeOut × 后者 fadeIn」互补标记识别）的 other——与 target 无关的既有对
-// 一律不动（R41-D1：按先后序盲清会铲掉无关对的半边、留下陈旧另一半 R41-D2）。
+// R47 双缘升级：优先按缘级记录（autoPairOut/autoPairIn）精确匹配清除——只清真正指向
+// 对方的那条缘，链式共享中段 clip（同时持有 in/out 两条缘）的另一对不受扰；仅当两侧
+// 均无双缘记录（旧数据未过 validate 迁移）才回退旧「互补 auto 标记」启发式（R41-D1：
+// 与 target 无关的既有对一律不动；R41-D2：半边污染的陈旧 auto 淡化整体还原）。
 export function pruneAutoCrossfades(clips, targetId) {
   const cleared = new Set();
   const list = clips || [];
   const target = list.find(c => c.id === targetId);
   if (!target) return cleared;
-  const clearPaired = (x, partnerId) => {   // 只清 x 侧指向 partner 的 auto 淡化
-    if (x.fadeOutAuto && x.autoPair === partnerId) { x.fadeOutSec = 0; x.fadeOutAuto = false; x.autoPair = null; cleared.add(x.id); }
-    if (x.fadeInAuto && x.autoPair === partnerId) { x.fadeInSec = 0; x.fadeInAuto = false; x.autoPair = null; cleared.add(x.id); }
+  // 按缘清除：只清 x 上指向 partner 的那条 auto 缘（out=淡出缘、in=淡入缘）；兼容镜像 autoPair 同步
+  const clearEdge = (x, edge, partnerId) => {
+    if (edge === 'out' && x.fadeOutAuto && x.autoPairOut === partnerId) {
+      x.fadeOutSec = 0; x.fadeOutAuto = false; x.autoPairOut = null;
+      if (x.autoPair === partnerId) x.autoPair = null;
+      cleared.add(x.id);
+    }
+    if (edge === 'in' && x.fadeInAuto && x.autoPairIn === partnerId) {
+      x.fadeInSec = 0; x.fadeInAuto = false; x.autoPairIn = null;
+      if (x.autoPair === partnerId) x.autoPair = null;
+      cleared.add(x.id);
+    }
   };
+  const hasDual = x => x.autoPairOut != null || x.autoPairIn != null;
   for (const other of list) {
     if (other.id === target.id) continue;
     const s = Math.max(target.timelineStartSec, other.timelineStartSec);
     const e = Math.min(clipEnd(target), clipEnd(other));
     if (e - s > MIN_CLIP_DUR) continue;      // 仍重叠：对仍成立（时长由 apply 重算）
-    if ((target.fadeInAuto || target.fadeOutAuto) && target.autoPair === other.id) clearPaired(target, other.id);
-    if ((other.fadeInAuto || other.fadeOutAuto) && other.autoPair === target.id) clearPaired(other, target.id);
-    const targetFirst = target.timelineStartSec < other.timelineStartSec ||
-      (target.timelineStartSec === other.timelineStartSec && target.id < other.id);
-    // 旧数据兼容（两侧均无 autoPair 的互补 auto 标记才视作对；链式对按方向各清各的）
-    const legacy = targetFirst
-      ? (target.fadeOutAuto && target.autoPair == null && other.fadeInAuto && other.autoPair == null)
-      : (target.fadeInAuto && target.autoPair == null && other.fadeOutAuto && other.autoPair == null);
-    if (legacy) {
-      if (targetFirst && target.fadeOutAuto) { target.fadeOutSec = 0; target.fadeOutAuto = false; cleared.add(target.id); }
-      if (!targetFirst && target.fadeInAuto) { target.fadeInSec = 0; target.fadeInAuto = false; cleared.add(target.id); }
-      if (targetFirst && other.fadeInAuto) { other.fadeInSec = 0; other.fadeInAuto = false; cleared.add(other.id); }
-      if (!targetFirst && other.fadeOutAuto) { other.fadeOutSec = 0; other.fadeOutAuto = false; cleared.add(other.id); }
+    clearEdge(target, 'out', other.id); clearEdge(target, 'in', other.id);
+    clearEdge(other, 'out', target.id); clearEdge(other, 'in', target.id);
+    if (!hasDual(target) && !hasDual(other)) {
+      // 旧数据兼容（两侧均无双缘记录时才用互补 auto 标记识别；链式对按方向各清各的）
+      const targetFirst = target.timelineStartSec < other.timelineStartSec ||
+        (target.timelineStartSec === other.timelineStartSec && target.id < other.id);
+      const legacy = targetFirst
+        ? (target.fadeOutAuto && target.autoPair == null && other.fadeInAuto && other.autoPair == null)
+        : (target.fadeInAuto && target.autoPair == null && other.fadeOutAuto && other.autoPair == null);
+      if (legacy) {
+        if (targetFirst && target.fadeOutAuto) { target.fadeOutSec = 0; target.fadeOutAuto = false; cleared.add(target.id); }
+        if (!targetFirst && target.fadeInAuto) { target.fadeInSec = 0; target.fadeInAuto = false; cleared.add(target.id); }
+        if (targetFirst && other.fadeInAuto) { other.fadeInSec = 0; other.fadeInAuto = false; cleared.add(other.id); }
+        if (!targetFirst && other.fadeOutAuto) { other.fadeOutSec = 0; other.fadeOutAuto = false; cleared.add(other.id); }
+      }
     }
   }
-  // target 侧 auto 淡化指向已删除的对端（ghost）→ 陈旧，一并还原
+  // target 侧 auto 缘指向已删除的对端（ghost）→ 陈旧，一并还原（双缘 + 旧单字段两条路）
+  if (target.fadeOutAuto && target.autoPairOut && !list.some(c => c.id === target.autoPairOut)) {
+    clearEdge(target, 'out', target.autoPairOut);
+  }
+  if (target.fadeInAuto && target.autoPairIn && !list.some(c => c.id === target.autoPairIn)) {
+    clearEdge(target, 'in', target.autoPairIn);
+  }
   if ((target.fadeInAuto || target.fadeOutAuto) && target.autoPair && !list.some(c => c.id === target.autoPair)) {
-    clearPaired(target, target.autoPair);
+    // 旧格式幽灵：双缘未覆盖的残留 auto 缘一并还原（镜像记录清空）
+    if (target.fadeOutAuto && target.autoPairOut == null) { target.fadeOutSec = 0; target.fadeOutAuto = false; cleared.add(target.id); }
+    if (target.fadeInAuto && target.autoPairIn == null) { target.fadeInSec = 0; target.fadeInAuto = false; cleared.add(target.id); }
+    target.autoPair = null;
   }
   return cleared;
 }
@@ -317,9 +345,14 @@ export function envAt(env, srcSec) {
 }
 
 // ---------- ClipTransport：双时钟调度器 ----------
-// 语义：position = startPos + (ctx.currentTime - startCtxTime)；clip 调度以「时间轴秒」为域，
+// 语义：position = startPos + (ctx.currentTime - startCtxTime)；clip 调度以「时间线秒」为域，
 // 进 clip → 起 BufferSource（srcStart+偏移），出 clip / 段间静音 → 不调度（自然静音）。
 // 淡化/增益/静音/等功率交叉淡化全部经 Gain 自动化表达（调度时点快照；live 编辑走 reschedule）。
+// 多轨（R47）：syncTracks(tracks)/play({tracks}) 激活后，每轨一条持久 Gain 子链
+//   src → clipGain → trackGain(id) → master → destination，轨 gain×muted 在子链上表达
+//   （轨静音=子链增益 0，实时生效无需 reschedule；轨 gain 变更 setTargetAtTime 平滑）。
+//   未激活（_tracks=null，既止单轨调用面）保持 clipGain 直连 master 的原链路，逐字节兼容。
+//   旧 setTrackGain/setTrackMuted（C15 单轨总控）不动：作用在 master 上，多轨下为全局微调。
 export class ClipTransport {
   constructor({ getContext, destination }) {
     this.getContext = getContext;   // () => AudioContext（懒建）
@@ -331,9 +364,11 @@ export class ClipTransport {
     this._scheduled = new Set();
     this._clips = [];
     this._resolveBuffer = () => null; // assetId → AudioBuffer | null
-    this.trackGainVal = 1;            // 轨音量（0..1 线性，C15）
+    this.trackGainVal = 1;            // 轨音量（0..1 线性，C15；多轨下=master 总控）
     this.trackMuted = false;
     this.master = null;
+    this._tracks = null;              // 多轨态（项目 timeline.tracks 引用形态）；null=legacy 单链
+    this._trackGains = new Map();     // trackId → GainNode（每轨持久子链）
     this.startPos = 0;
     this.startCtxTime = 0;   // 调度锚（含 START_DELAY：源起播提前量）
     this._clockCtxTime = 0;  // 走带时钟锚（无延迟：position 立即从 from 前进，beat 不回落 0）
@@ -347,6 +382,63 @@ export class ClipTransport {
       if (dest) this.master.connect(dest);
     }
     return this.master;
+  }
+  // ---- 多轨子链 ----
+  // clip 归属轨 id：trackId 缺失/悬挂回落首轨（与 model.trackOfClip 同口径）
+  _trackIdOf(clip) {
+    if (!this._tracks) return null;
+    const id = clip && clip.trackId;
+    return (id && this._tracks.some(t => t.id === id)) ? id : this._tracks[0].id;
+  }
+  _ensureTrackGain(ctx, trackId) {
+    let g = this._trackGains.get(trackId);
+    if (!g || g.context !== ctx) {
+      const t = (this._tracks || []).find(x => x.id === trackId);
+      g = ctx.createGain();
+      g.gain.value = (t && t.muted) ? 0 : ((t && t.gain) ?? 1);
+      g.connect(this._ensureMaster(ctx));
+      this._trackGains.set(trackId, g);
+    }
+    return g;
+  }
+  // 同步项目轨态到子链（loadProject/轨结构变化后调用）：gain/muted 实时平滑生效；
+  // tracks 空/非数组 → 拆子链回 legacy 单链。删除的轨断开其子链。
+  syncTracks(tracks) {
+    const list = (Array.isArray(tracks) && tracks.length) ? tracks : null;
+    this._tracks = list;
+    if (!list) {
+      for (const g of this._trackGains.values()) { try { g.disconnect(); } catch {} }
+      this._trackGains.clear();
+      return;
+    }
+    if (!this.master) return; // 尚未建链：起播时按轨态惰性创建
+    const now = this.master.context.currentTime;
+    const ids = new Set();
+    for (const t of list) {
+      ids.add(t.id);
+      const g = this._trackGains.get(t.id);
+      if (g) g.gain.setTargetAtTime(t.muted ? 0 : (t.gain ?? 1), now, 0.01);
+    }
+    for (const [id, g] of [...this._trackGains]) {
+      if (!ids.has(id)) { try { g.disconnect(); } catch {} this._trackGains.delete(id); }
+    }
+  }
+  // 单轨实时控制（汇合轮 UI 入口）：写回轨态并平滑生效；轨不存在返回 false
+  setTrackGainById(trackId, g) {
+    const t = (this._tracks || []).find(x => x.id === trackId);
+    if (!t) return false;
+    t.gain = Math.max(0, Math.min(2, Number(g) || 0));
+    const node = this._trackGains.get(trackId);
+    if (node) node.gain.setTargetAtTime(t.muted ? 0 : t.gain, node.context.currentTime, 0.01);
+    return true;
+  }
+  setTrackMutedById(trackId, m) {
+    const t = (this._tracks || []).find(x => x.id === trackId);
+    if (!t) return false;
+    t.muted = !!m;
+    const node = this._trackGains.get(trackId);
+    if (node) node.gain.setTargetAtTime(t.muted ? 0 : t.gain, node.context.currentTime, 0.01);
+    return true;
   }
   setTrackGain(g) {
     this.trackGainVal = Math.max(0, Math.min(2, Number(g) || 0));
@@ -362,7 +454,7 @@ export class ClipTransport {
     // 否则 seek/循环回卷后 beat 瞬时归 0 → 队形跟随/循环区间被改写；S3-06/M6 回归）
     return Math.max(0, this.startPos + (this.master.context.currentTime - this._clockCtxTime));
   }
-  play(clips, { from = 0, rate = 1, resolveBuffer = this._resolveBuffer } = {}) {
+  play(clips, { from = 0, rate = 1, resolveBuffer = this._resolveBuffer, tracks } = {}) {
     const ctx = this.getContext();
     if (!ctx) return false;
     this.stopInternal();
@@ -370,6 +462,7 @@ export class ClipTransport {
     this._resolveBuffer = resolveBuffer || this._resolveBuffer;
     this.rate = Math.max(0.25, Math.min(4, rate || 1));
     this.startPos = Math.max(0, from || 0);
+    if (tracks !== undefined) this.syncTracks(tracks); // 多轨：起播即同步轨态（跨轨同 tick 调度）
     this._ensureMaster(ctx);
     this.startCtxTime = ctx.currentTime + START_DELAY;
     this._clockCtxTime = ctx.currentTime;
@@ -432,7 +525,9 @@ export class ClipTransport {
     src.buffer = buffer;
     if (this.rate !== 1) src.playbackRate.value = this.rate;
     const gain = ctx.createGain();
-    src.connect(gain); gain.connect(this.master);
+    src.connect(gain);
+    // 多轨激活 → 挂轨子链（轨 gain×muted）；legacy 单链 → 直连 master（原链路）
+    gain.connect(this._tracks ? this._ensureTrackGain(ctx, this._trackIdOf(clip)) : this.master);
     this.applyGainAutomation(gain.gain, clip, skip, skip + durTl, ct => when + (ct - skip));
     src.start(when, srcOffset, durTl * this.rate);
     this._sources.push(src); this._gains.push(gain);

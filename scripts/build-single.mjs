@@ -12,8 +12,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(root, 'dist', 'formation-studio.html');
 const OUT_SW = join(root, 'dist', 'sw.js');
 
-// 依赖拓扑序（被依赖者在前）
-const ORDER = ['model', 'audio-clips', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'timeline', 'export', 'ui', 'manual-assets', 'manual', 'main'];
+// 依赖拓扑序（被依赖者在前）。汇合轮（图标系统接入）：'icons' 置于 'timeline'/'ui' 之前——
+// timeline.js（tl-audio-toggle 图标）与 ui.js（re-export 供 manual.js）都静态 import './icons.js'。
+const ORDER = ['model', 'audio-clips', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'icons', 'timeline', 'export', 'ui', 'manual-assets', 'manual', 'main'];
 // 'export' 是保留字，命名空间键用 exporter；'manual-assets'/'audio-clips' 带连字符，命名空间键用驼峰
 const nsKey = mod => (mod === 'export' ? 'exporter' : mod === 'manual-assets' ? 'manualAssets' : mod === 'audio-clips' ? 'audioClips' : mod);
 
@@ -55,7 +56,16 @@ function transformModule(mod) {
     exportNames.push(name);
     return `${kind} ${name}`;
   });
-  code = code.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  // 「export { A, B as C };」转发表：旧行为是整行剥掉（命名空间缺这些名字——manual.js 从 ui.js
+  // 取 iconHtml、timeline.js 从 audio-clips 取 MIN_CLIP_DUR 在单文件包运行时会是 undefined）。
+  // 现改为原位展开成 Object.assign(NS, { … })，转发链在 bundle 里同样成立（汇合轮修复）。
+  code = code.replace(/^export\s*\{([^}]*)\};?[ \t]*$/gm, (m, inner) => {
+    const specs = inner.split(',').map(x => x.trim()).filter(Boolean).map(x => {
+      const [imp, local = imp] = x.split(/\s+as\s+/);
+      return local.trim() === imp.trim() ? imp.trim() : `${imp.trim()}: ${local.trim()}`;
+    });
+    return `Object.assign(${NS}, { ${specs.join(', ')} });`;
+  });
 
   // 3) 组装 IIFE
   const assigns = exportNames.length ? `Object.assign(${NS}, { ${exportNames.join(', ')} });` : '';
