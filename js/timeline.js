@@ -1,7 +1,35 @@
 // 时间线：编辑模式队形条（缩略图+拖拽排序） / 音乐模式波形时间线（块拖拽、节拍吸附、播放头）
+// v3（exp/audition-lite）：常驻音频轨（简单态 26px / 展开态 Audition Lite 72px）——
+// clip 自由摆放（间隙=静音、重叠=自动等功率交叉淡化+菱形手柄）、Audition 式内容锚定 trim、
+// 分割（Ctrl/Cmd+K / 剃刀）、淡化/增益把手、时间选区、右键菜单、磁吸（clip 缘/块边界/tag/
+// 播放头/选区/零交叉）。纯 clip 模型操作在 audio-clips.js（node 可测），此处只做几何与手势。
 import { drawScene } from './stage.js';
 import { computeSegments, spb, beatToSec, secToBeat, beatLabel,
-  addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX } from './model.js';
+  addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX,
+  clipsOf } from './model.js';
+import {
+  clipEnd, computeOverlaps, applyAutoCrossfades, pruneAutoCrossfades,
+  trimClipLeftAnchored, trimClipLeftBoundary, trimClipRightAnchored, trimClipRightBoundary,
+  splitClipAt, rippleDeleteClips, trimClipsToRange,
+  collectSnapCandidates, snapTime, nearestZeroCrossing, envAt, fadeEnvAt,
+  MIN_CLIP_DUR, CLIP_DEFAULT_COLOR,
+} from './audio-clips.js';
+
+export const AUDIO_SIMPLE_H = 26;    // 简单态音轨高（常驻）
+export const AUDIO_EXPANDED_H = 72;  // 展开态（Audition Lite）音轨高
+const TRIM_TOL_PX = 6;               // clip 缘/把手命中半径
+const SNAP_TOL_PX = 8;               // 磁吸阈值（像素，时间域换算）
+const ZC_RADIUS_SEC = 0.004;         // 零交叉吸附半径（消切点咔哒）
+const r6 = v => Math.round(v * 1e6) / 1e6;
+function store_getProjectId(hooks) {
+  try { return hooks.getProjectId?.() ?? null; } catch { return null; }
+}
+function hexA(hex, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(56,189,248,${a})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 
 // ---------- F-10（UX-10）：chip 触摸长按拖拽排序——纯几何决策（node 可测） ----------
 // 触屏不产生 HTML5 dragstart（UX-10 根因），排序走 Pointer Events 长按路径：
@@ -231,13 +259,24 @@ export class MusicTimeline {
   constructor({ canvas, overlay, scroll, hooks }) {
     this.cv = canvas; this.ov = overlay; this.scroll = scroll;
     this.inner = canvas.parentElement; // #tl-inner：tag 内联命名输入挂这里（随横向滚动移动）
-    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio}
+    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio, canEdit(), pauseIfPlaying(), onTimeSelection(range|null), onClipContextMenu(info), toast(msg)}
     this.secPerPx = 0;  // 0 = 自适应
     this.drag = null;
     this.hoverTag = null;      // 悬停旗点 id（×删除钮 + title 提示）
     this.activeTag = null;     // 点选旗点 id：×保持可见（触屏无 hover 的删除路径）
     this._tagGeom = new Map(); // id → {x, delX}（drawTags 落笔几何，命中 × 用）
     this._tagInput = null;     // 内联命名输入 {el, beat, id, done}
+    // ---- v3 音频轨（Audition Lite）状态 ----
+    this.expanded = false;     // 展开态（localStorage 记忆，构造时读）
+    this.snapOn = true;        // 磁吸（S 开关；localStorage 记忆）
+    this.razor = false;        // 剃刀模式（R 开关；会话态）
+    this.clipSel = new Set();  // 选中 clip id（单选/Ctrl 多选）
+    this.timeSel = null;       // 时间选区 {start, end}（秒；空白拖拽/尺规 Shift 拖拽）
+    this.hoverClipEdge = null; // {id, part} 悬停命中（光标 + 边缘高亮）
+    this.hoverAudio = false;   // 悬停音频轨（S/R 快捷键作用域判定）
+    this._projectId = null;    // 项目切换检测（清 clip 选择态）
+    try { this.expanded = localStorage.getItem('wuzhen:audioTrackExpanded') === '1'; } catch {}
+    try { this.snapOn = localStorage.getItem('wuzhen:audioSnap') !== '0'; } catch {}
     this._bind();
   }
   pxPerSec() { return this.secPerPx ? 1 / this.secPerPx : 0; }
@@ -247,26 +286,194 @@ export class MusicTimeline {
     const w0 = this.scroll.clientWidth || 600;
     return Math.max(w0, this.secPerPx ? totalSec / this.secPerPx : totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
   }
+  // ---- v3 几何：音频轨夹在 tag 道与队形块区之间，块区改为紧随其后（不再底部锚定） ----
+  audioTop() { return (this.rulerH ?? 22) + TAG_LANE_H; }
+  audioLaneH() { return this.expanded ? AUDIO_EXPANDED_H : AUDIO_SIMPLE_H; }
+  audioBottom() { return this.audioTop() + this.audioLaneH(); }
+  blocksTopFor() { return this.audioBottom() + 6; }
+  totalHeightFor() {
+    // 兼容旧几何：简单态总高维持旧 #tl-scroll 高（桌面 150 / 移动 120），富余计入音轨与块区间隔——
+    // 常驻音轨 26px 为规格 mandated 的新增道，不挤压舞台几何（L2 移动端半径基线依赖旧高）。
+    // 展开态（72px）为新增布局，无旧几何可保：总高随内容（40+72+6+36+6=160）。
+    const mobile = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 1023.5px)').matches;
+    const base = mobile ? 120 : 150;
+    return Math.max(base, this.blocksTopFor() + 36 + 6);
+  } // 块 36 + 底边距 6
+  hasMedia(p) { return !!(p?.media?.assets?.length); }
+  assetDurOf(p, assetId) { return p?.media?.assets?.find(a => a.id === assetId)?.durationSec ?? Infinity; }
   render() {
     const p = this.hooks.getProject();
     if (!p) return;
+    // 项目切换：清 clip 选择态（clip id 属于项目数据）
+    const pid = store_getProjectId(this.hooks);
+    if (pid !== this._projectId) {
+      this._projectId = pid;
+      this.clipSel = new Set();
+      this.timeSel = null;
+      this.razor = false;
+    }
     const dpr = window.devicePixelRatio || 1;
-    const h = this.scroll.clientHeight || 120;
+    // 音频轨常驻：容器高度由 JS 按简单/展开态设定（简单 110 / 展开 156）
+    const h = this.totalHeightFor();
+    if (this.scroll && this.scroll.style && this.scroll.clientHeight !== h) this.scroll.style.height = h + 'px';
+    const H = Math.max(h, this.scroll.clientHeight || h);
     const W = this.layoutWidth(p);
     for (const c of [this.cv, this.ov]) {
-      c.width = Math.round(W * dpr); c.height = Math.round(h * dpr);
-      c.style.width = W + 'px'; c.style.height = h + 'px';
+      c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+      c.style.width = W + 'px'; c.style.height = H + 'px';
     }
-    this.W = W; this.H = h;
+    this.W = W; this.H = H;
     const ctx = this.cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#0b1220';
-    ctx.fillRect(0, 0, W, h);
-    this.drawRuler(ctx, p, h);
-    this.drawWave(ctx, p, h);
-    this.drawBlocks(ctx, p, h);
+    ctx.fillRect(0, 0, W, H);
+    this.drawRuler(ctx, p, H);
+    this.drawAudioLane(ctx, p, H);
+    this.drawBlocks(ctx, p, H);
     this.drawTags(ctx, p);
     this.drawPlayhead();
+    this.syncAudioDom(p);
+  }
+  // 音频轨 DOM 附属（轨左端展开/收起钮、展开态表头、空态入口）随几何同步
+  syncAudioDom(p) {
+    if (typeof document === 'undefined') return;
+    const media = this.hasMedia(p);
+    const tog = document.getElementById('tl-audio-toggle');
+    if (tog) {
+      tog.hidden = false;
+      tog.style.top = Math.round(this.audioTop() + this.audioLaneH() / 2 - 11) + 'px';
+      tog.textContent = this.expanded ? '⌃' : '⌄';
+      tog.title = this.expanded ? '收起音频轨（简单态）' : '展开音频轨（Audition Lite 剪辑）';
+      tog.setAttribute('aria-label', tog.title);
+    }
+    const head = document.getElementById('tl-head');
+    if (head) {
+      head.hidden = !(this.expanded && media);
+      head.style.top = this.audioTop() + 'px';
+      head.style.height = this.audioLaneH() + 'px';
+    }
+    const empty = document.getElementById('tl-audio-empty');
+    if (empty) {
+      empty.hidden = media;
+      empty.style.top = this.audioTop() + 'px';
+      empty.style.height = this.audioLaneH() + 'px';
+    }
+  }
+
+  // ---- v3 音频轨绘制 ----
+  drawAudioLane(ctx, p, h) {
+    const top = this.audioTop(), lh = this.audioLaneH();
+    ctx.save();
+    ctx.fillStyle = 'rgba(148,163,184,.05)';
+    ctx.fillRect(0, top, this.W, lh);
+    ctx.strokeStyle = 'rgba(148,163,184,.2)';
+    ctx.beginPath();
+    ctx.moveTo(0, top + lh + .5); ctx.lineTo(this.W, top + lh + .5);
+    ctx.moveTo(0, top + .5); ctx.lineTo(this.W, top + .5);
+    ctx.stroke();
+    const clips = clipsOf(p);
+    if (!this.hasMedia(p)) {
+      if (this.expanded) {
+        ctx.fillStyle = 'rgba(148,163,184,.55)';
+        ctx.font = '11px sans-serif'; ctx.textBaseline = 'middle';
+        ctx.fillText('载入音乐后在此剪辑（左上「＋ 载入音乐」或「📚 媒体库」）', 10, top + lh / 2);
+      }
+      ctx.restore();
+      return;
+    }
+    // 时间选区（蓝色高亮带，先画在底层）
+    if (this.timeSel) {
+      const pps0 = this.ppsOf(p);
+      const x0 = this.timeSel.start * pps0, x1 = this.timeSel.end * pps0;
+      ctx.fillStyle = 'rgba(56,189,248,.16)';
+      ctx.fillRect(x0, top, Math.max(1, x1 - x0), lh);
+      ctx.strokeStyle = 'rgba(56,189,248,.7)';
+      ctx.beginPath();
+      ctx.moveTo(x0 + .5, top); ctx.lineTo(x0 + .5, top + lh);
+      ctx.moveTo(x1 - .5, top); ctx.lineTo(x1 - .5, top + lh);
+      ctx.stroke();
+    }
+    const pps = this.ppsOf(p);
+    for (const c of clips) this.drawClipBox(ctx, p, c, top, lh, pps);
+    // 重叠自动交叉淡化：交叠中点菱形手柄
+    for (const ov of computeOverlaps(clips)) {
+      const mx = ((ov.start + ov.end) / 2) * pps;
+      const my = top + 10;
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = '#e879f9';
+      ctx.strokeStyle = 'rgba(232,121,249,.5)';
+      ctx.lineWidth = 1;
+      ctx.fillRect(-4, -4, 8, 8);
+      ctx.strokeRect(-4, -4, 8, 8);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  drawClipBox(ctx, p, c, top, lh, pps) {
+    const x0 = c.timelineStartSec * pps, x1 = clipEnd(c) * pps, w = x1 - x0;
+    if (x1 <= 0 || x0 >= this.W) return;
+    const pad = this.expanded ? 3 : 3;
+    const y0 = top + pad, y1 = top + lh - pad;
+    const color = c.color || CLIP_DEFAULT_COLOR;
+    const selected = this.clipSel.has(c.id);
+    const visX0 = Math.max(-2, x0), visX1 = Math.min(this.W + 2, x1);
+    ctx.save();
+    // 盒底
+    ctx.fillStyle = hexA(color, c.muted ? .05 : .13);
+    ctx.fillRect(visX0, y0, visX1 - visX0, y1 - y0);
+    // 波形（按淡化包络收窄、随增益缩放；静音置灰）
+    const env = this.hooks.audio?.assets?.get(c.assetId)?.env || null;
+    const mid = (y0 + y1) / 2;
+    const amp = (y1 - y0) / 2 - (this.expanded ? 6 : 4);
+    const step = Math.max(1, Math.floor(this.W / 2400));
+    ctx.fillStyle = hexA(color, c.muted ? .22 : .58);
+    for (let x = Math.ceil(visX0); x < visX1; x += step) {
+      const rel = (x - x0) / pps;
+      const src = c.srcStartSec + rel;
+      let v = env ? envAt(env, src) : .14;
+      v *= Math.min(1.6, c.gain ?? 1) * fadeEnvAt(c, rel);
+      const a = Math.max(1, v * amp);
+      ctx.fillRect(x, mid - a, step, a * 2);
+    }
+    // 名牌
+    const nm = (c.name || '音频') + (c.muted ? '（静音）' : '');
+    if (w > 34) {
+      ctx.fillStyle = c.muted ? 'rgba(148,163,184,.8)' : '#e2e8f0';
+      ctx.font = '10px sans-serif'; ctx.textBaseline = 'top';
+      const maxChars = Math.floor((w - 8) / 6.2);
+      if (maxChars > 1) ctx.fillText(nm.slice(0, maxChars), x0 + 4, y0 + 2);
+    }
+    if (this.expanded) {
+      // 增益包络横线（黄，中线）
+      ctx.strokeStyle = 'rgba(250,204,21,.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x0 + 2, mid); ctx.lineTo(x1 - 2, mid); ctx.stroke();
+      // 淡化把手（顶部方把手；auto 交叉淡化呈品红）
+      const drawFh = (fx, isAuto) => {
+        ctx.fillStyle = isAuto ? '#e879f9' : '#7dd3fc';
+        ctx.fillRect(fx - 3.5, y0 - 1.5, 7, 7);
+        ctx.strokeStyle = 'rgba(2,6,23,.6)'; ctx.lineWidth = 1;
+        ctx.strokeRect(fx - 3.5, y0 - 1.5, 7, 7);
+      };
+      if ((c.fadeInSec || 0) > 0.005) drawFh(x0 + c.fadeInSec * pps, !!c.fadeInAuto);
+      if ((c.fadeOutSec || 0) > 0.005) drawFh(x1 - c.fadeOutSec * pps, !!c.fadeOutAuto);
+      // trim 缘（红括号光标区）
+      const hotL = this.hoverClipEdge?.id === c.id && this.hoverClipEdge.part === 'trimL';
+      const hotR = this.hoverClipEdge?.id === c.id && this.hoverClipEdge.part === 'trimR';
+      ctx.fillStyle = hotL ? '#f43f5e' : 'rgba(244,63,94,.5)';
+      ctx.fillRect(x0 - 1.5, y0, 3, y1 - y0);
+      ctx.fillStyle = hotR ? '#f43f5e' : 'rgba(244,63,94,.5)';
+      ctx.fillRect(x1 - 1.5, y0, 3, y1 - y0);
+    }
+    // 选中高亮描边
+    if (selected) {
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x0 - 1, y0 - 1, w + 2, y1 - y0 + 2);
+    }
+    ctx.restore();
   }
 
   drawRuler(ctx, p, h) {
@@ -306,37 +513,12 @@ export class MusicTimeline {
     ctx.restore();
     this.rulerH = rulerH;
   }
-  drawWave(ctx, p, h) {
-    const audio = this.hooks.audio;
-    const pps = this.ppsOf(p);
-    if (!audio?.peaks) {
-      if (audio?.ready) { // 无波形：画时长条
-        ctx.save();
-        ctx.fillStyle = 'rgba(56,189,248,.15)';
-        ctx.fillRect(0, this.rulerH, (audio.duration || 0) * pps, h - this.rulerH);
-        ctx.restore();
-      }
-      return;
-    }
-    const peaks = audio.peaks;
-    const mid = this.rulerH + (h - this.rulerH) * 0.42;
-    const amp = (h - this.rulerH) * 0.34;
-    ctx.save();
-    ctx.fillStyle = 'rgba(56,189,248,.5)';
-    const step = Math.max(1, Math.floor(this.W / 2000)); // 大宽度下抽稀绘制
-    for (let x = 0; x < this.W; x += step) {
-      const sec = x / pps;
-      const i = Math.floor(sec / (audio.duration || 1) * peaks.length);
-      const v = peaks[Math.max(0, Math.min(peaks.length - 1, i))] || 0;
-      ctx.fillRect(x, mid - v * amp, step, Math.max(1, v * amp * 2));
-    }
-    ctx.restore();
-  }
+  // 旧整曲波形道已由 v3 常驻音频轨取代（drawWave 移除）：波形按 clip 画在音轨内（drawClipBox）。
   drawBlocks(ctx, p, h) {
     const { segments } = computeSegments(p);
     const pps = this.ppsOf(p);
     const spbV = spb(p);
-    const top = h - 44, bh = 36;
+    const top = this.blocksTopFor(), bh = 36; // v3：块区紧随音频轨（不再底部锚定）
     const selIdx = this.hooks.getIndex();
     ctx.save();
     ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
@@ -605,6 +787,20 @@ export class MusicTimeline {
     cv.addEventListener('pointerdown', e => this._down(e));
     cv.addEventListener('pointermove', e => this._move(e));
     cv.addEventListener('dblclick', e => this._dblclick(e));
+    // v3：clip 右键菜单（空白处=取消选择，规格 §4）
+    cv.addEventListener('contextmenu', e => {
+      const p = this.hooks.getProject();
+      if (!p) return;
+      const r = this.cv.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      if (y < this.audioTop() || y > this.audioBottom() || !clipsOf(p).length) return;
+      e.preventDefault();
+      const hit = this._audioHit(x, y, clipsOf(p));
+      this.hooks.onClipContextMenu?.({
+        clipId: hit ? hit.clip.id : null,
+        screenX: e.clientX, screenY: e.clientY,
+      });
+    });
     window.addEventListener('pointerup', e => this._up(e), { passive: true });
     // F-02（UX-02）：浏览器中途接管（滚动接管/来电横幅/系统手势）会发 pointercancel 而后续
     // pointerup 不再来——不置 drag=null 则拖拽状态卡死，之后无按键的鼠标 hover 路过即持续
@@ -614,8 +810,33 @@ export class MusicTimeline {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         this.zoom(e.deltaY < 0 ? 1.2 : 1 / 1.2);
+      } else if (e.altKey) {
+        // C16：Alt+滚轮 锚定光标缩放（与左下 －/＋/⤢ 同义）
+        e.preventDefault();
+        this.zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX);
+      } else if (e.shiftKey) {
+        // C16：Shift+滚轮 横移
+        e.preventDefault();
+        this.scroll.scrollLeft += (Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX);
       }
     }, { passive: false });
+  }
+  // 锚定缩放：anchorClientX（视口坐标）下的时间点在缩放后保持原屏幕位
+  zoomAt(factor, anchorClientX) {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const oldPps = this.ppsOf(p);
+    const rect = this.scroll.getBoundingClientRect();
+    const anchorSec = (anchorClientX - rect.left + this.scroll.scrollLeft) / oldPps;
+    this.zoom(factor);
+    const newPps = this.ppsOf(p);
+    if (newPps > 0) this.scroll.scrollLeft = Math.max(0, anchorSec * newPps - (anchorClientX - rect.left));
+  }
+  // 视口坐标 → 时间线秒（C13 落点换算用）
+  secFromClientX(clientX) {
+    const p = this.hooks.getProject();
+    const r = this.scroll.getBoundingClientRect();
+    return Math.max(0, (clientX - r.left + this.scroll.scrollLeft) / this.ppsOf(p));
   }
   edgeHits(x) {
     const p = this.hooks.getProject();
@@ -660,17 +881,28 @@ export class MusicTimeline {
       }
       return;
     }
+    // ---- v3 音频轨（Audition Lite / 简单态）----
+    const clips = clipsOf(p);
+    if (clips.length && y >= this.audioTop() && y <= this.audioBottom()) {
+      this._audioDown(e, x, y, clips);
+      return;
+    }
     const edges = this.edgeHits(x);
-    if (edges.length && y > this.rulerH) {
+    if (edges.length && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
       try { this.cv.setPointerCapture(e.pointerId); } catch {}
       this.drag = { ...edges[0], startX: x };
       return;
     }
     if (y <= this.rulerH) {
-      // 尺规：点击/拖动定位
+      // 尺规：点击/拖动定位（Shift+拖拽=时间选区，C11/C8；普通拖拽保持 scrub 兼容既有仪器）
       try { this.cv.setPointerCapture(e.pointerId); } catch {}
-      this.drag = { kind: 'scrub' };
-      this.hooks.seekBeat(this.xToBeat(x));
+      if (e.shiftKey) {
+        this.drag = { kind: 'timeSel', startSec: x / this.ppsOf(p), moved: false, fromRuler: true };
+        this.timeSel = { start: x / this.ppsOf(p), end: x / this.ppsOf(p) };
+      } else {
+        this.drag = { kind: 'scrub' };
+        this.hooks.seekBeat(this.xToBeat(x));
+      }
       return;
     }
     if (y >= this.blocksTop && y <= this.blocksTop + this.blocksH) {
@@ -681,24 +913,195 @@ export class MusicTimeline {
       }
     }
   }
+  // ---- v3 音频轨命中与手势 ----
+  // 命中链（展开态）：fade 把手 → trim 缘 → 增益横线 → 盒体；简单态只有盒体（拖移/点击定位）
+  _audioHit(x, y, clips) {
+    const pps = this.ppsOf(this.hooks.getProject());
+    const laneMid = this.audioTop() + this.audioLaneH() / 2;
+    for (let i = clips.length - 1; i >= 0; i--) { // 数组顺序即 z 序，顶层优先
+      const c = clips[i];
+      const x0 = c.timelineStartSec * pps, x1 = clipEnd(c) * pps;
+      if (x < x0 - TRIM_TOL_PX || x > x1 + TRIM_TOL_PX) continue;
+      if (!this.expanded) return { clip: c, part: 'body' };
+      if ((c.fadeInSec || 0) > 0.005 && Math.abs(x - (x0 + c.fadeInSec * pps)) <= TRIM_TOL_PX && y - this.audioTop() <= 12) return { clip: c, part: 'fadeIn' };
+      if ((c.fadeOutSec || 0) > 0.005 && Math.abs(x - (x1 - c.fadeOutSec * pps)) <= TRIM_TOL_PX && y - this.audioTop() <= 12) return { clip: c, part: 'fadeOut' };
+      if (Math.abs(x - x0) <= TRIM_TOL_PX) return { clip: c, part: 'trimL' };
+      if (Math.abs(x - x1) <= TRIM_TOL_PX) return { clip: c, part: 'trimR' };
+      if (Math.abs(y - laneMid) <= 5 && x >= x0 && x <= x1) return { clip: c, part: 'gain' };
+      return { clip: c, part: 'body' };
+    }
+    return null;
+  }
+  _xFadeHit(x, y, clips) {
+    if (!this.expanded) return null;
+    const pps = this.ppsOf(this.hooks.getProject());
+    for (const ov of computeOverlaps(clips)) {
+      const mx = ((ov.start + ov.end) / 2) * pps;
+      if (Math.abs(x - mx) <= 7 && Math.abs(y - (this.audioTop() + 10)) <= 9) return ov;
+    }
+    return null;
+  }
+  // 磁吸候选（规格 C17：clip 缘/块边界/tag/播放头/时间选区/零交叉）
+  _snapCandidates(excludeId) {
+    const p = this.hooks.getProject();
+    const { segments } = computeSegments(p);
+    const blockSecs = [];
+    for (const s of segments) { blockSecs.push(beatToSec(p, s.holdStart), beatToSec(p, s.holdEnd), beatToSec(p, s.travelEnd)); }
+    const tagSecs = (p.timeline.tags || []).map(t => beatToSec(p, t.beat));
+    const player = this.hooks.getPlayer?.();
+    return collectSnapCandidates({
+      clips: clipsOf(p), excludeId,
+      playheadSec: player ? beatToSec(p, Math.max(0, player.beat)) : null,
+      selStartSec: this.timeSel?.start ?? null,
+      selEndSec: this.timeSel?.end ?? null,
+      blockSecs, tagSecs,
+    });
+  }
+  _snap(sec, excludeId) {
+    if (!this.snapOn) return { t: sec, line: null };
+    const pps = this.ppsOf(this.hooks.getProject());
+    return snapTime(sec, this._snapCandidates(excludeId), SNAP_TOL_PX / pps);
+  }
+  // 零交叉吸附（trim 缘；仅磁吸开启时）：把 src 侧端点吸到最近过零点（≤4ms 才生效）
+  _snapZeroCross(clip, side) {
+    if (!this.snapOn) return;
+    const buf = this.hooks.audio?.resolveAssetBuffer?.(clip.assetId);
+    if (!buf) return;
+    const sr = buf.sampleRate;
+    const ch0 = buf.getChannelData(0);
+    const srcSample = (side === 'in' ? clip.srcStartSec : clip.srcStartSec + clip.lengthSec) * sr;
+    const zc = nearestZeroCrossing(ch0, srcSample, ZC_RADIUS_SEC * sr);
+    const delta = (zc / sr) - (side === 'in' ? clip.srcStartSec : clip.srcStartSec + clip.lengthSec);
+    if (Math.abs(delta) > ZC_RADIUS_SEC) return;
+    if (side === 'in') {
+      clip.srcStartSec = r6(clip.srcStartSec + delta);
+      clip.timelineStartSec = r6(clip.timelineStartSec + delta);
+      clip.lengthSec = r6(clip.lengthSec - delta);
+    } else {
+      clip.lengthSec = r6(clip.lengthSec + delta);
+    }
+  }
+  _audioDown(e, x, y, clips) {
+    const p = this.hooks.getProject();
+    const editable = this.hooks.canEdit?.() !== false;
+    const pps = this.ppsOf(p);
+    const sec = x / pps;
+    this._lastX = x;
+    try { this.cv.setPointerCapture(e.pointerId); } catch {}
+    // 剃刀：点击 clip 即分割（C6）
+    if (this.razor) {
+      const hit = this._audioHit(x, y, clips);
+      if (hit && editable) {
+        this.hooks.pauseIfPlaying?.();
+        this.hooks.mutateLabeled?.(pr => { splitClipAt(pr.timeline.audioClips, hit.clip.id, sec); }, '分割音频剪辑');
+      }
+      this.drag = null;
+      return;
+    }
+    // 选择（C1）：单击=单选；Ctrl/Cmd=多选切换。空白拖拽=时间选区（C8）；空白单击=定位播放头（C12）
+    const ov = this._xFadeHit(x, y, clips);
+    if (ov && editable) {
+      this.drag = { kind: 'xFade', a: ov.a, b: ov.b, startX: x, moved: false, ovStart: ov.start, ovEnd: ov.end };
+      return;
+    }
+    const hit = this._audioHit(x, y, clips);
+    if (hit) {
+      if (e.ctrlKey || e.metaKey) {
+        if (this.clipSel.has(hit.clip.id)) this.clipSel.delete(hit.clip.id);
+        else this.clipSel.add(hit.clip.id);
+      } else if (!this.clipSel.has(hit.clip.id)) {
+        this.clipSel = new Set([hit.clip.id]);
+      }
+      const ids = [...this.clipSel];
+      if (hit.part === 'body') {
+        if (editable) {
+          this.hooks.pauseIfPlaying?.(); // 守卫：播放中移动先自动暂停
+          this.drag = { kind: 'clipMove', ids, primary: hit.clip, grabSec: sec - hit.clip.timelineStartSec, startX: x, moved: false };
+        } else this.drag = null;
+      } else if (editable) {
+        const part = hit.part;
+        const isTrim = part === 'trimL' || part === 'trimR';
+        if (isTrim) this.hooks.pauseIfPlaying?.(); // 守卫：播放中 trim 先自动暂停（淡化/增益实时不暂停）
+        this.drag = { kind: part === 'trimL' ? (e.shiftKey ? 'trimLB' : 'trimL') : part === 'trimR' ? (e.shiftKey ? 'trimRB' : 'trimR') : part, id: hit.clip.id, startX: x, moved: false };
+      } else {
+        this.drag = null;
+      }
+      this.render();
+      return;
+    }
+    this.drag = { kind: 'timeSel', startSec: sec, startX: x, moved: false };
+    this.timeSel = { start: sec, end: sec };
+    this.render();
+  }
+  _dragX(e) {
+    const r = this.cv.getBoundingClientRect();
+    return e.clientX - r.left;
+  }
+  _applyClipMove(drag, x) {
+    const p = this.hooks.getProject();
+    const pps = this.ppsOf(p);
+    let newStart = Math.max(0, x / pps - drag.grabSec);
+    // 磁吸：起点/终点就近候选（取距离更小者；不吸自己）
+    const snapS = this._snap(newStart, drag.primary.id);
+    const snapE = this._snap(newStart + drag.primary.lengthSec, drag.primary.id);
+    if (snapS.line !== null || snapE.line !== null) {
+      const dS = snapS.line !== null ? Math.abs(snapS.line - newStart) : Infinity;
+      const dE = snapE.line !== null ? Math.abs(snapE.line - (newStart + drag.primary.lengthSec)) : Infinity;
+      if (dS <= dE) newStart = snapS.line ?? newStart; else newStart = Math.max(0, (snapE.line ?? (newStart + drag.primary.lengthSec)) - drag.primary.lengthSec);
+    }
+    const delta = newStart - drag.primary.timelineStartSec;
+    if (!delta) return;
+    this.hooks.mutate(pr => {
+      for (const id of drag.ids) {
+        const c = pr.timeline.audioClips.find(k => k.id === id);
+        if (c) c.timelineStartSec = r6(Math.max(0, c.timelineStartSec + delta));
+      }
+      applyAutoCrossfades(pr.timeline.audioClips, drag.ids);
+      for (const id of drag.ids) pruneAutoCrossfades(pr.timeline.audioClips, id);
+    });
+    drag.moved = true;
+    this.render();
+  }
   _move(e) {
     const drag = this.drag;
+    const x0 = this._dragX(e);
+    const r0 = this.cv.getBoundingClientRect();
+    const y0 = e.clientY - r0.top;
+    // 悬停反馈（无拖拽时）：clip 命中光标 + tag 旗点 + 块高亮
     if (!drag) {
-      // 悬停反馈：边缘光标 + 块高亮 + tag 旗点（光标/title/×）
-      const r = this.cv.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const edges = this.edgeHits(x);
+      const x = x0, y = y0;
+      const p = this.hooks.getProject();
+      const edges = p ? this.edgeHits(x) : [];
       let hoverSeg = null;
       let hoverTag = null;
-      if (this.inTagLane(y)) {
+      this.hoverAudio = false;
+      this.hoverClipEdge = null;
+      if (p && this.inTagLane(y)) {
         // 旗点或 ×（几何）都算悬停该标记——× 在名称末端，鼠标移过去不能让 × 消失
         const hit = this.tagAt(x);
         hoverTag = hit ? hit.tag.id : this._tagGeomHit(x, 8);
+      } else if (p && y >= this.audioTop() && y <= this.audioBottom() && clipsOf(p).length) {
+        // v3 音频轨悬停：部件光标（trim/fade/gain/body/剃刀）
+        this.hoverAudio = true;
+        const clips = clipsOf(p);
+        if (!this._xFadeHit(x, y, clips)) {
+          const hit = this._audioHit(x, y, clips);
+          if (hit) {
+            this.hoverClipEdge = { id: hit.clip.id, part: hit.part };
+            const cursors = { trimL: 'ew-resize', trimR: 'ew-resize', trimLB: 'ew-resize', trimRB: 'ew-resize', fadeIn: 'ew-resize', fadeOut: 'ew-resize', gain: 'ns-resize', body: this.razor ? 'crosshair' : 'grab' };
+            this.cv.style.cursor = this.razor ? 'crosshair' : (cursors[hit.part] || 'default');
+            this._tagTitle(x, y);
+            this.render();
+            return;
+          }
+        }
+        this.cv.style.cursor = this.razor ? 'crosshair' : 'default';
+        this._tagTitle(x, y);
+        this.render();
+        return;
       } else {
         for (const hit of edges) hoverSeg = hit.seg.i;
         if (hoverSeg === null && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
-          const p = this.hooks.getProject();
           if (p) {
             const beat = this.xToBeat(x);
             for (const s of computeSegments(p).segments) {
@@ -723,6 +1126,79 @@ export class MusicTimeline {
     const minBeats = 0.5;
     if (drag.kind === 'scrub') {
       this.hooks.seekBeat(this.xToBeat(x));
+      return;
+    }
+    // ---- v3 音频轨拖拽族 ----
+    const clips = clipsOf(p);
+    if (drag.kind === 'clipMove') {
+      this._applyClipMove(drag, x);
+      return;
+    }
+    if (drag.kind === 'trimL' || drag.kind === 'trimLB' || drag.kind === 'trimR' || drag.kind === 'trimRB') {
+      const c = clips.find(k => k.id === drag.id);
+      if (!c) return;
+      const assetDur = this.assetDurOf(p, c.assetId);
+      let sec = x / this.ppsOf(p);
+      const snapped = this._snap(sec, c.id);
+      if (snapped.line !== null) sec = snapped.t;
+      let ok = false;
+      if (drag.kind === 'trimL') { ok = trimClipLeftAnchored(c, sec, assetDur); if (ok) this._snapZeroCross(c, 'in'); }
+      else if (drag.kind === 'trimLB') ok = trimClipLeftBoundary(c, sec, assetDur);
+      else if (drag.kind === 'trimR') { ok = trimClipRightAnchored(c, sec, assetDur); if (ok) this._snapZeroCross(c, 'out'); }
+      else ok = trimClipRightBoundary(c, sec, assetDur);
+      if (ok) {
+        drag.moved = true;
+        this.hooks.mutate(pr => {
+          applyAutoCrossfades(pr.timeline.audioClips, [c.id]);
+          pruneAutoCrossfades(pr.timeline.audioClips, c.id);
+        });
+        this.render();
+      }
+      return;
+    }
+    if (drag.kind === 'fadeIn' || drag.kind === 'fadeOut') {
+      const c = clips.find(k => k.id === drag.id);
+      if (!c) return;
+      const pps = this.ppsOf(p);
+      const x0c = c.timelineStartSec * pps, x1c = clipEnd(c) * pps;
+      let f = drag.kind === 'fadeIn' ? (x - x0c) / pps : (x1c - x) / pps;
+      f = Math.max(0, Math.min(c.lengthSec, f));
+      c[drag.kind === 'fadeIn' ? 'fadeInSec' : 'fadeOutSec'] = r6(f);
+      c[drag.kind === 'fadeIn' ? 'fadeInAuto' : 'fadeOutAuto'] = false; // 手动淡化（拖开不还原）
+      drag.moved = true;
+      this.hooks.mutate(() => {});
+      this.render();
+      return;
+    }
+    if (drag.kind === 'xFade') {
+      // 菱形手柄：调交叉淡化比例（双方同步同一淡化时长，钳在重叠区间内）
+      let f = (x / this.ppsOf(p)) - drag.ovStart;
+      const span = drag.ovEnd - drag.ovStart;
+      f = Math.max(MIN_CLIP_DUR * 2, Math.min(span, f));
+      drag.a.fadeOutSec = r6(f); drag.b.fadeInSec = r6(f);
+      drag.a.fadeOutAuto = false; drag.b.fadeInAuto = false;
+      drag.moved = true;
+      this.hooks.mutate(() => {});
+      this.render();
+      return;
+    }
+    if (drag.kind === 'gain') {
+      const c = clips.find(k => k.id === drag.id);
+      if (!c) return;
+      const laneMid = this.audioTop() + this.audioLaneH() / 2;
+      const g = Math.max(0, Math.min(2, 1 + (laneMid - y0) / (this.audioLaneH() / 2 - 6)));
+      c.gain = r6(g);
+      drag.moved = true;
+      this.hooks.mutate(() => {});
+      this.render();
+      return;
+    }
+    if (drag.kind === 'timeSel') {
+      const sec = Math.max(0, x / this.ppsOf(p));
+      drag.moved = drag.moved || Math.abs(x - drag.startX) > 3 || !!drag.fromRuler;
+      this.timeSel = { start: Math.min(drag.startSec, sec), end: Math.max(drag.startSec, sec) };
+      this.hooks.onTimeSelection?.(this.timeSel);
+      this.render();
       return;
     }
     if (drag.kind === 'tag') {
@@ -776,9 +1252,178 @@ export class MusicTimeline {
     if (this.drag && (this.drag.kind === 'hold' || this.drag.kind === 'travel')) {
       this.hooks.commitEdit?.('调整时长');
     }
+    // ---- v3 音频轨拖拽提交 ----
+    const d = this.drag;
+    if (d && (d.kind === 'clipMove' || d.kind === 'trimL' || d.kind === 'trimR' || d.kind === 'trimLB' || d.kind === 'trimRB')) {
+      if (d.moved) this.hooks.commitEdit?.(d.kind.startsWith('trim') ? '修剪音频剪辑' : '移动音频剪辑');
+      else if (d.kind === 'clipMove') this.hooks.seekBeat(this.xToBeat(this._lastX ?? 0)); // 单击 clip=定位播放头（C12）
+    } else if (d && (d.kind === 'fadeIn' || d.kind === 'fadeOut' || d.kind === 'xFade')) {
+      if (d.moved) this.hooks.commitEdit?.('调整淡化');
+    } else if (d && d.kind === 'gain') {
+      if (d.moved) this.hooks.commitEdit?.('剪辑增益');
+    } else if (d && d.kind === 'timeSel') {
+      if (!d.moved) { // 空白单击：清选区+定位播放头（C12）
+        this.timeSel = null;
+        this.hooks.onTimeSelection?.(null);
+        this.hooks.seekBeat(this.xToBeat(this._lastX ?? 0));
+      }
+    }
+    this._lastX = null;
     this.drag = null;
   }
-  // tag 道双击：空白=在该拍打点（内联命名，默认「标记 N」）；旗点=改名。
+  // ---- v3 clip 原子操作（键盘/右键菜单入口；守卫：编辑锁 + 播放中先自动暂停） ----
+  _guard(editableOnly = true) {
+    const p = this.hooks.getProject();
+    if (!p || !clipsOf(p).length) return false;
+    if (editableOnly && this.hooks.canEdit?.() === false) {
+      this.hooks.toast?.('编辑已关闭，无法修改（选择/预览可用）');
+      return false;
+    }
+    return true;
+  }
+  _pauseIfPlaying() { this.hooks.pauseIfPlaying?.(); }
+  playheadSec() {
+    const p = this.hooks.getProject();
+    const player = this.hooks.getPlayer?.();
+    return p && player ? beatToSec(p, Math.max(0, player.beat || 0)) : 0;
+  }
+  // C6：播放头处分割（Ctrl/Cmd+K）。有选中切选中；无选中切所有跨播放头的 clip（Razor All）
+  splitAtPlayhead() {
+    if (!this._guard()) return;
+    this._pauseIfPlaying();
+    const t = this.playheadSec();
+    this.hooks.mutateLabeled?.(pr => {
+      const clips = pr.timeline.audioClips;
+      const ids = this.clipSel.size ? [...this.clipSel] : clips.map(c => c.id);
+      for (const id of ids) splitClipAt(clips, id, t);
+    }, '分割音频剪辑');
+    this.render();
+  }
+  // C10：删除/波纹删除选中（有时间选区时无选中=删除选区内 clip？——规格把选区作为
+  // 「修剪到时间选区」的作用域；删除始终以选中 clip 为对象）
+  deleteSelected(ripple = false) {
+    if (!this._guard()) return;
+    if (!this.clipSel.size) return;
+    this._pauseIfPlaying();
+    const ids = [...this.clipSel];
+    this.hooks.mutateLabeled?.(pr => {
+      const clips = pr.timeline.audioClips;
+      if (ripple) rippleDeleteClips(clips, ids);
+      const set = new Set(ids);
+      pr.timeline.audioClips = clips.filter(c => !set.has(c.id));
+    }, ripple ? '波纹删除音频剪辑' : '删除音频剪辑');
+    this.clipSel = new Set();
+    this.render();
+  }
+  // C9：静音/取消静音选中 clip（实时，可播放中操作）
+  toggleMuteSelected() {
+    if (!this._guard(false)) return;
+    if (!this.clipSel.size) return;
+    const p = this.hooks.getProject();
+    const sel = clipsOf(p).filter(c => this.clipSel.has(c.id));
+    const anyAudible = sel.some(c => !c.muted);
+    this.hooks.mutateLabeled?.(pr => {
+      for (const c of pr.timeline.audioClips) if (this.clipSel.has(c.id)) { if (anyAudible) c.muted = true; else delete c.muted; }
+    }, anyAudible ? '静音音频剪辑' : '取消静音音频剪辑');
+    this.render();
+  }
+  resetGainSelected() {
+    if (!this._guard(false) || !this.clipSel.size) return;
+    this.hooks.mutateLabeled?.(pr => {
+      for (const c of pr.timeline.audioClips) if (this.clipSel.has(c.id)) c.gain = 1;
+    }, '增益重置');
+    this.render();
+  }
+  renameSelected(name) {
+    if (!this._guard(false) || !this.clipSel.size) return false;
+    const n = String(name || '').trim().slice(0, 80);
+    if (!n) return false;
+    const p = this.hooks.getProject();
+    const first = clipsOf(p).find(c => this.clipSel.has(c.id));
+    if (!first) return false;
+    this.hooks.mutateLabeled?.(pr => {
+      const c = pr.timeline.audioClips.find(k => k.id === first.id);
+      if (c) c.name = n;
+    }, '重命名音频剪辑');
+    this.render();
+    return true;
+  }
+  setSelectedColor(color) {
+    if (!this._guard(false) || !this.clipSel.size) return;
+    this.hooks.mutateLabeled?.(pr => {
+      for (const c of pr.timeline.audioClips) if (this.clipSel.has(c.id)) c.color = color;
+    }, '剪辑颜色');
+    this.render();
+  }
+  // 修剪到时间选区（右键菜单；作用域=选中 clip ∩ [start,end]）
+  trimSelectedToTimeSel() {
+    if (!this._guard()) return;
+    if (!this.timeSel || !this.clipSel.size) { this.hooks.toast?.('先框出时间选区并选中 clip'); return; }
+    this._pauseIfPlaying();
+    const ids = [...this.clipSel];
+    const { start, end } = this.timeSel;
+    this.hooks.mutateLabeled?.(pr => {
+      const dropped = trimClipsToRange(pr.timeline.audioClips, ids, start, end);
+      if (dropped.length) pr.timeline.audioClips = pr.timeline.audioClips.filter(c => !dropped.includes(c.id));
+    }, '修剪到时间选区');
+    this.render();
+  }
+  // C3：←/→ 微移（plain=逐帧 10ms；Shift=按网格步进即整拍）
+  nudgeSelected(deltaSec, { grid = false } = {}) {
+    if (!this._guard()) return;
+    if (!this.clipSel.size) return;
+    this._pauseIfPlaying();
+    const p = this.hooks.getProject();
+    const gridSec = grid ? spb(p) : 0.01;
+    const step = (deltaSec >= 0 ? 1 : -1) * gridSec;
+    const ids = [...this.clipSel];
+    this.hooks.mutate(pr => {
+      for (const id of ids) {
+        const c = pr.timeline.audioClips.find(k => k.id === id);
+        if (!c) continue;
+        let ns = c.timelineStartSec + step;
+        if (grid) ns = Math.round(ns / gridSec) * gridSec;
+        c.timelineStartSec = r6(Math.max(0, ns));
+      }
+      applyAutoCrossfades(pr.timeline.audioClips, ids);
+      for (const id of ids) pruneAutoCrossfades(pr.timeline.audioClips, id);
+    }, null);
+    this.hooks.commitEdit?.('微移音频剪辑');
+    this.render();
+  }
+  clearClipSelection() {
+    this.clipSel = new Set();
+    this.timeSel = null;
+    this.hooks.onTimeSelection?.(null);
+    this.render();
+  }
+  setExpanded(v) {
+    this.expanded = !!v;
+    try { localStorage.setItem('wuzhen:audioTrackExpanded', this.expanded ? '1' : '0'); } catch {}
+    this.render();
+  }
+  toggleSnap() {
+    this.snapOn = !this.snapOn;
+    try { localStorage.setItem('wuzhen:audioSnap', this.snapOn ? '1' : '0'); } catch {}
+    this.hooks.toast?.(`磁吸${this.snapOn ? '开' : '关'}（clip 缘/块边界/tag/播放头/选区/零交叉）`);
+    this.render();
+  }
+  setRazor(v) {
+    this.razor = v == null ? !this.razor : !!v;
+    this.hooks.toast?.(this.razor ? '剃刀模式：点击 clip 分割（R/Esc 退出）' : '剃刀模式关闭');
+    this.render();
+    return this.razor;
+  }
+  // C12：双击 clip=选中并循环预览（范围循环至手动停止）
+  previewSelectedClipAt(x, y, clips) {
+    const hit = this._audioHit(x, y, clips);
+    if (!hit) return false;
+    this.clipSel = new Set([hit.clip.id]);
+    this.hooks.previewClip?.(hit.clip);
+    this.render();
+    return true;
+  }
+  // 双击：tag 道=打点/改名；音频轨=clip 循环预览（选中）或空白取消全选（C1/C12）。
   // × 删除后 400ms 内的双击忽略（双击 × 只删一次，不应原地加回）。
   _dblclick(e) {
     const p = this.hooks.getProject();
@@ -786,6 +1431,12 @@ export class MusicTimeline {
     if (performance.now() - (this._delAt || 0) < 400) return;
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
+    const clips = clipsOf(p);
+    if (clips.length && y >= this.audioTop() && y <= this.audioBottom()) {
+      // 双击空白=取消全选；双击 clip=选中并循环预览
+      if (!this.previewSelectedClipAt(x, y, clips)) this.clearClipSelection();
+      return;
+    }
     if (!this.inTagLane(y)) return;
     const hit = this.tagAt(x);
     if (hit) this._openTagInput({ id: hit.tag.id, initial: hit.tag.name });

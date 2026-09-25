@@ -1,5 +1,11 @@
 // 回放引擎：音频时钟 / 虚拟时钟、数拍入场、循环、节拍器
+// v3（exp/audition-lite）：音频通道升级双轨——clip 调度（ClipTransport，WebAudio）为主，
+// <audio> 元素旧通道为回退（buffer 解码失败/无 clip 的边界）。播放语义（规格 §2/§6）：
+// 播放头进 clip → 调度（srcStart+偏移）；出 clip → 段间静音（时间轴时钟继续走）；
+// ended = 越过最后 clip 终点与 totalBeats 取先到（先到者按 #7 混合语义处置：
+// 时间轴未完 → _audioEnded 虚拟接管；已完 → 统一终态 ended）。既有守卫全部继承。
 import { computeSegments, spb, beatToSec, secToBeat, currentFormationIndexAt } from './model.js';
+import { lastClipEndSec } from './audio-clips.js';
 
 export class Player {
   constructor({ audio, getProject, onTick, onStateChange, onCountin, onPreviewEnd }) {
@@ -20,12 +26,18 @@ export class Player {
     this._stopAt = null;          // 预览过渡时的结束拍
     this._ciBase = null;          // 数拍起数的基准拍（取消倒计时回到这里）
     this._audioEnded = false;     // 音频先于时间轴自然结束：true=后续播放由虚拟时钟接管（见 useAudio）
+    this._clipsActive = false;    // 本次播放是否走 clip 调度通道（起播时定格；中途不切换）
   }
   get useAudio() {
     if (this._forceVirtual) return false;
     if (this._audioEnded) return false; // 音频已放完：虚拟时钟接管至 totalBeats（重按 ▶ 从当前拍续走）
     const p = this.getProject();
     return !!(p?.audio?.name && this.audio?.ready);
+  }
+  // clip 通道判定：活动资产已解码出 buffer 且项目有 clip（v1 迁移后载入音乐即有全长 clip）
+  _useClips(p) {
+    p = p || this.getProject();
+    return !!(this.audio?.bufferReady && Array.isArray(p?.timeline?.audioClips) && p.timeline.audioClips.length > 0);
   }
   // 切帧预览中（有限段虚拟播放）：不抢占用户选择的队形高亮
   get previewing() {
@@ -53,7 +65,14 @@ export class Player {
       if (this.playing) return; // 防御：已被其他路径启动
       this.playing = true;
       this._lastIntBeat = null;
-      if (this.useAudio) {
+      this._clipsActive = this.useAudio && this._useClips(p); // useAudio=false（_audioEnded/_forceVirtual）→ 虚拟接管
+      if (this._clipsActive) {
+        // clip 调度通道：从当前拍的秒位起播（播放头出 clip 区间 = 段间静音，时钟继续走）；
+        // el playbackRate 镜像（保持「音频通道速率」可观测，TC-P5-06 口径）
+        this.audio.setRate(this.speed);
+        this.audio.playClips(p.timeline.audioClips, beatToSec(p, this.beat), this.speed);
+        this._virtual = null;
+      } else if (this.useAudio) {
         this.audio.setRate(this.speed);
         this.audio.play(beatToSec(p, this.beat), this.speed);
         this._virtual = null;
@@ -120,7 +139,8 @@ export class Player {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     if (!this.playing) return;
     this.playing = false;
-    if (this.useAudio) this.audio.pause();
+    if (this._clipsActive) this.audio.stopClips();
+    else if (this.useAudio) this.audio.pause();
     this._virtual = null;
     this._forceVirtual = false;    this.onStateChange?.({ playing: false });
   }
@@ -141,15 +161,25 @@ export class Player {
       const { totalBeats } = computeSegments(p);
       b = Math.max(0, Math.min(b, totalBeats));
       // 音频结束态下把播放头拖回音频范围内 → 恢复音频时钟（下次起播重新走 audio 通道）
-      if (this._audioEnded && this.audio?.duration && beatToSec(p, b) < this.audio.duration - 0.02) {
-        this._audioEnded = false;
-      }
+      const audioEndSec = this._clipsEndSec(p);
+      const inAudio = audioEndSec !== null
+        ? beatToSec(p, b) < audioEndSec - 0.02
+        : (this.audio?.duration && beatToSec(p, b) < this.audio.duration - 0.02);
+      if (this._audioEnded && inAudio) this._audioEnded = false;
     }
     this.beat = b;
-    if (this.useAudio) this.audio.seek(beatToSec(p, b));
+    if (this.playing && this._clipsActive) this.audio.seekClips(beatToSec(p, b), this.speed); // clip 通道：重调度
+    else if (this.useAudio) this.audio.seek(beatToSec(p, b));
     else if (this.playing) this._virtual = { baseBeat: b, t0: performance.now() };
     this._lastIntBeat = null;
     this._emit();
+  }
+  // 音频通道的有效终点（时间线秒）：clip 通道=最后 clip 终点；el 通道=资产时长；无音乐=null
+  _clipsEndSec(p) {
+    p = p || this.getProject();
+    if (this._useClips(p)) return lastClipEndSec(p.timeline.audioClips);
+    if (p?.audio?.name && this.audio?.ready) return this.audio.duration || 0;
+    return null;
   }
   seekFormation(index) {
     const { segments } = this.segments();
@@ -158,6 +188,13 @@ export class Player {
   }
   setSpeed(s) {
     this.speed = s;
+    if (this.playing && this._clipsActive) {
+      // clip 通道：重调度换 rate（buffer source 的 playbackRate 起播时定格）；
+      // el playbackRate 同步镜像（活动资产未播放，仅保持「音频通道速率」可观测，TC-P5-06 口径）
+      this.audio.setRate(s);
+      this.audio.seekClips(this.audio.clipsPosition, s);
+      return;
+    }
     if (this.useAudio) this.audio.setRate(s);
     if (this.playing && this._virtual) this._virtual = { baseBeat: this.beat, t0: performance.now() };
   }
@@ -168,7 +205,15 @@ export class Player {
     if (!this.playing) return;
     const p = this.getProject();
     if (!p) { this.playing = false; return; }
-    if (this.useAudio && !this.audio.playing) {
+    if (this._clipsActive) {
+      // clip 通道：transport 停了 = 自然越过最后 clip 终点（或异常）→ 终态处置
+      if (!this.audio.clipsPlaying) {
+        const pos = this.audio.clipsPosition;
+        const endSec = this._clipsEndSec(p) || 0;
+        this._finish(pos >= endSec - 0.06, Math.min(pos, endSec || pos));
+        return;
+      }
+    } else if (this.useAudio && !this.audio.playing) {
       // 音频通道停了：区分「自然放完」（含 ended 事件抢先的窗口）与「异常中断」（任务#7/#3）
       this._finish(!!(this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02));
       return;
@@ -177,7 +222,11 @@ export class Player {
     // 不再走 beat=this.beat 空转的「僵死播放」态
     if (!this.useAudio && !this._virtual && !this._forceVirtual) { this.pause(); return; }
     let beat;
-    if (this.useAudio && this.audio.playing) {
+    if (this._clipsActive) {
+      // clip 通道：beat 由 transport 双时钟位置反推（段间静音时时钟继续走、队形照常推进）
+      beat = secToBeat(p, this.audio.clipsPosition);
+      this._virtual = null;
+    } else if (this.useAudio && this.audio.playing) {
       beat = secToBeat(p, this.audio.currentTime);
       this._virtual = null;
     } else if (this._virtual) {
@@ -212,8 +261,13 @@ export class Player {
         this.pause();
         this.beat = totalBeats;
         this.onStateChange?.({ playing: false, ended: true });
-      } else if (this.useAudio && this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02) {
-        this._finish(true); // 任务#7（报告#8）：音频先于时间轴自然结束（ended 前的采样窗口）
+      } else {
+        // 任务#7（报告#8）：音频先于时间轴自然结束（ended 前的采样窗口）——
+        // clip 通道按「最后 clip 终点」判定，el 通道按资产时长判定（虚拟接管态不判）。
+        // 终点钳制：起播点越界（续播拍 > 音频终点，el 路径会 clamp seek）时播放头同样钳在音频末拍。
+        const endSec = (this._clipsActive || this.useAudio) ? this._clipsEndSec(p) : null;
+        const pos = this._clipsActive ? this.audio.clipsPosition : this.audio.currentTime;
+        if (endSec !== null && endSec > 0 && pos >= endSec - 0.02) this._finish(true, Math.min(pos, endSec));
       }
     }
     this._emit();
@@ -222,13 +276,15 @@ export class Player {
   }
   // 音频通道结束的收尾：自然放完时把播放头钳在音频末拍（不越过波形）、
   // 时间轴还没走完则置 _audioEnded（下一次 ▶ 由虚拟时钟从当前拍接管至 totalBeats）
-  _finish(audioEnded) {
+  // endPos：clip 通道=transport 位置（时间线秒）；el 通道缺省读 el.currentTime
+  _finish(audioEnded, endPos = null) {
     this.pause();
     if (!audioEnded) return;
     const p = this.getProject();
     if (!p) return;
+    const pos = endPos ?? (this._clipsActive ? this.audio.clipsPosition : (this.audio.currentTime || this.audio.duration || 0));
     const { totalBeats } = this.segments();
-    const endBeat = Math.max(0, Math.min(secToBeat(p, this.audio.currentTime || this.audio.duration || 0), totalBeats));
+    const endBeat = Math.max(0, Math.min(secToBeat(p, pos || 0), totalBeats));
     if (totalBeats - endBeat <= 0.05) {
       this.beat = totalBeats;
       this.onStateChange?.({ playing: false, ended: true });

@@ -13,9 +13,9 @@ const OUT = join(root, 'dist', 'formation-studio.html');
 const OUT_SW = join(root, 'dist', 'sw.js');
 
 // 依赖拓扑序（被依赖者在前）
-const ORDER = ['model', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'timeline', 'export', 'ui', 'manual-assets', 'manual', 'main'];
-// 'export' 是保留字，命名空间键用 exporter；'manual-assets' 带连字符，命名空间键用驼峰
-const nsKey = mod => (mod === 'export' ? 'exporter' : mod === 'manual-assets' ? 'manualAssets' : mod);
+const ORDER = ['model', 'audio-clips', 'shapes', 'store', 'audio', 'player', 'gesture', 'stage', 'timeline', 'export', 'ui', 'manual-assets', 'manual', 'main'];
+// 'export' 是保留字，命名空间键用 exporter；'manual-assets'/'audio-clips' 带连字符，命名空间键用驼峰
+const nsKey = mod => (mod === 'export' ? 'exporter' : mod === 'manual-assets' ? 'manualAssets' : mod === 'audio-clips' ? 'audioClips' : mod);
 
 function transformModule(mod) {
   const file = join(root, 'js', `${mod}.js`);

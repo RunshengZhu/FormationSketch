@@ -105,6 +105,100 @@ export function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, 
   menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
 }
 
+// ---------- 媒体库弹窗（v3 音乐剪辑 · 规格 §3） ----------
+// 多文件导入 / 列表（名称·时长·大小）/ 用作配乐 / 重命名 / 删除（当前配乐删除需 confirm）；
+// 拖音频文件入弹窗=导入；资产行可拖到音轨落点生成 clip（dataTransfer: text/x-wuzhen-asset）。
+export function showMediaLibraryModal({ getProject, acts, toast: t }) {
+  // acts: { importFiles(files), setActive(id), rename(id, name), remove(id) }
+  const wrap = h('div', {});
+  let dragDepth = 0;
+  const render = () => {
+    const p = getProject();
+    if (!p) return;
+    wrap.innerHTML = '';
+    const assets = p.media?.assets || [];
+    const tb = assets.map(a => {
+      const active = p.media.activeAssetId === a.id;
+      const missing = !acts.hasBlob?.(a.id);
+      return h('div', { class: 'mlib-row' + (active ? ' mlib-active' : ''), draggable: 'true', title: missing ? '该资产音频数据缺失（重新导入文件可恢复）' : '拖到时间轴音轨可在落点生成剪辑' },
+        h('span', { class: 'mlib-name' }, (active ? '🎵 ' : '') + a.name),
+        h('span', { class: 'dim' }, `${(a.durationSec || 0).toFixed(1)}s · ${fmtSize(a.size)}${missing ? ' · 数据缺失' : ''}`),
+        h('span', { class: 'grp-ops' },
+          active ? h('span', { class: 'chip chip-on' }, '配乐') : h('button', { class: 'btn small', onclick: () => { acts.setActive(a.id); render(); } }, '用作配乐'),
+          h('button', { class: 'btn small', onclick: () => { acts.rename(a.id); } }, '重命名'),
+          h('button', { class: 'btn small danger', onclick: () => { acts.remove(a.id); render(); } }, '删除')));
+    });
+    wrap.append(
+      h('div', { class: 'prop-group' },
+        h('div', { class: 'pg-title' }, `音乐资产（${assets.length}）`),
+        assets.length ? tb : h('div', { class: 'dim' }, '还没有音频：点下方「导入音频」，或把音频文件直接拖进本弹窗。'),
+        h('div', { style: 'display:flex;gap:6px;margin-top:8px' },
+          h('button', { class: 'btn small primary', onclick: () => acts.pickFiles() }, '＋ 导入音频…')),
+        h('div', { class: 'dim', style: 'margin-top:6px' }, '「配乐」= 时间轴播放使用的资产；其余资产可被 clip 引用。删除当前配乐需确认。')),
+    );
+  };
+  render();
+  const m = modal('📚 媒体库 · 音乐资产', wrap, [], { onClose: () => { dragDepth = 0; } });
+  // 拖音频文件入弹窗 = 导入（dragover/drop，忽略非音频）
+  const back = m.back;
+  back.addEventListener('dragover', e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; });
+  back.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); });
+  back.addEventListener('drop', e => {
+    e.preventDefault();
+    dragDepth = 0;
+    const files = [...(e.dataTransfer?.files || [])].filter(f => !f.type || f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
+    if (files.length) { acts.importFiles(files); }
+    const assetId = e.dataTransfer?.getData('text/x-wuzhen-asset');
+    void assetId; // 弹窗内落点不生成 clip（落点在时间轴音轨）
+    setTimeout(render, 600); // 导入是异步的：稍后刷新列表（订阅更新另有兜底）
+  });
+  const unsub = subscribe(() => { const np = getProject(); if (np) render(); });
+  const oldClose = m.close;
+  m.close = () => { unsub?.(); oldClose(); };
+  // modal 的关闭按钮走内部 close()——统一包一层
+  return m;
+}
+export function fmtSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + 'MB';
+  if (b >= 1024) return (b / 1024).toFixed(0) + 'KB';
+  return b + 'B';
+}
+
+// ---------- 通用右键菜单（音频剪辑用；与 .unit-menu 同风格，fixed 定位跟光标） ----------
+export function showContextMenu(items, { x, y, id = '' } = {}) {
+  // items: [{ label, fn, danger?, sep? }]；{ sep: true } 为分隔线
+  closeContextMenu();
+  const menu = h('div', { class: 'unit-menu', id: id || 'clip-ctx-menu' });
+  for (const it of items) {
+    if (it.sep) { menu.append(h('div', { style: 'border-top:1px solid var(--line);margin:2px 0' })); continue; }
+    if (it.el) { menu.append(it.el); continue; }
+    const b = h('button', { class: 'um-btn' }, it.label);
+    if (it.danger) b.style.color = '#ef4444';
+    b.addEventListener('click', () => { closeContextMenu(); it.fn?.(); });
+    menu.append(b);
+  }
+  menu.style.position = 'fixed';
+  menu.style.zIndex = '150';
+  document.body.append(menu);
+  const dismiss = ev => { if (!menu.contains(ev.target)) closeContextMenu(); };
+  const keyClose = ev => { if (ev.key === 'Escape') closeContextMenu(); };
+  document.addEventListener('pointerdown', dismiss, true);
+  document.addEventListener('keydown', keyClose, true);
+  ctxMenuCleanup = () => {
+    menu.remove();
+    document.removeEventListener('pointerdown', dismiss, true);
+    document.removeEventListener('keydown', keyClose, true);
+  };
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
+}
+let ctxMenuCleanup = null;
+export function closeContextMenu() {
+  if (ctxMenuCleanup) { ctxMenuCleanup(); ctxMenuCleanup = null; }
+}
+
 // ---------- 项目库 ----------
 export function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplicate }) {
   const grid = document.getElementById('library-grid');

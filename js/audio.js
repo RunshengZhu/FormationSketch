@@ -1,16 +1,26 @@
-// 音频：文件加载、波形峰值、播放控制、节拍器点击声
+// 音频：媒体资产库（v3 多资产）、文件加载、波形峰值、播放控制、节拍器点击声
+// v3（exp/audition-lite）：AudioController 升级为「会话资产库」——assets: Map(id→资产)，
+// 活动资产（配乐）沿用 el/<audio> 旧通道（试听/旧播放路径零改动）；clip 播放走
+// ClipTransport（audio-clips.js，WebAudio BufferSource 调度），buffer 解码失败时自动
+// 回退 el 旧通道（降级可用）。
+import { ClipTransport, computeWaveEnvelope } from './audio-clips.js';
+
 export class AudioController {
   constructor() {
     this.el = new Audio();
     this.el.preload = 'auto';
     this.ctx = null;
-    this.peaks = null;        // Float32Array，长度 N，值 -1..1
+    this.peaks = null;        // 活动资产波形（Float32Array，值 0..1，旧 drawWave 用）
     this.duration = 0;
     this.url = null;
     this.name = '';
     this.ready = false;
-    this.blob = null;         // 当前会话的音频源 Blob：下载版（file://→localStorage）不落盘，
-                              // 「导出 ▾」含音乐需要从这里兜底取（DEFECT-R26-2，与在线 IndexedDB 行为对齐）
+    this.blob = null;         // 活动资产源 Blob：下载版（file://→localStorage）不落盘，
+                              // 「导出 ▾」含音乐需要从这里兜底取（DEFECT-R26-2）
+    // ---- v3 媒体资产库 ----
+    this.assets = new Map();  // id → {id,name,durationSec,size,blob,buffer,peaks,env}
+    this.activeId = null;
+    this.transport = null;    // ClipTransport（懒建）
   }
   ensureCtx() {
     if (!this.ctx) {
@@ -20,45 +30,95 @@ export class AudioController {
     if (this.ctx?.state === 'suspended') this.ctx.resume();
     return this.ctx;
   }
-  async loadBlob(blob, name = '') {
-    // 任务#3（报告#3）：失败不破坏当前会话——先在临时 <audio> 上等元数据，成功后才替换旧会话。
-    // 旧实现先 dispose() 再等元数据，损坏音频 reject 后播放器留下 ready=false 的空会话，
-    // 播放中载入即僵死（playing=true 空转）；现在失败时旧音乐照常可用。
-    const el = new Audio();
-    el.preload = 'auto';
-    const url = URL.createObjectURL(blob);
-    el.src = url;
-    try {
-      await new Promise((resolve, reject) => {
-        el.addEventListener('loadedmetadata', resolve, { once: true });
-        el.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
-      });
-    } catch (e) {
-      URL.revokeObjectURL(url);
-      throw e;
-    }
-    this.dispose(); // 元数据确认可解码后才提交：清旧会话（旧 url/blob/peaks/旧元素）
-    this.el = el;
-    this.blob = blob; // 会话内保留原始 Blob（导出含乐兜底用；dispose 时清空）
-    this.url = url;
-    this.name = name || blob.name || 'audio';
-    this.duration = this.el.duration || 0;
-    // 波形（失败不阻塞，仅无波形显示）
+  get activeAsset() { return this.activeId != null ? (this.assets.get(this.activeId) || null) : null; }
+  // 活动资产已解码出 AudioBuffer → clip 通道可用；false 时播放回退 el 旧通道
+  get bufferReady() { return !!this.activeAsset?.buffer; }
+
+  // 导入一个媒体资产：解码（AudioBuffer + 波形包络一次性计算）；失败仍登记元数据（buffer=null，
+  // 只能作元数据展示，播放回退）。返回资产对象。
+  async addAsset(blob, name = '', id = null) {
+    const asset = {
+      id: id || `ast_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      name: name || blob.name || 'audio',
+      durationSec: 0,
+      size: blob.size || 0,
+      blob, buffer: null, peaks: null, env: null,
+    };
     try {
       const ab = await blob.arrayBuffer();
       this.ensureCtx();
-      const buf = await this.ctx.decodeAudioData(ab);
-      this.peaks = computePeaks(buf, 1800);
-      this.duration = buf.duration;
-    } catch { this.peaks = null; }
-    // FIX-R34-1：ready 置位移到波形解码之后。旧实现 ready 先置位，而 loadAudioFile 的
-    // 项目字段提交（p.audio.name）要等 loadBlob 返回——中间隔着整段 decodeAudioData
-    //（长曲数百毫秒）。用户在此窗口按 ▶：useAudio 仍为 false → 虚拟时钟起播；随后
-    // name 提交使 useAudio 翻真，_tick 误判「音频通道停了」自愈暂停 → 播放刚起即停。
-    // ready 与项目字段提交顺序对齐后，竞态窗口闭合。
+      const buf = await this.ctx.decodeAudioData(ab.slice(0));
+      asset.buffer = buf;
+      asset.durationSec = buf.duration;
+      asset.peaks = computePeaks(buf, 1800);
+      asset.env = computeWaveEnvelope(buf, 512);
+    } catch {
+      // 解码失败：用 <audio> 元数据兜底时长（播放不可用，走 el 通道的旧路径也不可用此资产）
+      try {
+        const probe = new Audio();
+        probe.preload = 'metadata';
+        probe.src = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          probe.addEventListener('loadedmetadata', resolve, { once: true });
+          probe.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
+          setTimeout(() => reject(new Error('音频元数据超时')), 4000);
+        });
+        asset.durationSec = probe.duration || 0;
+        URL.revokeObjectURL(probe.src);
+      } catch { /* 元数据也拿不到：durationSec=0 */ }
+    }
+    this.assets.set(asset.id, asset);
+    return asset;
+  }
+  // 设活动资产（配乐）：同步旧通道字段（el/peaks/duration/blob/ready）——旧播放路径零改动
+  setActiveAsset(id) {
+    const a = this.assets.get(id);
+    if (!a) return false;
+    this.dispose(); // 清旧 el 会话（旧 url/peaks）；资产库不动
+    this.activeId = id;
+    this.el = new Audio();
+    this.el.preload = 'auto';
+    this.url = URL.createObjectURL(a.blob);
+    this.el.src = this.url;
+    this.blob = a.blob;
+    this.peaks = a.peaks;
+    this.duration = a.durationSec;
+    this.name = a.name;
     this.ready = true;
+    return true;
+  }
+  // 旧入口兼容：载入并设为活动资产（「载入音乐…」/导入回填/自动恢复共用）
+  async loadBlob(blob, name = '', id = null) {
+    const asset = await this.addAsset(blob, name, id);
+    this.setActiveAsset(asset.id);
     return this;
   }
+  // ---- v3 clip 通道（Player 调用；buffer 未就绪返回 false → Player 回退 el 通道） ----
+  ensureTransport() {
+    if (!this.transport) {
+      this.transport = new ClipTransport({ getContext: () => this.ensureCtx(), destination: () => this.ensureCtx()?.destination });
+    }
+    return this.transport;
+  }
+  resolveAssetBuffer(assetId) {
+    const a = this.assets.get(assetId);
+    return a?.buffer || null;
+  }
+  playClips(clips, fromSec, rate = 1) {
+    const t = this.ensureTransport();
+    return t.play(clips, { from: fromSec, rate, resolveBuffer: id => this.resolveAssetBuffer(id) });
+  }
+  seekClips(sec, rate = this.transport?.rate ?? 1) {
+    if (!this.transport?.playing) return;
+    const clipsRef = this.transport._clips;
+    this.transport.play(clipsRef, { from: sec, rate, resolveBuffer: id => this.resolveAssetBuffer(id) });
+  }
+  stopClips() { this.transport?.stopInternal(); }
+  get clipsPlaying() { return !!(this.transport?.playing); }
+  get clipsPosition() { return this.transport?.position ?? 0; }
+  setTrackGain(g) { this.transport?.setTrackGain(g); }
+  setTrackMuted(m) { this.transport?.setTrackMuted(m); }
+
   play(offsetSec, rate = 1) {
     this.el.playbackRate = rate;
     this.el.currentTime = Math.max(0, Math.min(offsetSec, this.duration || offsetSec));
@@ -93,6 +153,8 @@ export class AudioController {
     this.url = null; this.peaks = null; this.ready = false; this.duration = 0; this.blob = null;
   }
 }
+
+// 波形峰值（活动资产 0..1 归一化，旧 drawWave 用；clip 绘制用资产 env，见 audio-clips.computeWaveEnvelope）
 export function computePeaks(audioBuffer, buckets = 1800) {
   const ch = audioBuffer.getChannelData(0);
   const per = Math.floor(ch.length / buckets) || 1;

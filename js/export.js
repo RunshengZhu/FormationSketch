@@ -54,10 +54,29 @@ export function exportPNG(project, formation, theme = 'dark') {
   const cv = renderFormation(project, formation, { theme });
   cv.toBlob(blob => download(blob, `${safeName(project.meta.title)}-${safeName(formation.name)}.png`));
 }
-// includeAudio=true 时把音乐以 base64 内嵌进项目文件（格式 v2），导入后无需重新找音乐
-export async function exportProjectJSON(project, audioBlob, { share = false } = {}) {
+// includeAudio=true 时把音乐以 base64 内嵌进项目文件（格式 v2），导入后无需重新找音乐。
+// v3：内嵌**全部媒体资产**（data.media.assets[i].dataBase64/dataFormat）；audio.dataBase64
+// 仅在活动资产 blob 未随资产内嵌时兜底写入（避免单资产项目体积翻倍）。旧版本应用导入
+// 新 v2 文件会丢配乐（实验分支接受；本应用读旧 v2/v1 文件全兼容）。
+// opts.assets = [{ id, name, durationSec, size, blob }]（缺失 blob 的资产跳过内嵌，仅元数据随行）。
+export async function exportProjectJSON(project, audioBlob, { share = false, assets = null } = {}) {
   const data = cloneBasic(project);
-  if (audioBlob) {
+  let embeddedActive = false;
+  if (assets && assets.some(a => a.blob)) {
+    data.version = 2;
+    if (data.media && Array.isArray(data.media.assets)) {
+      for (const a of data.media.assets) {
+        const src = (assets || []).find(x => x.id === a.id);
+        if (src?.blob) {
+          a.dataBase64 = await blobToBase64(src.blob);
+          a.dataFormat = src.blob.type || 'audio/mpeg';
+          if (!a.size) a.size = src.blob.size;
+          if (src.blob === audioBlob) embeddedActive = true;
+        }
+      }
+    }
+  }
+  if (audioBlob && !embeddedActive) {
     data.version = 2;
     data.audio.dataBase64 = await blobToBase64(audioBlob);
     data.audio.dataFormat = audioBlob.type || 'audio/mpeg';
@@ -66,7 +85,7 @@ export async function exportProjectJSON(project, audioBlob, { share = false } = 
   const filename = `${safeName(project.meta.title)}.formation.json`;
   if (share) await shareOrDownload(blob, filename);
   else download(blob, filename);
-  return { withAudio: !!audioBlob, bytes: blob.size };
+  return { withAudio: !!(audioBlob || (assets && assets.some(a => a.blob))), bytes: blob.size };
 }
 function cloneBasic(project) {
   // 音频不内嵌（体积大），仅记录元信息
@@ -79,6 +98,21 @@ export async function readProjectFile(file) {
   let json;
   try { json = JSON.parse(text); } catch { throw new Error('不是合法的 JSON 文件'); }
   // v2 格式：先提取内嵌音乐（validate 会剥离内嵌字段），还原为 Blob
+  // v3：data.media.assets[i].dataBase64 = 多资产内嵌；audio.dataBase64 = 旧单音频内嵌（兼容读）
+  const assetBlobs = [];
+  for (const a of (json.media && Array.isArray(json.media.assets) ? json.media.assets : [])) {
+    if (a && a.dataBase64) {
+      try {
+        assetBlobs.push({
+          id: typeof a.id === 'string' ? a.id : null,
+          name: String(a.name || 'audio'),
+          blob: base64ToBlob(String(a.dataBase64), a.dataFormat || 'audio/mpeg'),
+        });
+      } catch {}
+      delete a.dataBase64;
+      delete a.dataFormat;
+    }
+  }
   let audioBlob = null;
   if (json.audio && json.audio.dataBase64) {
     audioBlob = base64ToBlob(String(json.audio.dataBase64), json.audio.dataFormat || 'audio/mpeg');
@@ -87,7 +121,7 @@ export async function readProjectFile(file) {
   }
   const r = validateProject(json);
   if (!r.ok) throw new Error(r.errors.join('；'));
-  return { project: r.project, audioBlob };
+  return { project: r.project, audioBlob, assetBlobs };
 }
 
 // 打印 / PDF：每队形一页

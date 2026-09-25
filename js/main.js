@@ -6,12 +6,15 @@ import { StageView, drawScene } from './stage.js';
 import { EditStrip, MusicTimeline } from './timeline.js';
 import { AudioController } from './audio.js';
 import { Player } from './player.js';
+import { autoSplitAtBoundaries, clipEnd, lastClipEndSec, CLIP_COLORS } from './audio-clips.js';
+import { uid } from './model.js';
 import * as exp from './export.js';
-import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } from './ui.js';
+import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel,
+  showMediaLibraryModal, showContextMenu, closeContextMenu, fmtSize } from './ui.js';
 import { renderManual } from './manual.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-30-batches';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-30-batches');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-31-audition';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-31-audition');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -352,9 +355,21 @@ export async function runDeeplinkImport(deps) {
   let json;
   try { json = JSON.parse(await resp.text()); }
   catch { return done({ status: 'error', reason: 'parse', message: '深链导入失败：文件不是合法 JSON' }); }
-  // v2 项目文件可内嵌音乐（dataBase64）：validateProject 会剥离该字段，先还原为 Blob，导入后回填
+  // v2 项目文件可内嵌音乐：v3 多资产（media.assets[i].dataBase64）+ 旧单音频（audio.dataBase64）。
+  // validateProject 会剥离内嵌字段，先还原为 Blob，导入后回填。
   let audioBlob = null;
+  const assetBlobs = [];
   try {
+    for (const a of (json?.media?.assets || [])) {
+      if (a && a.dataBase64) {
+        const bin = atob(String(a.dataBase64));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        assetBlobs.push({ id: typeof a.id === 'string' ? a.id : null, name: String(a.name || 'audio'), blob: new Blob([bytes], { type: a.dataFormat || 'audio/mpeg' }) });
+        delete a.dataBase64;
+        delete a.dataFormat;
+      }
+    }
     if (json && json.audio && json.audio.dataBase64) {
       const bin = atob(String(json.audio.dataBase64));
       const bytes = new Uint8Array(bin.length);
@@ -363,14 +378,18 @@ export async function runDeeplinkImport(deps) {
       delete json.audio.dataBase64;
       delete json.audio.dataFormat;
     }
-  } catch { audioBlob = null; }
+  } catch { audioBlob = audioBlob || null; }
   const r = deps.validate(json);
   if (!r.ok) return done({ status: 'error', reason: 'validate', errors: r.errors, message: `深链导入失败：${r.errors[0] || '项目校验未通过'}` });
   deps.importProject(r.project);
+  if (assetBlobs.length) {
+    try { await deps.onAssets?.(assetBlobs, r.project); } catch {}
+  }
   if (audioBlob) { try { await deps.onAudio?.(audioBlob); } catch {} }
   const title = r.project.meta.title || '导入项目';
-  deps.toast?.(`已导入项目：${title}${audioBlob ? '（音乐已恢复）' : ''}`);
-  return done({ status: 'imported', title, hasAudio: !!audioBlob, project: r.project });
+  const restored = assetBlobs.length ? true : !!audioBlob;
+  deps.toast?.(`已导入项目：${title}${restored ? '（音乐已恢复）' : ''}`);
+  return done({ status: 'imported', title, hasAudio: restored, project: r.project });
 }
 async function wireDeeplinkImport() {
   try {
@@ -380,10 +399,9 @@ async function wireDeeplinkImport() {
       fetchImpl: (u, o) => fetch(u, o),
       validate: M.validateProject,
       importProject: p => { player?.stop(); store.importProject(p); },
+      onAssets: assetBlobs => restoreProjectAudio(assetBlobs, null), // v3 多资产内嵌回填（id 保持）
       onAudio: async blob => { // 与「导入项目文件…」同语义：内嵌音乐回填到新项目 id
-        await store.storage.putAudio(store.getState().projectId, blob);
-        // DEFECT-R26-3 同源：下载版存储往返不可用，直接回填会话音频（在线通道行为不变）
-        await audio.loadBlob(blob, store.getState().project?.audio?.name || blob.name || '').catch(() => {});
+        await restoreProjectAudio([], blob);
       },
       toast,
       replaceState: cleaned => history.replaceState(null, '', cleaned),
@@ -505,17 +523,70 @@ function buildStrips() {
     canvas: $('tl-canvas'), overlay: $('tl-overlay'), scroll: $('tl-scroll'),
     hooks: {
       getProject: () => store.getState().project,
+      getProjectId: () => store.getState().projectId,
       getPlayer: () => player,
       audio,
       getIndex: () => store.getState().formationIndex,
       ripple: () => store.getState().ripple,
+      canEdit: () => store.getState().editMode, // 编辑锁：关闭=clip 编辑禁用（选择/预览可用）
+      pauseIfPlaying: () => { if (player.playing || player.countin) player.pause(); }, // 守卫：播放中先自动暂停
       onSelectFormation: i => switchFormation(i),
       mutate: fn => store.mutate(fn, null),
       mutateLabeled: (fn, label) => store.mutate(fn, label), // 标记打点/改名/删除：单操作即时一条历史
       commitEdit: label => { store.commit(label); syncLoopAfterBlockEdit(); }, // 拖边改时长后循环区间跟随（DEFECT-R26-4）
       seekBeat: b => player.seekBeat(Math.max(0, b)),
+      toast,
+      onTimeSelection: applyTimeSelLoop,   // C11：播放限制在选区=临时循环
+      previewClip,                          // C12：双击 clip=选中并循环预览
+      onClipContextMenu: showClipMenu,      // §4：右键菜单
     },
   });
+}
+// ---- v3：时间选区临时循环 / clip 循环预览 ----
+function applyTimeSelLoop(range) {
+  if (!player) return;
+  const p = store.getState().project;
+  if (!p) return;
+  if (range && range.end - range.start > 0.05) {
+    player.setLoop(true, Math.max(0, M.secToBeat(p, range.start)), Math.max(0, M.secToBeat(p, range.end)));
+  } else if ($('pb-loop')?.checked) updateLoop();
+  else player.setLoop(false, 0, 0);
+}
+function previewClip(clip) {
+  if (!clip) return;
+  player.pause();
+  const p = store.getState().project;
+  if (!p) return;
+  const b0 = Math.max(0, M.secToBeat(p, clip.timelineStartSec));
+  const b1 = Math.max(b0 + 0.01, M.secToBeat(p, clipEnd(clip)));
+  player.setLoop(true, b0, b1);
+  player.play(b0, { countIn: false });
+  toast(`循环预览「${clip.name || '音频剪辑'}」——停止后恢复循环设置`);
+}
+// ---- v3：音频剪辑右键菜单（规格 §4） ----
+function showClipMenu({ clipId, screenX, screenY }) {
+  const p = store.getState().project;
+  if (!p) return;
+  if (!clipId) {
+    showContextMenu([{ label: '取消选择', fn: () => musicTl.clearClipSelection() }], { x: screenX, y: screenY });
+    return;
+  }
+  if (!musicTl.clipSel.has(clipId)) { musicTl.clipSel = new Set([clipId]); musicTl.render(); }
+  const clip = M.clipById(p, clipId);
+  if (!clip) return;
+  const swatches = h('div', { class: 'ctx-swatches' },
+    ...CLIP_COLORS.map(c => h('button', { class: 'ctx-sw', style: `background:${c}`, title: '剪辑颜色', onclick: () => { closeContextMenu(); musicTl.setSelectedColor(c); } })));
+  showContextMenu([
+    { label: '分割于播放头(K)', fn: () => musicTl.splitAtPlayhead() },
+    { label: '修剪到时间选区', fn: () => musicTl.trimSelectedToTimeSel() },
+    { label: clip.muted ? '取消静音' : '静音', fn: () => musicTl.toggleMuteSelected() },
+    { label: '波纹删除', fn: () => musicTl.deleteSelected(true) },
+    { label: '删除', danger: true, fn: () => musicTl.deleteSelected(false) },
+    { sep: true },
+    { label: '重命名', fn: () => { const n = prompt('剪辑名称', clip.name || ''); if (n && n.trim()) musicTl.renameSelected(n); } },
+    { el: swatches },
+    { label: '增益重置', fn: () => musicTl.resetGainSelected() },
+  ], { x: screenX, y: screenY });
 }
 // 手动切换队形帧：更新选中；若开启切帧预览，播放一段纯舞台 UI 动画（不经播放引擎、不动播放头/时间线）
 function switchFormation(i) {
@@ -585,8 +656,7 @@ function wireTopbar() {
     try { exp.printFormations(store.getState().project, 'light'); } catch (e) { toast(e.message); }
   });
   // 取「应当随项目导出」的音频 Blob：优先本地存储（在线=IndexedDB）；下载版（file://→localStorage）
-  // 音频不落盘、getAudio 恒为 null → 回退当前会话 AudioController 手里的 Blob（DEFECT-R26-2：
-  // 否则下载版「含音乐导出」永远导不出音乐，文档承诺的「含乐导出兜底配乐不持久」失效）。
+  // 音频不落盘、getAudio 恒为 null → 回退当前会话 AudioController 手里的 Blob（DEFECT-R26-2：）
   async function getExportAudioBlob() {
     const s = store.getState();
     let blob = null;
@@ -594,14 +664,33 @@ function wireTopbar() {
     if (!blob && audio?.ready && audio.blob) blob = audio.blob;
     return blob;
   }
+  // v3：收集全部媒体资产 blob（存储层优先，会话兜底）——含乐导出 v2 内嵌全部资产
+  async function getExportAssets() {
+    const s = store.getState();
+    const out = [];
+    for (const a of s.project?.media?.assets || []) {
+      let blob = null;
+      try { blob = await store.storage.getAsset(s.projectId, a.id); } catch {}
+      if (!blob) blob = audio?.assets?.get(a.id)?.blob || null;
+      out.push({ id: a.id, name: a.name, durationSec: a.durationSec, size: a.size || blob?.size || 0, blob });
+    }
+    return out;
+  }
   const doExportJSON = async (includeAudio, share) => {
     const s = store.getState();
-    const blob = includeAudio ? await getExportAudioBlob() : null; // 任务#1：不含乐=明确不取 blob，导出 v1
-    const res = await exp.exportProjectJSON(s.project, blob, { share });
+    let blob = null, assets = null;
+    if (includeAudio) {
+      assets = await getExportAssets();
+      const act = s.project?.media?.activeAssetId;
+      blob = assets.find(a => a.id === act)?.blob || null;
+      if (!blob) blob = await getExportAudioBlob(); // legacy 键兜底（如项目未经资产迁移）
+    }
+    const res = await exp.exportProjectJSON(s.project, blob, { share, assets });
     if (res === 'cancelled') return;
     const how = res === 'shared' ? '已通过系统分享发送' : '已导出';
     // 任务#1（报告#1）：按钮语义与行为严格对齐——不含乐导出在 toast 里明示可后补音乐
-    const what = includeAudio && blob ? '（含音乐）' : '（不含音乐，可稍后重新载入）';
+    const nAssets = (assets || []).filter(a => a.blob).length;
+    const what = includeAudio && (blob || nAssets) ? `（含音乐${nAssets > 1 ? `：${nAssets} 个资产` : ''}）` : '（不含音乐，可稍后重新载入）';
     toast(`${how}项目文件${what}`);
   };
   $('exp-json-audio').addEventListener('click', async () => {
@@ -621,19 +710,12 @@ function wireTopbar() {
     inp.addEventListener('change', async () => {
       if (!inp.files[0]) return;
       try {
-        const { project, audioBlob } = await exp.readProjectFile(inp.files[0]);
+        const { project, audioBlob, assetBlobs } = await exp.readProjectFile(inp.files[0]);
         store.importProject(project);
         player.stop();
-        if (audioBlob) {
-          await store.storage.putAudio(store.getState().projectId, audioBlob);
-          // DEFECT-R26-3：直接回填当前会话音频通道，不再依赖存储往返——下载版（file://→localStorage）
-          // putAudio/getAudio 均为 no-op，只走 restoreAudio 会导致「含乐文件导入后音乐仍丢失」，
-          // 与文档「导入成功（音乐已一并恢复）」承诺相悖；在线通道经此路径行为不变。
-          await audio.loadBlob(audioBlob, store.getState().project.audio.name || audioBlob.name || '').catch(() => {});
-          toast('导入成功（音乐已一并恢复）');
-        } else {
-          toast('导入成功（该项目文件不含音乐，请重新载入音乐）');
-        }
+        const restored = await restoreProjectAudio(assetBlobs || [], audioBlob);
+        if (restored && (assetBlobs?.length || audioBlob)) toast('导入成功（音乐已一并恢复）');
+        else toast('导入成功（该项目文件不含音乐，请重新载入音乐）');
       } catch (e) { toast('导入失败：' + e.message); }
     });
     inp.click();
@@ -972,17 +1054,114 @@ function wireAudioPanel() {
   $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
   $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
   $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
+  // ---- v3 音频轨 ----
+  $('tl-audio-toggle').addEventListener('click', () => musicTl?.setExpanded(!musicTl.expanded));
+  $('tl-empty-load').addEventListener('click', () => $('audio-file').click());
+  $('tl-empty-library').addEventListener('click', openMediaLibrary);
+  $('btn-media-library').addEventListener('click', openMediaLibrary);
+  $('btn-auto-split').addEventListener('click', autoSplitByFormations);
+  $('media-files').addEventListener('change', async () => {
+    const files = [...$('media-files').files];
+    $('media-files').value = '';
+    if (files.length) await importMediaFiles(files);
+  });
+  buildAudioHead();
+  // C13：拖资产/音频文件到时间轴音轨 = 落点生成 clip
+  const tlScroll = $('tl-scroll');
+  tlScroll.addEventListener('dragover', e => {
+    if (e.dataTransfer && (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/x-wuzhen-asset'))) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  });
+  tlScroll.addEventListener('drop', async e => {
+    const hasFiles = [...(e.dataTransfer?.types || [])].includes('Files');
+    const assetId = e.dataTransfer?.getData('text/x-wuzhen-asset');
+    if (!hasFiles && !assetId) return;
+    e.preventDefault();
+    const sec = musicTl.secFromClientX(e.clientX);
+    const file = e.dataTransfer?.files?.[0] || null;
+    await createClipFromDrop(assetId || null, sec, hasFiles ? file : null);
+  });
   window.addEventListener('resize', () => { stageView?.requestDraw(); musicTl?.render(); });
+}
+// ---- v3 展开态音轨表头（120px，DOM 层）：资产名/时长/音量滑杆/静音/收起 ----
+let headRefs = null;
+const TRACK_LS_KEY = 'wuzhen:audioTrackMix';
+function trackMix() {
+  try { return JSON.parse(localStorage.getItem(TRACK_LS_KEY)) || {}; } catch { return {}; }
+}
+function buildAudioHead() {
+  const head = $('tl-head');
+  if (!head || headRefs) return;
+  head.innerHTML = '';
+  const name = h('div', { class: 'tlh-name', title: '配乐资产（点击打开媒体库）' }, '—');
+  name.addEventListener('click', openMediaLibrary);
+  const dur = h('div', { class: 'tlh-dur' }, '');
+  const mix = trackMix();
+  const vol = h('input', { type: 'range', min: '0', max: '1.5', step: '0.01', value: String(mix.gain ?? 1), title: '音轨音量' });
+  vol.addEventListener('input', () => {
+    const g = +vol.value;
+    audio.setTrackGain(g);
+    try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), gain: g })); } catch {}
+  });
+  const muteBtn = h('button', { class: 'btn', title: '音轨静音' }, '🔇');
+  const setMuteUI = m => { muteBtn.classList.toggle('toggled-on', !!m); muteBtn.textContent = m ? '🔇' : '🔊'; };
+  muteBtn.addEventListener('click', () => {
+    const m = !trackMix().muted;
+    audio.setTrackMuted(m);
+    setMuteUI(m);
+    try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), muted: m })); } catch {}
+  });
+  setMuteUI(!!mix.muted);
+  audio.ensureTransport(); // 懒建 transport：滑杆/静音在首次播放前也能即时生效
+  audio.setTrackGain(mix.gain ?? 1);
+  audio.setTrackMuted(!!mix.muted);
+  const collapse = h('button', { class: 'btn', title: '收起音频轨（回到简单态）' }, '⌃ 收起');
+  collapse.addEventListener('click', () => musicTl?.setExpanded(false));
+  head.append(
+    name, dur,
+    h('div', { class: 'tlh-row' }, h('span', { class: 'dim', style: 'font-size:10px' }, '音量'), vol),
+    h('div', { class: 'tlh-row' }, muteBtn, collapse));
+  headRefs = { name, dur };
+}
+function updateAudioHead() {
+  if (!headRefs) return;
+  const p = store.getState().project;
+  const act = M.activeAssetOf(p);
+  const nm = act?.name || p?.audio?.name || '未载入音乐';
+  if (headRefs.name.textContent !== nm) headRefs.name.textContent = nm;
+  headRefs.name.title = `${nm}（点击打开媒体库）`;
+  const d = act?.durationSec ?? p?.audio?.durationSec ?? 0;
+  headRefs.dur.textContent = d ? `${d.toFixed(1)}s` : '';
 }
 async function loadAudioFile(file) {
   // 任务#21（报告#21）：换曲前先停——旧实现播放中换曲会静默中断且无提示
   const wasPlaying = !!(player.playing || player.countin);
   if (wasPlaying) player.pause();
   try {
-    await audio.loadBlob(file); // 任务#3：失败时旧会话原样保留（audio.js 非破坏载入），项目 audio 字段不推进
-    const dur = audio.duration;
-    store.mutate(p => { p.audio.name = file.name; p.audio.durationSec = dur; }, '载入音乐');
-    await store.storage.putAudio(store.getState().projectId, file);
+    // v3：走资产库——解码入会话资产 Map（buffer+波形包络），并设为配乐；项目记录登记
+    // 元数据，首个音频若无任何 clip 则补全长 clip（与 v1 迁移语义逐拍等价，零体验变化）。
+    const asset = await audio.addAsset(file, file.name);
+    if (!asset.durationSec) throw new Error('音频无法解码');
+    const prevActiveId = audio.activeId;
+    audio.setActiveAsset(asset.id);
+    store.mutate(p => {
+      p.audio.name = file.name;
+      p.audio.durationSec = asset.durationSec;
+      p.media = p.media || { assets: [], activeAssetId: null };
+      let meta = p.media.assets.find(a => a.id === asset.id);
+      if (!meta) { meta = { id: asset.id, name: file.name, durationSec: asset.durationSec, size: file.size }; p.media.assets.push(meta); }
+      p.media.activeAssetId = asset.id;
+      // 「载入音乐」=替换配乐（旧语义）：移除引用旧配乐的 clip，补新资产全长 clip
+      //（媒体库导入不在此列，不动既有剪辑）
+      p.timeline.audioClips = p.timeline.audioClips.filter(c => c.assetId !== prevActiveId);
+      if (asset.durationSec > 0.005) {
+        p.timeline.audioClips.push({ id: uid('clip'), assetId: asset.id, timelineStartSec: 0, srcStartSec: 0, lengthSec: Math.round(asset.durationSec * 1e6) / 1e6, fadeInSec: 0, fadeOutSec: 0, gain: 1, name: file.name });
+      }
+    }, '载入音乐');
+    await store.storage.putAsset(store.getState().projectId, asset.id, file);
+    await store.storage.putAudio(store.getState().projectId, file); // legacy 键兜底（旧语义保留）
     toast(`音乐已载入：${file.name}${wasPlaying ? '（播放已停止）' : ''}`);
   } catch (e) {
     // 任务#3（报告#3）：损坏音频不再僵死——播放已停、按钮经 onStateChange 复位 ▶、
@@ -990,13 +1169,210 @@ async function loadAudioFile(file) {
     toast('音频无法播放，已忽略');
   }
 }
+// 自动恢复上次项目时同步恢复音频：v3 先逐个还原媒体资产（clip 通道需要各资产 buffer），
+// 再设活动资产；旧档（legacy audio 键）兜底。
 async function restoreAudio() {
   const s = store.getState();
-  if (!s.project?.audio?.name) return;
+  const p = s.project;
+  if (!p?.audio?.name) return;
+  const assets = p.media?.assets || [];
+  for (const a of assets) {
+    if (audio.assets.has(a.id)) continue;
+    try {
+      const blob = await store.storage.getAsset(s.projectId, a.id);
+      if (blob) await audio.addAsset(blob, a.name, a.id);
+    } catch {}
+  }
+  const act = assets.find(a => a.id === p.media?.activeAssetId) || assets[0] || null;
+  if (act && audio.assets.get(act.id)?.buffer) { audio.setActiveAsset(act.id); return; }
+  if (act && audio.assets.has(act.id)) { audio.setActiveAsset(act.id); return; } // 元数据兜底（解码失败的资产照常展示）
   try {
     const blob = await store.storage.getAudio(s.projectId);
-    if (blob) await audio.loadBlob(blob, s.project.audio.name);
+    if (blob) await audio.loadBlob(blob, p.audio.name);
   } catch {}
+}
+// ---- v3 媒体资产往返（导入文件/深链/媒体库共用）----
+// assetBlobs=[{id,name,blob}]；legacyBlob=旧 v2 单音频。资产 id 保持项目记录引用一致。
+async function restoreProjectAudio(assetBlobs, legacyBlob) {
+  const s = store.getState();
+  const pid = s.projectId;
+  const p = s.project;
+  const assets = p?.media?.assets || [];
+  for (const ab of assetBlobs) {
+    if (!ab.blob) continue;
+    try {
+      const meta = assets.find(a => a.id === ab.id);
+      await audio.addAsset(ab.blob, meta?.name || ab.name, ab.id || undefined);
+      if (ab.id) await store.storage.putAsset(pid, ab.id, ab.blob);
+    } catch {}
+  }
+  if (!assetBlobs.length && legacyBlob) {
+    // 旧 v2 单音频：还原为项目记录里那个资产（v1 迁移产物）的同 id；无资产记录时走 legacy
+    if (assets.length === 1) {
+      try {
+        await audio.addAsset(legacyBlob, assets[0].name, assets[0].id);
+        await store.storage.putAsset(pid, assets[0].id, legacyBlob);
+        await store.storage.putAudio(pid, legacyBlob);
+      } catch {}
+    } else {
+      try { await store.storage.putAudio(pid, legacyBlob); } catch {}
+      await audio.loadBlob(legacyBlob, p?.audio?.name || legacyBlob.name || '').catch(() => {});
+    }
+  }
+  const act = assets.find(a => a.id === p?.media?.activeAssetId) || assets[0] || null;
+  if (act && audio.assets.has(act.id)) audio.setActiveAsset(act.id);
+  return !!(act || legacyBlob);
+}
+
+// ---- v3 媒体库（规格 §3）----
+function openMediaLibrary() {
+  showMediaLibraryModal({
+    getProject: () => store.getState().project,
+    toast,
+    acts: {
+      importFiles: files => importMediaFiles(files),
+      setActive: id => setActiveAssetFlow(id),
+      rename: id => {
+        const a = store.getState().project?.media?.assets?.find(x => x.id === id);
+        if (!a) return;
+        const n = prompt('资产名称', a.name);
+        if (n && n.trim()) {
+          store.mutate(p => { const m = p.media.assets.find(x => x.id === id); if (m) m.name = n.trim().slice(0, 120); }, '重命名音频资产');
+          const sa = audio.assets.get(id); if (sa) sa.name = n.trim().slice(0, 120);
+        }
+      },
+      remove: id => removeAssetFlow(id),
+      hasBlob: id => !!audio.assets.get(id)?.blob,
+      pickFiles: () => $('media-files').click(),
+    },
+  });
+}
+async function importMediaFiles(files) {
+  const list = [...files].filter(f => !f.type || f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
+  if (!list.length) { toast('未识别到音频文件'); return; }
+  const wasPlaying = !!(player.playing || player.countin);
+  if (wasPlaying) player.pause();
+  let first = null;
+  for (const f of list) {
+    try {
+      const asset = await audio.addAsset(f, f.name);
+      if (!asset.durationSec) throw new Error('无法解码');
+      first = first || asset;
+      store.mutate(p => {
+        p.media = p.media || { assets: [], activeAssetId: null };
+        if (!p.media.assets.some(a => a.id === asset.id)) {
+          p.media.assets.push({ id: asset.id, name: f.name, durationSec: asset.durationSec, size: f.size });
+        }
+        // 项目原本无配乐：首个导入资产成为配乐并补全长 clip（等价 v1 迁移语义）
+        if (!p.audio.name) {
+          p.audio.name = f.name;
+          p.audio.durationSec = asset.durationSec;
+          p.media.activeAssetId = asset.id;
+          if (!p.timeline.audioClips.length) {
+            p.timeline.audioClips.push({ id: uid('clip'), assetId: asset.id, timelineStartSec: 0, srcStartSec: 0, lengthSec: Math.round(asset.durationSec * 1e6) / 1e6, fadeInSec: 0, fadeOutSec: 0, gain: 1, name: f.name });
+          }
+        }
+      }, '导入音频资产');
+      await store.storage.putAsset(store.getState().projectId, asset.id, f);
+    } catch { toast(`「${f.name}」无法解码，已跳过`); }
+  }
+  if (first && !audio.activeId) { try { audio.setActiveAsset(first.id); } catch {} }
+  toast(`已导入 ${list.length} 个音频文件到媒体库`);
+}
+function setActiveAssetFlow(id) {
+  const a = audio.assets.get(id);
+  const meta = store.getState().project?.media?.assets?.find(x => x.id === id);
+  if (!a && !meta) return;
+  if (a) audio.setActiveAsset(id);
+  store.mutate(p => {
+    p.media.activeAssetId = id;
+    if (a) { p.audio.name = a.name; p.audio.durationSec = a.durationSec; }
+  }, '切换配乐');
+  toast(`配乐已切换：${a?.name || meta?.name}`);
+}
+function removeAssetFlow(id) {
+  const s = store.getState();
+  const p = s.project;
+  const a = p?.media?.assets?.find(x => x.id === id);
+  if (!a) return;
+  const isActive = p.media.activeAssetId === id;
+  if (isActive && !confirm(`删除当前配乐「${a.name}」？其全部剪辑将一并移除（可用撤销恢复）。`)) return;
+  store.mutate(pr => {
+    pr.media.assets = pr.media.assets.filter(x => x.id !== id);
+    pr.timeline.audioClips = pr.timeline.audioClips.filter(c => c.assetId !== id);
+    if (pr.media.activeAssetId === id) pr.media.activeAssetId = pr.media.assets[0]?.id ?? null;
+    if (!pr.media.assets.length) { pr.audio.name = ''; pr.audio.durationSec = 0; }
+    else if (pr.media.activeAssetId === pr.media.assets[0].id && !pr.audio.name) {
+      pr.audio.name = pr.media.assets[0].name;
+      pr.audio.durationSec = pr.media.assets[0].durationSec;
+    }
+  }, '删除音频资产');
+  audio.assets.delete(id);
+  if (audio.activeId === id) {
+    const next = store.getState().project?.media?.activeAssetId;
+    if (next && audio.assets.has(next)) audio.setActiveAsset(next);
+    else { audio.dispose(); audio.activeId = null; }
+  }
+  toast(`已删除资产「${a.name}」`);
+}
+// 媒体资产 → 音轨落点生成 clip（C13：媒体库拖入 / 文件拖入时间轴）
+async function createClipFromDrop(assetId, sec, file) {
+  const s = store.getState();
+  if (!s.editMode) { toast('编辑已关闭，无法放置剪辑'); return; }
+  if (player.playing || player.countin) player.pause();
+  let assetIdFinal = assetId;
+  if (file) {
+    try {
+      const asset = await audio.addAsset(file, file.name);
+      if (!asset.durationSec) throw new Error('无法解码');
+      assetIdFinal = asset.id;
+      store.mutate(p => {
+        p.media = p.media || { assets: [], activeAssetId: null };
+        if (!p.media.assets.some(a => a.id === asset.id)) p.media.assets.push({ id: asset.id, name: file.name, durationSec: asset.durationSec, size: file.size });
+        if (!p.audio.name) { p.audio.name = file.name; p.audio.durationSec = asset.durationSec; p.media.activeAssetId = asset.id; }
+      }, '导入音频资产');
+      await store.storage.putAsset(s.projectId, asset.id, file);
+    } catch { toast('音频无法解码，已忽略'); return; }
+  }
+  const p = store.getState().project;
+  const meta = p.media?.assets?.find(a => a.id === assetIdFinal);
+  if (!meta) { toast('资产不存在'); return; }
+  const sameCount = M.clipsOf(p).filter(c => c.assetId === assetIdFinal).length;
+  store.mutate(pr => {
+    pr.timeline.audioClips.push({
+      id: uid('clip'), assetId: assetIdFinal,
+      timelineStartSec: Math.max(0, Math.round(sec * 1e6) / 1e6), srcStartSec: 0,
+      lengthSec: meta.durationSec, fadeInSec: 0, fadeOutSec: 0, gain: 1,
+      name: `${meta.name}${sameCount ? ' ' + (sameCount + 1) : ''}`,
+    });
+  }, '放置音频剪辑');
+  const created = M.clipsOf(store.getState().project).at(-1);
+  if (created) { musicTl.clipSel = new Set([created.id]); musicTl.render(); }
+}
+// 「按队形段自动切」（P1 · C18）：块边界→分割点；段间交叉淡化时长=过渡拍
+function autoSplitByFormations() {
+  const s = store.getState();
+  const p = s.project;
+  if (!p) return;
+  if (!s.editMode) { toast('编辑已关闭，无法切分'); return; }
+  if (!M.clipsOf(p).length) { toast('请先载入音乐'); return; }
+  if (player.playing || player.countin) player.pause();
+  const { segments } = M.computeSegments(p);
+  const times = [];
+  for (let i = 1; i < segments.length; i++) {
+    const prev = segments[i - 1];
+    times.push({
+      t: M.beatToSec(p, segments[i].holdStart),
+      fade: prev.hasTravel ? M.beatToSec(p, prev.travelEnd) - M.beatToSec(p, prev.holdEnd) : 0,
+    });
+  }
+  if (!times.length) { toast('只有一个队形块，无需切分'); return; }
+  let res = { splits: 0, fades: 0 };
+  store.mutate(pr => {
+    res = autoSplitAtBoundaries(pr.timeline.audioClips, times, id => pr.media?.assets?.find(a => a.id === id)?.durationSec ?? Infinity);
+  }, '按队形段自动切');
+  if (!res.splits && !res.fades) toast('没有可切分的块边界（可能已切过）');
+  else toast(`按队形段自动切完成：分割 ${res.splits} 处 · 交叉淡化 ${res.fades} 段（可继续逐个微调）`);
 }
 
 // ---------- 移动端 Tab ----------
@@ -1306,6 +1682,17 @@ function wireKeyboard() {
       const ov = $('manual-overlay');
       if (ov && !ov.hidden) { ov.hidden = true; return; }
     }
+    // v3 音频轨：Esc=退出剃刀 → 清 clip 选择/时间选区（规格 §5）
+    if (e.key === 'Escape' && musicTl) {
+      if (musicTl.razor) { musicTl.setRazor(false); return; }
+      if (musicTl.clipSel.size || musicTl.timeSel) { musicTl.clearClipSelection(); return; }
+    }
+    // v3：Ctrl/Cmd+K = 播放头处分割选中 clip（规格 §5/C6）
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      musicTl?.splitAtPlayhead();
+      return;
+    }
     if (e.key === 'Escape') {
       if (player?.countin && player.cancelCountin()) return; // 任务#5：数拍入场中 Esc=取消倒计（先于其它取消语义）
       if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return;
@@ -1328,6 +1715,30 @@ function wireKeyboard() {
     }
     if (e.key.toLowerCase() === 'e') { store.setUI({ editMode: !s.editMode }); return; } // 编辑开关
     if (!s.editMode) return; // 查看模式下禁用编辑类快捷键
+    // ---- v3 音频轨快捷键（规格 §5）----
+    if (e.key.toLowerCase() === 's' && musicTl?.hoverAudio) { e.preventDefault(); musicTl.toggleSnap(); return; } // S（hover 音轨）=磁吸开关
+    if (e.key.toLowerCase() === 'r' && musicTl?.hoverAudio) { e.preventDefault(); musicTl.setRazor(); return; }   // R（hover 音轨）=剃刀
+    if ((e.key === 'Delete' || e.key === 'Backspace') && musicTl?.clipSel?.size && !s.selection.length) {
+      e.preventDefault();
+      musicTl.deleteSelected(e.altKey); // Alt+Delete=波纹删除
+      return;
+    }
+    if (e.key === 'Home' && musicTl) { e.preventDefault(); player.seekBeat(0); return; }
+    if (e.key === 'End' && musicTl) {
+      e.preventDefault();
+      const p = store.getState().project;
+      if (p) {
+        const endSec = Math.min(M.beatToSec(p, M.computeSegments(p).totalBeats), lastClipEndSec(M.clipsOf(p)));
+        player.seekBeat(M.secToBeat(p, endSec));
+      }
+      return;
+    }
+    if (e.key.startsWith('Arrow') && musicTl?.clipSel?.size && !s.selection.length) {
+      e.preventDefault(); // C3：选中 clip 微移（plain=逐帧 10ms；Shift=按网格步进整拍）
+      const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (dir) musicTl.nudgeSelected(dir, { grid: e.shiftKey });
+      return;
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (s.selection.length) {
         e.preventDefault();
@@ -1514,6 +1925,7 @@ function render(state) {
     $('bc-sec').textContent = `（${M.beatLabel(p, 0)} 起 · 共 ${M.totalDurationSec(p).toFixed(1)}s）`;
   }
   $('audio-name').textContent = audio.ready ? `${p.audio.name} (${(p.audio.durationSec || 0).toFixed(1)}s)` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
+  updateAudioHead(); // v3 展开态表头（资产名/时长）跟随
   updateMusicLock(); // 任务#2：随渲染同步 BPM/首拍/点拍锁态（暂停/播放切换的兜底刷新面）
   $('pb-formation').textContent = currentFormation() ? `${state.formationIndex + 1}. ${currentFormation().name}` : '';
   // 播放/数拍中按钮态（任务#20：数拍期同样呈 ⏸，点击=取消倒计）
@@ -1553,14 +1965,20 @@ if (typeof window !== 'undefined') window.__fs = {
   drawScene: (ctx, rect, project, positions, opts) => drawScene(ctx, rect, project, positions, opts || {}),
   snapshot() {
     const s = store.getState();
+    const p = s.project;
     return {
       view: s.view, formationIndex: s.formationIndex,
       selection: s.selection,
-      dancers: s.project?.dancers.length, groups: (s.project?.groups || []).length,
-      formations: s.project?.formations.map(f => ({ name: f.name, n: Object.keys(f.positions).length })),
+      dancers: p?.dancers.length, groups: (p?.groups || []).length,
+      formations: p?.formations.map(f => ({ name: f.name, n: Object.keys(f.positions).length })),
       positions: currentFormation()?.positions,
-      blocks: s.project?.timeline.blocks,
-      audio: { name: s.project?.audio.name, bpm: s.project?.audio.bpm, ready: audio.ready, duration: audio.duration },
+      blocks: p?.timeline.blocks,
+      audio: { name: p?.audio.name, bpm: p?.audio.bpm, ready: audio.ready, duration: audio.duration },
+      media: { assets: (p?.media?.assets || []).map(a => ({ ...a })), activeAssetId: p?.media?.activeAssetId ?? null },
+      clips: (p?.timeline?.audioClips || []).map(c => ({ ...c })),
+      clipSel: [...(musicTl?.clipSel || [])],
+      timeSel: musicTl?.timeSel ? { ...musicTl.timeSel } : null,
+      audioTrack: { expanded: musicTl?.expanded, snap: musicTl?.snapOn, razor: musicTl?.razor },
       beat: player?.beat, playing: player?.playing,
     };
   },

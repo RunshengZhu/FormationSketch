@@ -107,9 +107,23 @@ export const storage = {
   },
   async deleteProject(id) {
     if (STORAGE_MODE === 'ls') { try { localStorage.removeItem(LS_KEY_PREFIX + id); } catch {} return; }
-    if (!hasIDB) { memory.projects.delete(id); memory.audio.delete(id); return; }
+    if (!hasIDB) {
+      memory.projects.delete(id); memory.audio.delete(id);
+      for (const k of [...memory.audio.keys()]) if (k.startsWith(id + ':')) memory.audio.delete(k);
+      return;
+    }
     await tx('projects', 'readwrite', s => s.delete(id));
     await tx('audio', 'readwrite', s => s.delete(id));
+    // v3 媒体资产 blob（键 `${projectId}:${assetId}`）一并清扫
+    await tx('audio', 'readwrite', s => {
+      const req = s.openCursor();
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return;
+        if (typeof c.key === 'string' && c.key.startsWith(id + ':')) c.delete();
+        c.continue();
+      };
+    });
   },
   async putAudio(id, blob) {
     // LS 离线档：音频 Blob 塞不进 localStorage 配额 → 安全忽略（不落盘、不 crash、不阻塞主流程）。
@@ -122,6 +136,17 @@ export const storage = {
     if (STORAGE_MODE === 'ls') return null;
     if (!hasIDB) return memory.audio.get(id) || null;
     return await tx('audio', 'readonly', s => s.get(id));
+  },
+  // ---- v3 媒体资产 blob（复用 audio store，键 `${projectId}:${assetId}`；LS 档不持久，同 putAudio） ----
+  async putAsset(projectId, assetId, blob) {
+    if (STORAGE_MODE === 'ls') return;
+    if (!hasIDB) { memory.audio.set(`${projectId}:${assetId}`, blob); return; }
+    await tx('audio', 'readwrite', s => s.put(blob, `${projectId}:${assetId}`));
+  },
+  async getAsset(projectId, assetId) {
+    if (STORAGE_MODE === 'ls') return null;
+    if (!hasIDB) return memory.audio.get(`${projectId}:${assetId}`) || null;
+    return await tx('audio', 'readonly', s => s.get(`${projectId}:${assetId}`));
   },
 };
 
@@ -301,6 +326,10 @@ export async function duplicateProject(id) {
   await storage.putProject(p);
   const blob = await storage.getAudio(oldId);
   if (blob) await storage.putAudio(p.id, blob); // 副本继承音频
+  for (const a of p.media?.assets || []) { // v3：副本继承全部媒体资产 blob
+    const ab = await storage.getAsset(oldId, a.id);
+    if (ab) await storage.putAsset(p.id, a.id, ab);
+  }
   await refreshLibrary();
 }
 

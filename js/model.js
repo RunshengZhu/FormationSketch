@@ -38,9 +38,10 @@ export function createProject({ title = '未命名队列舞', pairs = 6, extraM 
     meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     stage: { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null },
     audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
+    media: { assets: [], activeAssetId: null }, // v3 音乐剪辑：媒体资产库（blob 走存储层，项目记录只存元数据）
     settings: { labelMode: 'no' }, // 项目级显示设置：'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名
     dancers: [], groups: [], formations: [],
-    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [] },
+    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [] },
   };
   for (let i = 1; i <= pairs; i++) {
     addDancer(project, `M${i}`, 'M', String(i));
@@ -422,6 +423,104 @@ export function alignBlockStart(project, index, targetBeat, segments = computeSe
   return true;
 }
 
+// ---------- 媒体资产与音频 clip（v3 音乐剪辑 · 规格 docs/music-clip-ui-spec.md） ----------
+// project.media = { assets: [{id,name,durationSec,size}], activeAssetId }
+// project.timeline.audioClips = [{id,assetId,timelineStartSec,srcStartSec,lengthSec,fadeInSec,fadeOutSec,gain,name,muted?,color?,fadeInAuto?,fadeOutAuto?,autoPair?}]
+// clip=可自由摆放的独立对象：间隙=静音，重叠=自动等功率交叉淡化（fades 记录在 clip 上）。
+export const MIN_CLIP_DUR = 0.005;
+const r6c = v => Math.round(v * 1e6) / 1e6;
+// 媒体资产清洗：非合法项丢弃；id 补 uid、去重；name 非空 ≤120 字；时长/大小钳制；dataBase64 剥离（导入入口已还原 Blob）
+export function sanitizeMedia(raw) {
+  const m = (raw && typeof raw === 'object') ? raw : {};
+  const seen = new Set();
+  const assets = [];
+  for (const a of Array.isArray(m.assets) ? m.assets : []) {
+    if (!a || typeof a !== 'object') continue;
+    delete a.dataBase64; delete a.dataFormat; // 内嵌数据不进项目记录
+    const id = (typeof a.id === 'string' && a.id) ? a.id : uid('ast');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const dur = Number(a.durationSec);
+    const size = Number(a.size);
+    assets.push({
+      id,
+      name: String(a.name ?? '').slice(0, 120) || '音频',
+      durationSec: Number.isFinite(dur) ? Math.max(0, Math.min(36000, dur)) : 0,
+      size: Number.isFinite(size) && size > 0 ? Math.round(size) : 0,
+    });
+  }
+  const activeId = (typeof m.activeAssetId === 'string' && seen.has(m.activeAssetId)) ? m.activeAssetId
+    : (assets[0]?.id ?? null);
+  return { assets, activeAssetId: assets.length ? activeId : null };
+}
+// 音频 clip 清洗：引用有效资产、数值域钳制（时间 ≥0、length>MIN、srcStart+length ≤ 资产时长、
+// 淡化 ≥0 且总量 ≤ length 按比例收缩、gain 0..4）、id 补 uid/去重；数组顺序即 z 序（保持不排序）。
+export function sanitizeAudioClips(raw, assets) {
+  const durOf = new Map((assets || []).map(a => [a.id, a.durationSec]));
+  const seen = new Set();
+  const out = [];
+  for (const c of Array.isArray(raw) ? raw : []) {
+    if (!c || typeof c !== 'object') continue;
+    const assetId = typeof c.assetId === 'string' ? c.assetId : '';
+    if (!durOf.has(assetId)) continue;
+    const id = (typeof c.id === 'string' && c.id) ? c.id : uid('clip');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const assetDur = durOf.get(assetId) || 0;
+    let start = Number(c.timelineStartSec), src = Number(c.srcStartSec), len = Number(c.lengthSec);
+    if (!Number.isFinite(start) || !Number.isFinite(src) || !Number.isFinite(len)) continue;
+    start = Math.max(0, start); src = Math.max(0, src);
+    len = Math.min(Math.max(len, 0), Math.max(0, assetDur - src));
+    if (len < MIN_CLIP_DUR) continue;
+    let fi = Math.max(0, Number(c.fadeInSec) || 0);
+    let fo = Math.max(0, Number(c.fadeOutSec) || 0);
+    const total = fi + fo;
+    if (total > len && total > 0) { const k = len / total; fi *= k; fo *= k; }
+    const gain = Number(c.gain);
+    out.push({
+      id, assetId,
+      timelineStartSec: r6c(start),
+      srcStartSec: r6c(src),
+      lengthSec: r6c(len),
+      fadeInSec: r6c(Math.min(fi, len)),
+      fadeOutSec: r6c(Math.min(fo, len)),
+      gain: Number.isFinite(gain) ? Math.max(0, Math.min(4, gain)) : 1,
+      name: String(c.name ?? '').slice(0, 80),
+      ...(c.muted ? { muted: true } : {}),
+      ...(typeof c.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c.color) ? { color: c.color } : {}),
+      ...(c.fadeInAuto ? { fadeInAuto: true } : {}),
+      ...(c.fadeOutAuto ? { fadeOutAuto: true } : {}),
+      ...(typeof c.autoPair === 'string' && c.autoPair ? { autoPair: c.autoPair } : {}),
+    });
+  }
+  return out;
+}
+// v1 单音频 → 1 asset + 全长 clip（零体验变化：全长 clip 与旧「整曲播放」逐拍等价）。
+// 已有 assets（含 assets 非空但 audioClips 为空的形态）不迁移；无音乐不迁移。返回是否发生迁移。
+export function migrateLegacyAudio(p) {
+  if (!p || !p.media || !p.timeline) return false;
+  if (p.media.assets.length) return false;
+  const name = String(p.audio?.name || '').trim();
+  if (!name) return false;
+  const dur = Number(p.audio?.durationSec) || 0;
+  const asset = { id: uid('ast'), name, durationSec: Math.max(0, dur), size: 0 };
+  p.media = { assets: [asset], activeAssetId: asset.id };
+  p.timeline.audioClips = dur > MIN_CLIP_DUR ? [{
+    id: uid('clip'), assetId: asset.id,
+    timelineStartSec: 0, srcStartSec: 0, lengthSec: r6c(dur),
+    fadeInSec: 0, fadeOutSec: 0, gain: 1, name,
+  }] : [];
+  return true;
+}
+export function activeAssetOf(project) {
+  const m = project?.media;
+  if (!m || !m.assets?.length) return null;
+  return m.assets.find(a => a.id === m.activeAssetId) || m.assets[0] || null;
+}
+export function clipsOf(project) { return project?.timeline?.audioClips || []; }
+// clip 查找/终止点辅助（UI 层共用）
+export function clipById(project, id) { return clipsOf(project).find(c => c.id === id) || null; }
+
 // ---------- 校验 / 迁移 ----------
 function num(v, def, lo, hi) {
   const n = Number(v);
@@ -457,10 +556,16 @@ export function validateProject(json) {
   delete p.pairs; // v3：舞对概念退役——旧项目载入时忽略并清除 pairs 字段，不破坏 formations/positions/merges
   p.groups = Array.isArray(p.groups) ? p.groups : [];
   p.formations = Array.isArray(p.formations) ? p.formations : [];
-  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], ...p.timeline };
+  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [], ...p.timeline };
   p.timeline.countInBeats = num(p.timeline.countInBeats, 8, 0, 32);
   p.timeline.blocks = Array.isArray(p.timeline.blocks) ? p.timeline.blocks : [];
   p.timeline.tags = sanitizeTags(p.timeline.tags); // 时间轴标记清洗（旧项目无 tags → []，零迁移成本）
+  // 媒体资产与音频 clip（v3 音乐剪辑）：清洗 + v1 单音频迁移（1 asset + 全长 clip，零体验变化）
+  p.media = sanitizeMedia(p.media);
+  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets);
+  migrateLegacyAudio(p);
+  // 迁移/清洗后再过一遍 clip 清洗（迁移产物引用新 asset，域已合法；此处幂等收口）
+  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets);
   for (const f of p.formations) f.positions = f.positions || {};
   const ids = new Set();
   for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }

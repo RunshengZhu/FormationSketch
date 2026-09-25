@@ -162,9 +162,25 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 #calib-disc summary::before{content:'▸ ';}
 #calib-disc[open] summary::before{content:'▾ ';}
 #calib-panel{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-#tl-scroll{overflow-x:auto;height:150px;position:relative}
+#tl-scroll{overflow-x:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120/展开160 写入 */
 #tl-inner{position:relative;height:100%}
 #tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
+/* ---- v3 音频轨（Audition Lite）附属 DOM 层 ----
+   #tl-body 定位上下文：轨左端展开钮/展开态表头/空态入口绝对定位其上，top 由 timeline.render 按几何写入 */
+#tl-body{position:relative}
+#tl-audio-toggle{position:absolute;left:4px;z-index:8;width:22px;height:22px;line-height:1;border:1px solid var(--line);border-radius:6px;background:var(--bg2);color:var(--dim);font-size:12px;padding:0}
+#tl-audio-toggle:hover{color:var(--acc);border-color:var(--acc)}
+#tl-head{position:absolute;left:0;z-index:7;width:120px;background:var(--bg2);border-right:1px solid var(--line);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:2px;padding:4px 6px;font-size:11px;overflow:hidden}
+#tl-head .tlh-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tl-head .tlh-dur{color:var(--dim);font-size:10px}
+#tl-head .tlh-row{display:flex;align-items:center;gap:4px}
+#tl-head input[type=range]{width:52px;padding:0;height:14px}
+#tl-head .btn{padding:0 6px;line-height:16px;font-size:11px}
+#tl-audio-empty{position:absolute;left:32px;z-index:7;display:flex;align-items:center;gap:8px}
+/* 音频剪辑右键菜单（与 .unit-menu 同风格，固定定位跟光标） */
+#clip-ctx-menu .um-btn{display:block;width:100%;text-align:left}
+#clip-ctx-menu .ctx-swatches{display:flex;gap:4px;padding:4px 6px}
+#clip-ctx-menu .ctx-sw{width:18px;height:18px;border-radius:4px;border:1px solid var(--line)}
 /* F-02（UX-02）：时间轴画布禁浏览器手势接管——pan-x 会让块边缘横向拖拽仍被滚动接管
    （横拖主导轴判定），none 才能让 scrub/块拖在触摸端可用；容器横滚改由滚轮/按钮/缩放承担 */
 #tl-canvas{touch-action:none}
@@ -292,7 +308,6 @@ body[data-mtab="formations"] #tl-scroll{display:none}
   #stage-tools{gap:4px;padding:4px 6px;flex-wrap:nowrap;overflow-x:auto}
   .rot-ctl input[type=range]{width:64px}
   .lc-del{padding:8px}
-  #tl-scroll{height:120px}
 }
 
 /* ---- 打印页 ---- */
@@ -481,7 +496,10 @@ body[data-mtab="formations"] #tl-scroll{display:none}
               <!-- 主行（常驻，服务对齐编辑）：载入/更换音乐、BPM、首拍+对齐、节拍器；缩放服务时间线查看 -->
               <button id="btn-load-audio" class="btn small">载入音乐…</button>
               <input type="file" id="audio-file" accept="audio/*" hidden>
+              <input type="file" id="media-files" accept="audio/*" multiple hidden>
               <span id="audio-name" class="dim">未载入音乐</span>
+              <button id="btn-media-library" class="btn small" title="媒体库：导入/管理音乐资产（多文件），指定配乐">📚<span class="hide-mobile"> 媒体库</span></button>
+              <button id="btn-auto-split" class="btn small" title="按队形段自动切：块边界→分割点，段间自动交叉淡化（时长=过渡拍）；结果为一组自由 clip，可继续逐个微调">✂<span class="hide-mobile"> 按队形段自动切</span></button>
               <span class="vsep"></span>
               <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" style="width:56px"></label>
               <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" style="width:64px">s</label>
@@ -504,10 +522,19 @@ body[data-mtab="formations"] #tl-scroll{display:none}
               </details>
             </div>
           </details>
-          <div id="tl-scroll"><div id="tl-inner">
-            <canvas id="tl-canvas"></canvas>
-            <canvas id="tl-overlay"></canvas>
-          </div></div>
+          <div id="tl-body">
+            <!-- 音轨附属 DOM 层（v3）：轨左端展开/收起钮、展开态表头（120px）、空态入口 -->
+            <button id="tl-audio-toggle" title="展开音频轨（Audition Lite 剪辑）" aria-label="展开音频轨">⌄</button>
+            <div id="tl-head" hidden title="音轨表头（展开态）"></div>
+            <div id="tl-audio-empty" hidden>
+              <button id="tl-empty-load" class="btn small" title="载入音乐文件（mp3/wav/m4a…）">＋ 载入音乐</button>
+              <button id="tl-empty-library" class="btn small" title="打开媒体库（多文件导入 / 指定配乐）">📚 媒体库</button>
+            </div>
+            <div id="tl-scroll"><div id="tl-inner">
+              <canvas id="tl-canvas"></canvas>
+              <canvas id="tl-overlay"></canvas>
+            </div></div>
+          </div>
         </div>
       </div>
     </div>
@@ -586,9 +613,10 @@ function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, ex
     meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     stage: { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null },
     audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
+    media: { assets: [], activeAssetId: null }, // v3 音乐剪辑：媒体资产库（blob 走存储层，项目记录只存元数据）
     settings: { labelMode: 'no' }, // 项目级显示设置：'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名
     dancers: [], groups: [], formations: [],
-    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [] },
+    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [] },
   };
   for (let i = 1; i <= pairs; i++) {
     addDancer(project, `M${i}`, 'M', String(i));
@@ -970,6 +998,104 @@ function alignBlockStart(project, index, targetBeat, segments = computeSegments(
   return true;
 }
 
+// ---------- 媒体资产与音频 clip（v3 音乐剪辑 · 规格 docs/music-clip-ui-spec.md） ----------
+// project.media = { assets: [{id,name,durationSec,size}], activeAssetId }
+// project.timeline.audioClips = [{id,assetId,timelineStartSec,srcStartSec,lengthSec,fadeInSec,fadeOutSec,gain,name,muted?,color?,fadeInAuto?,fadeOutAuto?,autoPair?}]
+// clip=可自由摆放的独立对象：间隙=静音，重叠=自动等功率交叉淡化（fades 记录在 clip 上）。
+const MIN_CLIP_DUR = 0.005;
+const r6c = v => Math.round(v * 1e6) / 1e6;
+// 媒体资产清洗：非合法项丢弃；id 补 uid、去重；name 非空 ≤120 字；时长/大小钳制；dataBase64 剥离（导入入口已还原 Blob）
+function sanitizeMedia(raw) {
+  const m = (raw && typeof raw === 'object') ? raw : {};
+  const seen = new Set();
+  const assets = [];
+  for (const a of Array.isArray(m.assets) ? m.assets : []) {
+    if (!a || typeof a !== 'object') continue;
+    delete a.dataBase64; delete a.dataFormat; // 内嵌数据不进项目记录
+    const id = (typeof a.id === 'string' && a.id) ? a.id : uid('ast');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const dur = Number(a.durationSec);
+    const size = Number(a.size);
+    assets.push({
+      id,
+      name: String(a.name ?? '').slice(0, 120) || '音频',
+      durationSec: Number.isFinite(dur) ? Math.max(0, Math.min(36000, dur)) : 0,
+      size: Number.isFinite(size) && size > 0 ? Math.round(size) : 0,
+    });
+  }
+  const activeId = (typeof m.activeAssetId === 'string' && seen.has(m.activeAssetId)) ? m.activeAssetId
+    : (assets[0]?.id ?? null);
+  return { assets, activeAssetId: assets.length ? activeId : null };
+}
+// 音频 clip 清洗：引用有效资产、数值域钳制（时间 ≥0、length>MIN、srcStart+length ≤ 资产时长、
+// 淡化 ≥0 且总量 ≤ length 按比例收缩、gain 0..4）、id 补 uid/去重；数组顺序即 z 序（保持不排序）。
+function sanitizeAudioClips(raw, assets) {
+  const durOf = new Map((assets || []).map(a => [a.id, a.durationSec]));
+  const seen = new Set();
+  const out = [];
+  for (const c of Array.isArray(raw) ? raw : []) {
+    if (!c || typeof c !== 'object') continue;
+    const assetId = typeof c.assetId === 'string' ? c.assetId : '';
+    if (!durOf.has(assetId)) continue;
+    const id = (typeof c.id === 'string' && c.id) ? c.id : uid('clip');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const assetDur = durOf.get(assetId) || 0;
+    let start = Number(c.timelineStartSec), src = Number(c.srcStartSec), len = Number(c.lengthSec);
+    if (!Number.isFinite(start) || !Number.isFinite(src) || !Number.isFinite(len)) continue;
+    start = Math.max(0, start); src = Math.max(0, src);
+    len = Math.min(Math.max(len, 0), Math.max(0, assetDur - src));
+    if (len < MIN_CLIP_DUR) continue;
+    let fi = Math.max(0, Number(c.fadeInSec) || 0);
+    let fo = Math.max(0, Number(c.fadeOutSec) || 0);
+    const total = fi + fo;
+    if (total > len && total > 0) { const k = len / total; fi *= k; fo *= k; }
+    const gain = Number(c.gain);
+    out.push({
+      id, assetId,
+      timelineStartSec: r6c(start),
+      srcStartSec: r6c(src),
+      lengthSec: r6c(len),
+      fadeInSec: r6c(Math.min(fi, len)),
+      fadeOutSec: r6c(Math.min(fo, len)),
+      gain: Number.isFinite(gain) ? Math.max(0, Math.min(4, gain)) : 1,
+      name: String(c.name ?? '').slice(0, 80),
+      ...(c.muted ? { muted: true } : {}),
+      ...(typeof c.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c.color) ? { color: c.color } : {}),
+      ...(c.fadeInAuto ? { fadeInAuto: true } : {}),
+      ...(c.fadeOutAuto ? { fadeOutAuto: true } : {}),
+      ...(typeof c.autoPair === 'string' && c.autoPair ? { autoPair: c.autoPair } : {}),
+    });
+  }
+  return out;
+}
+// v1 单音频 → 1 asset + 全长 clip（零体验变化：全长 clip 与旧「整曲播放」逐拍等价）。
+// 已有 assets（含 assets 非空但 audioClips 为空的形态）不迁移；无音乐不迁移。返回是否发生迁移。
+function migrateLegacyAudio(p) {
+  if (!p || !p.media || !p.timeline) return false;
+  if (p.media.assets.length) return false;
+  const name = String(p.audio?.name || '').trim();
+  if (!name) return false;
+  const dur = Number(p.audio?.durationSec) || 0;
+  const asset = { id: uid('ast'), name, durationSec: Math.max(0, dur), size: 0 };
+  p.media = { assets: [asset], activeAssetId: asset.id };
+  p.timeline.audioClips = dur > MIN_CLIP_DUR ? [{
+    id: uid('clip'), assetId: asset.id,
+    timelineStartSec: 0, srcStartSec: 0, lengthSec: r6c(dur),
+    fadeInSec: 0, fadeOutSec: 0, gain: 1, name,
+  }] : [];
+  return true;
+}
+function activeAssetOf(project) {
+  const m = project?.media;
+  if (!m || !m.assets?.length) return null;
+  return m.assets.find(a => a.id === m.activeAssetId) || m.assets[0] || null;
+}
+function clipsOf(project) { return project?.timeline?.audioClips || []; }
+// clip 查找/终止点辅助（UI 层共用）
+function clipById(project, id) { return clipsOf(project).find(c => c.id === id) || null; }
+
 // ---------- 校验 / 迁移 ----------
 function num(v, def, lo, hi) {
   const n = Number(v);
@@ -1005,10 +1131,16 @@ function validateProject(json) {
   delete p.pairs; // v3：舞对概念退役——旧项目载入时忽略并清除 pairs 字段，不破坏 formations/positions/merges
   p.groups = Array.isArray(p.groups) ? p.groups : [];
   p.formations = Array.isArray(p.formations) ? p.formations : [];
-  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], ...p.timeline };
+  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [], ...p.timeline };
   p.timeline.countInBeats = num(p.timeline.countInBeats, 8, 0, 32);
   p.timeline.blocks = Array.isArray(p.timeline.blocks) ? p.timeline.blocks : [];
   p.timeline.tags = sanitizeTags(p.timeline.tags); // 时间轴标记清洗（旧项目无 tags → []，零迁移成本）
+  // 媒体资产与音频 clip（v3 音乐剪辑）：清洗 + v1 单音频迁移（1 asset + 全长 clip，零体验变化）
+  p.media = sanitizeMedia(p.media);
+  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets);
+  migrateLegacyAudio(p);
+  // 迁移/清洗后再过一遍 clip 清洗（迁移产物引用新 asset，域已合法；此处幂等收口）
+  p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets);
   for (const f of p.formations) f.positions = f.positions || {};
   const ids = new Set();
   for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }
@@ -1041,7 +1173,539 @@ function validateProject(json) {
   return { ok: errors.length === 0, errors, project: p };
 }
 
-Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, createProject, dancerById, orderedDancers, removeDancer, groupById, nextGroupName, createGroup, removeGroup, renameGroup, setGroupMembers, expandUnits, carryPositionsForward, UNIT_STYLES, mergeKey, findMerge, addMerge, removeMerge, setMergeStyle, collapseUnit, applyFormationLayout, renumberShorts, LABEL_MODES, labelModeOf, dancerOrdinal, dancerLabel, truncateLabel, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, TAG_NAME_MAX, sanitizeTags, tagById, nextTagName, addTag, removeTag, renameTag, moveTag, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, validateProject });
+Object.assign(FS.model, { DEFAULT_BPM, ROLE_COLOR, ROLE_NAME, uid, clone, clamp, easeInOut, addDancer, createProject, dancerById, orderedDancers, removeDancer, groupById, nextGroupName, createGroup, removeGroup, renameGroup, setGroupMembers, expandUnits, carryPositionsForward, UNIT_STYLES, mergeKey, findMerge, addMerge, removeMerge, setMergeStyle, collapseUnit, applyFormationLayout, renumberShorts, LABEL_MODES, labelModeOf, dancerOrdinal, dancerLabel, truncateLabel, faceAudience, ensureDancerInFormation, ensureFormationComplete, createFormationFrom, deleteFormation, moveFormation, formationIndexById, syncTimeline, spb, beatToSec, secToBeat, computeSegments, totalDurationSec, segmentAt, TAG_NAME_MAX, sanitizeTags, tagById, nextTagName, addTag, removeTag, renameTag, moveTag, lerpAngle, posAt, currentFormationIndexAt, beatLabel, countLabel, alignBlockStart, MIN_CLIP_DUR, sanitizeMedia, sanitizeAudioClips, migrateLegacyAudio, activeAssetOf, clipsOf, clipById, validateProject });
+})();
+
+/* ===== module: audio-clips ===== */
+FS.audioClips = FS.audioClips || {};
+FS.audioClips = FS.audioClips || {};
+(function(){
+'use strict';
+const { uid, MIN_CLIP_DUR } = FS.model;
+// 音频剪辑引擎（实验分支 exp/audition-lite · 规格 docs/music-clip-ui-spec.md v3）
+// 分两层：
+//   纯模型操作 —— clip 的 trim/split/移动/波纹删除/自动交叉淡化/淡化包络/磁吸候选/波形包络，
+//     全部纯函数（node 可测，与 DOM/WebAudio 零耦合），语义对齐 lightmix（sess_044daf25）同构实现；
+//   ClipTransport —— 「A Tale of Two Clocks」双时钟调度器：25ms 轮询 + 120ms 前瞻，
+//     每个 clip 只调度一次完整剩余区间（不是切片），停止统一 stop()；
+//     增益自动化走 setValueCurveAtTime 分段（常量段 setValueAtTime 首尾相接，无曲线重叠）。
+// 交叉淡化：等功率（sin/cos 互补，功率和恒 1）——重叠区两 clip 同时出声，波形按包络收窄。
+/* import from model */
+
+const TICK_MS = 25;           // 调度轮询间隔
+const LOOKAHEAD = 0.12;       // 调度前瞻（秒）
+const START_DELAY = 0.06;     // 起播延迟（ctx 时钟锚定的提前量）
+const GAIN_MAX = 4;           // clip 增益上限（线性）
+const CLIP_COLORS = ['#38bdf8', '#0ea5e9', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
+const CLIP_DEFAULT_COLOR = '#38bdf8';
+
+const r6 = v => Math.round(v * 1e6) / 1e6;
+
+// ---------- 基础 ----------
+function clipEnd(c) { return c.timelineStartSec + c.lengthSec; }
+function lastClipEndSec(clips) {
+  let e = 0;
+  for (const c of clips || []) e = Math.max(e, clipEnd(c));
+  return e;
+}
+// 有效音频事件区间（合并重叠后的可听区间；skipMuted=true 时静音 clip 不算事件）——段间静音判定用
+function effectiveRegions(clips, { skipMuted = true } = {}) {
+  const list = (clips || [])
+    .filter(c => !skipMuted || !c.muted)
+    .map(c => [c.timelineStartSec, clipEnd(c)])
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [s, e] of list) {
+    if (!out.length || s > out[out.length - 1][1] + 1e-9) out.push([s, e]);
+    else out[out.length - 1][1] = Math.max(out[out.length - 1][1], e);
+  }
+  return out;
+}
+// 淡化总量钳制（fadeIn+fadeOut ≤ length，超限按比例收缩）——trim/split 后调用
+function capFades(c) {
+  c.fadeInSec = Math.max(0, c.fadeInSec || 0);
+  c.fadeOutSec = Math.max(0, c.fadeOutSec || 0);
+  const total = c.fadeInSec + c.fadeOutSec;
+  if (total > c.lengthSec && total > 0) {
+    const k = c.lengthSec / total;
+    c.fadeInSec = r6(c.fadeInSec * k);
+    c.fadeOutSec = r6(c.fadeOutSec * k);
+  }
+}
+// 淡化包络（等功率；clip 相对时刻 t）：升= sin(x·π/2)，降 = sin(x'·π/2) —— 重叠区互补
+function fadeEnvAt(clip, t) {
+  let v = 1;
+  const fi = clip.fadeInSec || 0, fo = clip.fadeOutSec || 0;
+  if (fi > 1e-4 && t < fi) v *= Math.sin((Math.max(0, t) / fi) * Math.PI / 2);
+  if (fo > 1e-4) {
+    const fromEnd = clip.lengthSec - t;
+    if (fromEnd < fo) v *= Math.sin((Math.max(0, fromEnd) / fo) * Math.PI / 2);
+  }
+  return v;
+}
+// clip 相对时刻 t 的线性增益（含静音/淡化/包络，不含轨增益）
+function clipGainAt(clip, t) {
+  if (clip.muted) return 0;
+  return (clip.gain ?? 1) * fadeEnvAt(clip, t);
+}
+
+// ---------- 重叠 / 自动交叉淡化 ----------
+// 重叠对（a 在前）：start/end 为时间线秒
+function computeOverlaps(clips) {
+  const out = [];
+  const list = [...(clips || [])].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j];
+      const s = Math.max(a.timelineStartSec, b.timelineStartSec);
+      const e = Math.min(clipEnd(a), clipEnd(b));
+      if (e - s > MIN_CLIP_DUR) out.push({ a, b, start: s, end: e });
+    }
+  }
+  return out;
+}
+// 移动/trim 后调用：重叠处建立等功率交叉淡化对（auto:true，拖开后自动还原）。
+// 每侧 auto 淡化带对级记录 autoPair=对端 clip id（R41-D1/D2）：prune 据此只清
+// 真正构成对的两端；同对先后序翻转（拖移越过对端仍重叠）时先清反向陈旧 auto 再建对。
+function applyAutoCrossfades(clips, targetIds) {
+  const touched = new Set();
+  const ids = targetIds instanceof Set ? targetIds : new Set(targetIds || []);
+  for (const ov of computeOverlaps(clips)) {
+    if (!(ids.has(ov.a.id) || ids.has(ov.b.id))) continue;
+    if (ov.a.fadeInAuto && ov.a.autoPair === ov.b.id) { ov.a.fadeInSec = 0; ov.a.fadeInAuto = false; }
+    if (ov.b.fadeOutAuto && ov.b.autoPair === ov.a.id) { ov.b.fadeOutSec = 0; ov.b.fadeOutAuto = false; }
+    const dur = r6(ov.end - ov.start);
+    ov.a.fadeOutSec = dur; ov.a.fadeOutAuto = true; ov.a.autoPair = ov.b.id;
+    ov.b.fadeInSec = dur; ov.b.fadeInAuto = true; ov.b.autoPair = ov.a.id;
+    capFades(ov.a); capFades(ov.b);
+    touched.add(ov.a.id); touched.add(ov.b.id);
+  }
+  return touched;
+}
+// 交叉对被拖开（不再重叠）后，auto 淡化还原为 0（手动淡化不受影响）。
+// 只处理与 target 构成对（任一侧 auto 淡化的 autoPair 指向对方；旧数据无 autoPair 时
+// 按「先者 fadeOut × 后者 fadeIn」互补标记识别）的 other——与 target 无关的既有对
+// 一律不动（R41-D1：按先后序盲清会铲掉无关对的半边、留下陈旧另一半 R41-D2）。
+function pruneAutoCrossfades(clips, targetId) {
+  const cleared = new Set();
+  const list = clips || [];
+  const target = list.find(c => c.id === targetId);
+  if (!target) return cleared;
+  const clearPaired = (x, partnerId) => {   // 只清 x 侧指向 partner 的 auto 淡化
+    if (x.fadeOutAuto && x.autoPair === partnerId) { x.fadeOutSec = 0; x.fadeOutAuto = false; x.autoPair = null; cleared.add(x.id); }
+    if (x.fadeInAuto && x.autoPair === partnerId) { x.fadeInSec = 0; x.fadeInAuto = false; x.autoPair = null; cleared.add(x.id); }
+  };
+  for (const other of list) {
+    if (other.id === target.id) continue;
+    const s = Math.max(target.timelineStartSec, other.timelineStartSec);
+    const e = Math.min(clipEnd(target), clipEnd(other));
+    if (e - s > MIN_CLIP_DUR) continue;      // 仍重叠：对仍成立（时长由 apply 重算）
+    if ((target.fadeInAuto || target.fadeOutAuto) && target.autoPair === other.id) clearPaired(target, other.id);
+    if ((other.fadeInAuto || other.fadeOutAuto) && other.autoPair === target.id) clearPaired(other, target.id);
+    const targetFirst = target.timelineStartSec < other.timelineStartSec ||
+      (target.timelineStartSec === other.timelineStartSec && target.id < other.id);
+    // 旧数据兼容（两侧均无 autoPair 的互补 auto 标记才视作对；链式对按方向各清各的）
+    const legacy = targetFirst
+      ? (target.fadeOutAuto && target.autoPair == null && other.fadeInAuto && other.autoPair == null)
+      : (target.fadeInAuto && target.autoPair == null && other.fadeOutAuto && other.autoPair == null);
+    if (legacy) {
+      if (targetFirst && target.fadeOutAuto) { target.fadeOutSec = 0; target.fadeOutAuto = false; cleared.add(target.id); }
+      if (!targetFirst && target.fadeInAuto) { target.fadeInSec = 0; target.fadeInAuto = false; cleared.add(target.id); }
+      if (targetFirst && other.fadeInAuto) { other.fadeInSec = 0; other.fadeInAuto = false; cleared.add(other.id); }
+      if (!targetFirst && other.fadeOutAuto) { other.fadeOutSec = 0; other.fadeOutAuto = false; cleared.add(other.id); }
+    }
+  }
+  // target 侧 auto 淡化指向已删除的对端（ghost）→ 陈旧，一并还原
+  if ((target.fadeInAuto || target.fadeOutAuto) && target.autoPair && !list.some(c => c.id === target.autoPair)) {
+    clearPaired(target, target.autoPair);
+  }
+  return cleared;
+}
+
+// ---------- trim（Audition 式：内容锚定 / Shift 变体只改边界） ----------
+// 左缘内容锚定：srcStart 与 timelineStart 同步前进（delta 克隆源时间），源内不越界
+function trimClipLeftAnchored(c, newStart, assetDur = Infinity) {
+  newStart = r6(newStart);
+  const delta = newStart - c.timelineStartSec;
+  if (delta > 0 && c.srcStartSec + delta > (assetDur ?? Infinity) + 1e-9) return false;
+  if (c.srcStartSec + delta < -1e-9) return false;          // 不能越出素材头部
+  if (c.lengthSec - delta < MIN_CLIP_DUR) return false;
+  if (newStart < 0) return false;
+  c.srcStartSec = r6(c.srcStartSec + delta);
+  c.timelineStartSec = newStart;
+  c.lengthSec = r6(c.lengthSec - delta);
+  capFades(c);
+  return true;
+}
+// 左缘只改边界（Shift）：srcStart 不动，边界右移=掐掉头部（内容随之平移露出）
+function trimClipLeftBoundary(c, newStart, assetDur = Infinity) {
+  newStart = r6(newStart);
+  const end = clipEnd(c);
+  if (newStart < 0 || end - newStart < MIN_CLIP_DUR) return false;
+  if (c.srcStartSec + (end - newStart) > (assetDur ?? Infinity) + 1e-9) return false;
+  c.timelineStartSec = newStart;
+  c.lengthSec = r6(end - newStart);
+  capFades(c);
+  return true;
+}
+// 右缘内容锚定：length 变化（源锚定），不能越出素材尾部
+function trimClipRightAnchored(c, newEnd, assetDur = Infinity) {
+  newEnd = r6(newEnd);
+  const newDur = newEnd - c.timelineStartSec;
+  if (newDur < MIN_CLIP_DUR) return false;
+  if (c.srcStartSec + newDur > (assetDur ?? Infinity) + 1e-9) return false;
+  c.lengthSec = r6(newDur);
+  capFades(c);
+  return true;
+}
+// 右缘只改边界（Shift）：同样受素材尾界约束
+function trimClipRightBoundary(c, newEnd, assetDur = Infinity) {
+  return trimClipRightAnchored(c, newEnd, assetDur);
+}
+
+// ---------- split / delete / ripple ----------
+// 在时刻 t 分割一个 clip，成功返回新右 clip（左侧原地收缩；数组插入右 clip 保持 z 序）
+function splitClipAt(clips, id, t) {
+  const idx = (clips || []).findIndex(c => c.id === id);
+  if (idx < 0) return null;
+  const c = clips[idx];
+  const end = clipEnd(c);
+  if (t <= c.timelineStartSec + MIN_CLIP_DUR || t >= end - MIN_CLIP_DUR) return null;
+  const leftDur = t - c.timelineStartSec;
+  const right = {
+    ...JSON.parse(JSON.stringify(c)),
+    id: uid('clip'),
+    timelineStartSec: r6(t),
+    srcStartSec: r6(c.srcStartSec + leftDur),
+    lengthSec: r6(end - t),
+  };
+  right.fadeInSec = Math.min(right.fadeInSec || 0, right.lengthSec);
+  right.fadeInAuto = false;
+  c.lengthSec = r6(leftDur);
+  c.fadeOutAuto = false;
+  capFades(c); capFades(right);
+  clips.splice(idx + 1, 0, right);
+  return right;
+}
+function deleteClips(clips, ids) {
+  const set = ids instanceof Set ? ids : new Set(ids || []);
+  const removed = (clips || []).filter(c => set.has(c.id));
+  return removed;
+}
+// 波纹删除：删掉后右侧（start ≥ 被删跨度右缘）clip 左移补位
+function rippleDeleteClips(clips, ids) {
+  const set = ids instanceof Set ? ids : new Set(ids || []);
+  const removed = (clips || []).filter(c => set.has(c.id));
+  if (!removed.length) return 0;
+  const minStart = Math.min(...removed.map(c => c.timelineStartSec));
+  const maxEnd = Math.max(...removed.map(clipEnd));
+  const span = maxEnd - minStart;
+  for (const c of clips) {
+    if (set.has(c.id)) continue;
+    if (c.timelineStartSec >= maxEnd - 1e-9) c.timelineStartSec = r6(c.timelineStartSec - span);
+  }
+  return clips.filter(c => !set.has(c.id)).length;
+}
+// 修剪到时间选区：选中的 clip 与 [s,e] 求交（内容锚定语义），完全在外 → 删除
+function trimClipsToRange(clips, ids, s, e) {
+  const set = ids instanceof Set ? ids : new Set(ids || []);
+  const dropped = [];
+  for (const c of [...clips]) {
+    if (!set.has(c.id)) continue;
+    const cs = c.timelineStartSec, ce = clipEnd(c);
+    if (ce <= s + 1e-9 || cs >= e - 1e-9) { dropped.push(c.id); continue; }
+    if (s > cs) trimClipLeftAnchored(c, s);
+    if (clipEnd(c) > e) trimClipRightAnchored(c, e);
+  }
+  return dropped;
+}
+
+// ---------- 磁吸（时间域最近邻，阈值按像素换算） ----------
+function collectSnapCandidates({ clips = [], excludeId = null, playheadSec = null,
+  selStartSec = null, selEndSec = null, blockSecs = [], tagSecs = [] } = {}) {
+  const pts = new Set();
+  const add = t => { if (Number.isFinite(t) && t >= 0) pts.add(r6(t)); };
+  for (const c of clips) {
+    if (c.id === excludeId) continue;
+    add(c.timelineStartSec); add(clipEnd(c));
+  }
+  add(playheadSec);
+  add(selStartSec); add(selEndSec);
+  for (const t of blockSecs) add(t);
+  for (const t of tagSecs) add(t);
+  return [...pts].sort((a, b) => a - b);
+}
+function snapTime(t, candidates, thresholdSec) {
+  let best = null, bestDist = thresholdSec;
+  let lo = 0, hi = candidates.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (candidates[mid] < t) lo = mid + 1; else hi = mid; }
+  for (const i of [lo - 1, lo]) {
+    const c = candidates[i];
+    if (c === undefined) continue;
+    const d = Math.abs(c - t);
+    if (d <= bestDist) { bestDist = d; best = c; }
+  }
+  return best === null ? { t, line: null } : { t: best, line: best };
+}
+// 零交叉吸附（消切点咔哒）：在 data[pos±radius] 内找最近方向变化点（采样点域）
+function nearestZeroCrossing(data, pos, radiusSamples) {
+  if (!data || !data.length) return Math.round(pos);
+  const center = Math.round(pos);
+  const lo = Math.max(1, center - Math.floor(radiusSamples));
+  const hi = Math.min(data.length - 1, center + Math.ceil(radiusSamples));
+  let best = center, bestDist = Infinity;
+  for (let i = lo; i <= hi; i++) {
+    const a = data[i - 1], b = data[i];
+    if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) {
+      const d = Math.abs(i - center);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+  }
+  return best;
+}
+
+// ---------- 波形包络（一次性计算，绘制代价与缩放无关） ----------
+// bucket 样本/桶的 min/max 双数组，幅值按资产峰值归一化到 1 —— 任意缩放直接取样绘制
+function computeWaveEnvelope(buffer, bucket = 512) {
+  if (!buffer || !buffer.getChannelData) return null;
+  const ch0 = buffer.getChannelData(0);
+  const len = ch0.length;
+  const n = Math.max(1, Math.ceil(len / bucket));
+  const min = new Float32Array(n), max = new Float32Array(n);
+  let peak = 1e-6;
+  for (let b = 0; b < n; b++) {
+    const s = b * bucket, e = Math.min(len, s + bucket);
+    let mn = 1, mx = -1;
+    for (let i = s; i < e; i++) {
+      const v = ch0[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    if (mn === 1) mn = 0;
+    if (mx === -1) mx = 0;
+    min[b] = mn; max[b] = mx;
+    const a = Math.max(Math.abs(mn), Math.abs(mx));
+    if (a > peak) peak = a;
+  }
+  if (peak > 1e-6) for (let b = 0; b < n; b++) { min[b] /= peak; max[b] /= peak; }
+  return { bucket, count: n, sampleRate: buffer.sampleRate, durationSec: buffer.duration, min, max };
+}
+// 任意 [srcStart, srcStart+len] 秒区间在 x 像素列的包络取样（envelope + 区间 → 列值）
+function envAt(env, srcSec) {
+  if (!env || !(srcSec >= 0) || srcSec > env.durationSec) return 0;
+  const i = Math.floor(srcSec * env.sampleRate / env.bucket);
+  if (!Number.isFinite(i)) return 0;
+  const k = Math.max(0, Math.min(env.count - 1, i));
+  return Math.max(Math.abs(env.min[k]), Math.abs(env.max[k]));
+}
+
+// ---------- ClipTransport：双时钟调度器 ----------
+// 语义：position = startPos + (ctx.currentTime - startCtxTime)；clip 调度以「时间轴秒」为域，
+// 进 clip → 起 BufferSource（srcStart+偏移），出 clip / 段间静音 → 不调度（自然静音）。
+// 淡化/增益/静音/等功率交叉淡化全部经 Gain 自动化表达（调度时点快照；live 编辑走 reschedule）。
+class ClipTransport {
+  constructor({ getContext, destination }) {
+    this.getContext = getContext;   // () => AudioContext（懒建）
+    this.destination = destination; // 恒为 ctx.destination
+    this.playing = false;
+    this._timer = null;
+    this._sources = [];
+    this._gains = [];
+    this._scheduled = new Set();
+    this._clips = [];
+    this._resolveBuffer = () => null; // assetId → AudioBuffer | null
+    this.trackGainVal = 1;            // 轨音量（0..1 线性，C15）
+    this.trackMuted = false;
+    this.master = null;
+    this.startPos = 0;
+    this.startCtxTime = 0;   // 调度锚（含 START_DELAY：源起播提前量）
+    this._clockCtxTime = 0;  // 走带时钟锚（无延迟：position 立即从 from 前进，beat 不回落 0）
+    this.rate = 1;
+  }
+  _ensureMaster(ctx) {
+    if (!this.master || this.master.context !== ctx) {
+      const dest = typeof this.destination === 'function' ? this.destination() : this.destination;
+      this.master = ctx.createGain();
+      this.master.gain.value = this.trackMuted ? 0 : this.trackGainVal;
+      if (dest) this.master.connect(dest);
+    }
+    return this.master;
+  }
+  setTrackGain(g) {
+    this.trackGainVal = Math.max(0, Math.min(2, Number(g) || 0));
+    if (this.master) this.master.gain.setTargetAtTime(this.trackMuted ? 0 : this.trackGainVal, this.master.context.currentTime, 0.01);
+  }
+  setTrackMuted(m) {
+    this.trackMuted = !!m;
+    if (this.master) this.master.gain.setTargetAtTime(this.trackMuted ? 0 : this.trackGainVal, this.master.context.currentTime, 0.01);
+  }
+  get position() {
+    if (!this.playing || !this.master) return this.startPos;
+    // 走带时钟与调度锚分离：position 立即从 startPos 前进（START_DELAY 窗口内不回落 0，
+    // 否则 seek/循环回卷后 beat 瞬时归 0 → 队形跟随/循环区间被改写；S3-06/M6 回归）
+    return Math.max(0, this.startPos + (this.master.context.currentTime - this._clockCtxTime));
+  }
+  play(clips, { from = 0, rate = 1, resolveBuffer = this._resolveBuffer } = {}) {
+    const ctx = this.getContext();
+    if (!ctx) return false;
+    this.stopInternal();
+    this._clips = clips || [];
+    this._resolveBuffer = resolveBuffer || this._resolveBuffer;
+    this.rate = Math.max(0.25, Math.min(4, rate || 1));
+    this.startPos = Math.max(0, from || 0);
+    this._ensureMaster(ctx);
+    this.startCtxTime = ctx.currentTime + START_DELAY;
+    this._clockCtxTime = ctx.currentTime;
+    this._scheduled.clear();
+    this.playing = true;
+    this.tick();
+    this._timer = setInterval(() => this.tick(), TICK_MS);
+    return true;
+  }
+  // live 编辑（淡化/增益/静音/结构变化在守卫暂停后）后重调度：从当前位置无缝续走
+  reschedule(clips, rate = this.rate) {
+    if (!this.playing) return;
+    const pos = this.position;
+    this.play(clips || this._clips, { from: pos, rate, resolveBuffer: this._resolveBuffer });
+  }
+  stop() {
+    const pos = this.position;
+    this.stopInternal();
+    this.startPos = pos;
+    return pos;
+  }
+  stopInternal() {
+    if (this._timer !== null) { clearInterval(this._timer); this._timer = null; }
+    for (const s of this._sources) { try { s.stop(); } catch {} try { s.disconnect(); } catch {} }
+    for (const g of this._gains) { try { g.disconnect(); } catch {} }
+    this._sources = []; this._gains = [];
+    this._scheduled.clear();
+    this.playing = false;
+  }
+  ctxTimeOf(tlSec) { return this.startCtxTime + (tlSec - this.startPos); }
+  tick() {
+    if (!this.playing || !this.master) return;
+    const ctx = this.master.context;
+    const pos = Math.max(0, this.position);
+    const horizon = pos + LOOKAHEAD + (this.startCtxTime - ctx.currentTime > 0 ? START_DELAY : 0);
+    const clips = [...this._clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+    for (const clip of clips) {
+      if (clip.timelineStartSec > horizon) break;
+      if (this._scheduled.has(clip.id)) continue;
+      const end = clipEnd(clip);
+      if (end <= pos + 1e-4) { this._scheduled.add(clip.id); continue; }
+      this._scheduled.add(clip.id);
+      if (clip.muted) continue;
+      const buffer = this._resolveBuffer(clip.assetId);
+      if (!buffer) continue;
+      const tlStart = Math.max(clip.timelineStartSec, pos);
+      if (end - tlStart <= 1e-3) continue;
+      this.scheduleClip(ctx, clip, buffer, tlStart, end);
+    }
+  }
+  // 调度一个 clip 的剩余区间：源偏移 + 分段增益自动化（fade 段 setValueCurveAtTime）
+  scheduleClip(ctx, clip, buffer, tlStart, tlEnd) {
+    const when = Math.max(this.ctxTimeOf(tlStart), ctx.currentTime + 0.005);
+    const skip = Math.max(0, tlStart - clip.timelineStartSec);
+    const durTl = tlEnd - tlStart;
+    if (durTl <= 1e-3) return;
+    const srcOffset = clip.srcStartSec + skip * this.rate;
+    if (buffer.duration - srcOffset <= 1e-4) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    if (this.rate !== 1) src.playbackRate.value = this.rate;
+    const gain = ctx.createGain();
+    src.connect(gain); gain.connect(this.master);
+    this.applyGainAutomation(gain.gain, clip, skip, skip + durTl, ct => when + (ct - skip));
+    src.start(when, srcOffset, durTl * this.rate);
+    this._sources.push(src); this._gains.push(gain);
+  }
+  // 分段增益自动化：常量段 setValueAtTime、淡化段 setValueCurveAtTime(96 点)，首尾相接无重叠
+  applyGainAutomation(param, clip, tStart, tEnd, ctxOf) {
+    const inEnd = clip.fadeInSec || 0;
+    const outStart = clip.lengthSec - (clip.fadeOutSec || 0);
+    const pushCurve = (a, b) => {
+      const n = 96;
+      const arr = new Float32Array(n);
+      for (let i = 0; i < n; i++) arr[i] = clipGainAt(clip, a + ((b - a) * i) / (n - 1));
+      try {
+        param.setValueAtTime(arr[0], ctxOf(a));
+        param.setValueCurveAtTime(arr, ctxOf(a), b - a);
+      } catch { /* 曲线竞争：忽略 */ }
+    };
+    let cursor = tStart;
+    if (tStart < inEnd - 1e-6) {
+      const b = Math.min(tEnd, inEnd);
+      pushCurve(tStart, b);
+      cursor = b;
+    } else {
+      try { param.setValueAtTime(clipGainAt(clip, tStart), ctxOf(tStart)); } catch {}
+    }
+    const midEnd = Math.min(tEnd, Math.max(cursor, outStart));
+    if (midEnd > cursor + 1e-6) {
+      try { param.setValueAtTime(clipGainAt(clip, cursor + 1e-6), ctxOf(cursor)); } catch {}
+      cursor = midEnd;
+    }
+    if (cursor < tEnd - 1e-6) pushCurve(cursor, tEnd);
+  }
+}
+
+// ---------- 「按队形段自动切」（C18/P1 纯函数部分） ----------
+// times=[{t, fade}]：块边界（时间线秒）+ 过渡拍时长；assetDurOf(assetId)→素材秒长。
+// 逐边界：跨边界 clip 分割 → 相邻对交叉淡化（前段右延 fade/2、后段左移 fade/2，
+// 淡化中点恰落在边界；源界/时间轴零点约束下钳制）。重复执行幂等（已切边界跳过）。
+function autoSplitAtBoundaries(clips, times, assetDurOf = () => Infinity) {
+  let splits = 0, fades = 0;
+  const sorted = [...times].sort((a, b) => a.t - b.t);
+  for (const { t, fade } of sorted) {
+    // 已有 clip 缘恰在该点（±1ms）或该点落在既有淡化重叠区内 → 视为已处理（幂等）
+    const atEdge = clips.some(c => Math.abs(c.timelineStartSec - t) < 1e-3 || Math.abs(clipEnd(c) - t) < 1e-3);
+    const inFadedOverlap = computeOverlaps(clips).some(ov =>
+      (ov.a.fadeOutSec || 0) > 0.005 && t > ov.start + 1e-3 && t < ov.end - 1e-3);
+    let left = null;
+    if (!atEdge && !inFadedOverlap) {
+      const idx = clips.findIndex(c => t > c.timelineStartSec + MIN_CLIP_DUR && t < clipEnd(c) - MIN_CLIP_DUR);
+      if (idx < 0) continue;
+      const srcClip = clips[idx];
+      const rightNew = splitClipAt(clips, srcClip.id, t);
+      if (!rightNew) continue;
+      // 新右段继承的 fadeIn 来自边界左侧上下文（与本边界无关）→ 清零，交由本边界新建交叉淡化
+      rightNew.fadeInSec = 0;
+      rightNew.fadeInAuto = false;
+      splits++;
+    }
+    left = clips.find(c => Math.abs(clipEnd(c) - t) < 1e-3 + 0.05) || null; // 淡化中点=边界：左段缘=边界±f/2
+    if (!left || !(fade > 0.005)) continue;
+    // 相邻右 clip：起点在边界附近（≤ left 终点邻域）
+    const right = clips.find(c => c !== left && c.timelineStartSec > left.timelineStartSec
+      && c.timelineStartSec <= clipEnd(left) + 1e-3) || null;
+    if (!right) continue;
+    // 已有淡化 → 幂等跳过
+    if (left.fadeOutSec > 0.005 || right.fadeInSec > 0.005) continue;
+    const assetDur = assetDurOf(left.assetId);
+    // 交叉淡化：前段右延 f/2（源界内）、后段左移 f/2 且源入点同步前进 f/2（内容连续，
+    // 淡化中点恰落在边界）；f 钳制在两侧半长与源界内
+    const growRoom = assetDur - (left.srcStartSec + left.lengthSec);
+    let f = Math.min(fade, left.lengthSec / 2, right.lengthSec / 2);
+    if (growRoom < f / 2) f = growRoom * 2 > 0.02 ? growRoom * 2 : 0;
+    if (f < 0.01) continue;
+    if (!trimClipRightAnchored(left, clipEnd(left) + f / 2, assetDur)) f = Math.max(0.01, Math.min(f, right.timelineStartSec));
+    if (right.timelineStartSec >= f / 2 && right.srcStartSec + right.lengthSec - f / 2 <= assetDur + 1e-6) {
+      right.timelineStartSec = r6(right.timelineStartSec - f / 2);
+      right.srcStartSec = r6(right.srcStartSec + f / 2);   // 内容锚定：左移边界=露出更晚源内容
+      right.lengthSec = r6(right.lengthSec - f / 2);
+    } else {
+      continue;
+    }
+    left.fadeOutSec = r6(f); left.fadeOutAuto = false;
+    right.fadeInSec = r6(f); right.fadeInAuto = false;
+    capFades(left); capFades(right);
+    fades++;
+  }
+  return { splits, fades };
+}
+
+Object.assign(FS.audioClips, { TICK_MS, LOOKAHEAD, START_DELAY, GAIN_MAX, CLIP_COLORS, CLIP_DEFAULT_COLOR, clipEnd, lastClipEndSec, effectiveRegions, capFades, fadeEnvAt, clipGainAt, computeOverlaps, applyAutoCrossfades, pruneAutoCrossfades, trimClipLeftAnchored, trimClipLeftBoundary, trimClipRightAnchored, trimClipRightBoundary, splitClipAt, deleteClips, rippleDeleteClips, trimClipsToRange, collectSnapCandidates, snapTime, nearestZeroCrossing, computeWaveEnvelope, envAt, ClipTransport, autoSplitAtBoundaries });
 })();
 
 /* ===== module: shapes ===== */
@@ -1332,9 +1996,23 @@ const storage = {
   },
   async deleteProject(id) {
     if (STORAGE_MODE === 'ls') { try { localStorage.removeItem(LS_KEY_PREFIX + id); } catch {} return; }
-    if (!hasIDB) { memory.projects.delete(id); memory.audio.delete(id); return; }
+    if (!hasIDB) {
+      memory.projects.delete(id); memory.audio.delete(id);
+      for (const k of [...memory.audio.keys()]) if (k.startsWith(id + ':')) memory.audio.delete(k);
+      return;
+    }
     await tx('projects', 'readwrite', s => s.delete(id));
     await tx('audio', 'readwrite', s => s.delete(id));
+    // v3 媒体资产 blob（键 `${projectId}:${assetId}`）一并清扫
+    await tx('audio', 'readwrite', s => {
+      const req = s.openCursor();
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return;
+        if (typeof c.key === 'string' && c.key.startsWith(id + ':')) c.delete();
+        c.continue();
+      };
+    });
   },
   async putAudio(id, blob) {
     // LS 离线档：音频 Blob 塞不进 localStorage 配额 → 安全忽略（不落盘、不 crash、不阻塞主流程）。
@@ -1347,6 +2025,17 @@ const storage = {
     if (STORAGE_MODE === 'ls') return null;
     if (!hasIDB) return memory.audio.get(id) || null;
     return await tx('audio', 'readonly', s => s.get(id));
+  },
+  // ---- v3 媒体资产 blob（复用 audio store，键 `${projectId}:${assetId}`；LS 档不持久，同 putAudio） ----
+  async putAsset(projectId, assetId, blob) {
+    if (STORAGE_MODE === 'ls') return;
+    if (!hasIDB) { memory.audio.set(`${projectId}:${assetId}`, blob); return; }
+    await tx('audio', 'readwrite', s => s.put(blob, `${projectId}:${assetId}`));
+  },
+  async getAsset(projectId, assetId) {
+    if (STORAGE_MODE === 'ls') return null;
+    if (!hasIDB) return memory.audio.get(`${projectId}:${assetId}`) || null;
+    return await tx('audio', 'readonly', s => s.get(`${projectId}:${assetId}`));
   },
 };
 
@@ -1526,6 +2215,10 @@ async function duplicateProject(id) {
   await storage.putProject(p);
   const blob = await storage.getAudio(oldId);
   if (blob) await storage.putAudio(p.id, blob); // 副本继承音频
+  for (const a of p.media?.assets || []) { // v3：副本继承全部媒体资产 blob
+    const ab = await storage.getAsset(oldId, a.id);
+    if (ab) await storage.putAsset(p.id, a.id, ab);
+  }
   await refreshLibrary();
 }
 
@@ -1540,20 +2233,29 @@ FS.audio = FS.audio || {};
 FS.audio = FS.audio || {};
 (function(){
 'use strict';
-
-// 音频：文件加载、波形峰值、播放控制、节拍器点击声
+const { ClipTransport, computeWaveEnvelope } = FS.audioClips;
+// 音频：媒体资产库（v3 多资产）、文件加载、波形峰值、播放控制、节拍器点击声
+// v3（exp/audition-lite）：AudioController 升级为「会话资产库」——assets: Map(id→资产)，
+// 活动资产（配乐）沿用 el/<audio> 旧通道（试听/旧播放路径零改动）；clip 播放走
+// ClipTransport（audio-clips.js，WebAudio BufferSource 调度），buffer 解码失败时自动
+// 回退 el 旧通道（降级可用）。
+/* import from audio-clips */
 class AudioController {
   constructor() {
     this.el = new Audio();
     this.el.preload = 'auto';
     this.ctx = null;
-    this.peaks = null;        // Float32Array，长度 N，值 -1..1
+    this.peaks = null;        // 活动资产波形（Float32Array，值 0..1，旧 drawWave 用）
     this.duration = 0;
     this.url = null;
     this.name = '';
     this.ready = false;
-    this.blob = null;         // 当前会话的音频源 Blob：下载版（file://→localStorage）不落盘，
-                              // 「导出 ▾」含音乐需要从这里兜底取（DEFECT-R26-2，与在线 IndexedDB 行为对齐）
+    this.blob = null;         // 活动资产源 Blob：下载版（file://→localStorage）不落盘，
+                              // 「导出 ▾」含音乐需要从这里兜底取（DEFECT-R26-2）
+    // ---- v3 媒体资产库 ----
+    this.assets = new Map();  // id → {id,name,durationSec,size,blob,buffer,peaks,env}
+    this.activeId = null;
+    this.transport = null;    // ClipTransport（懒建）
   }
   ensureCtx() {
     if (!this.ctx) {
@@ -1563,45 +2265,95 @@ class AudioController {
     if (this.ctx?.state === 'suspended') this.ctx.resume();
     return this.ctx;
   }
-  async loadBlob(blob, name = '') {
-    // 任务#3（报告#3）：失败不破坏当前会话——先在临时 <audio> 上等元数据，成功后才替换旧会话。
-    // 旧实现先 dispose() 再等元数据，损坏音频 reject 后播放器留下 ready=false 的空会话，
-    // 播放中载入即僵死（playing=true 空转）；现在失败时旧音乐照常可用。
-    const el = new Audio();
-    el.preload = 'auto';
-    const url = URL.createObjectURL(blob);
-    el.src = url;
-    try {
-      await new Promise((resolve, reject) => {
-        el.addEventListener('loadedmetadata', resolve, { once: true });
-        el.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
-      });
-    } catch (e) {
-      URL.revokeObjectURL(url);
-      throw e;
-    }
-    this.dispose(); // 元数据确认可解码后才提交：清旧会话（旧 url/blob/peaks/旧元素）
-    this.el = el;
-    this.blob = blob; // 会话内保留原始 Blob（导出含乐兜底用；dispose 时清空）
-    this.url = url;
-    this.name = name || blob.name || 'audio';
-    this.duration = this.el.duration || 0;
-    // 波形（失败不阻塞，仅无波形显示）
+  get activeAsset() { return this.activeId != null ? (this.assets.get(this.activeId) || null) : null; }
+  // 活动资产已解码出 AudioBuffer → clip 通道可用；false 时播放回退 el 旧通道
+  get bufferReady() { return !!this.activeAsset?.buffer; }
+
+  // 导入一个媒体资产：解码（AudioBuffer + 波形包络一次性计算）；失败仍登记元数据（buffer=null，
+  // 只能作元数据展示，播放回退）。返回资产对象。
+  async addAsset(blob, name = '', id = null) {
+    const asset = {
+      id: id || `ast_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      name: name || blob.name || 'audio',
+      durationSec: 0,
+      size: blob.size || 0,
+      blob, buffer: null, peaks: null, env: null,
+    };
     try {
       const ab = await blob.arrayBuffer();
       this.ensureCtx();
-      const buf = await this.ctx.decodeAudioData(ab);
-      this.peaks = computePeaks(buf, 1800);
-      this.duration = buf.duration;
-    } catch { this.peaks = null; }
-    // FIX-R34-1：ready 置位移到波形解码之后。旧实现 ready 先置位，而 loadAudioFile 的
-    // 项目字段提交（p.audio.name）要等 loadBlob 返回——中间隔着整段 decodeAudioData
-    //（长曲数百毫秒）。用户在此窗口按 ▶：useAudio 仍为 false → 虚拟时钟起播；随后
-    // name 提交使 useAudio 翻真，_tick 误判「音频通道停了」自愈暂停 → 播放刚起即停。
-    // ready 与项目字段提交顺序对齐后，竞态窗口闭合。
+      const buf = await this.ctx.decodeAudioData(ab.slice(0));
+      asset.buffer = buf;
+      asset.durationSec = buf.duration;
+      asset.peaks = computePeaks(buf, 1800);
+      asset.env = computeWaveEnvelope(buf, 512);
+    } catch {
+      // 解码失败：用 <audio> 元数据兜底时长（播放不可用，走 el 通道的旧路径也不可用此资产）
+      try {
+        const probe = new Audio();
+        probe.preload = 'metadata';
+        probe.src = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          probe.addEventListener('loadedmetadata', resolve, { once: true });
+          probe.addEventListener('error', () => reject(new Error('音频无法解码')), { once: true });
+          setTimeout(() => reject(new Error('音频元数据超时')), 4000);
+        });
+        asset.durationSec = probe.duration || 0;
+        URL.revokeObjectURL(probe.src);
+      } catch { /* 元数据也拿不到：durationSec=0 */ }
+    }
+    this.assets.set(asset.id, asset);
+    return asset;
+  }
+  // 设活动资产（配乐）：同步旧通道字段（el/peaks/duration/blob/ready）——旧播放路径零改动
+  setActiveAsset(id) {
+    const a = this.assets.get(id);
+    if (!a) return false;
+    this.dispose(); // 清旧 el 会话（旧 url/peaks）；资产库不动
+    this.activeId = id;
+    this.el = new Audio();
+    this.el.preload = 'auto';
+    this.url = URL.createObjectURL(a.blob);
+    this.el.src = this.url;
+    this.blob = a.blob;
+    this.peaks = a.peaks;
+    this.duration = a.durationSec;
+    this.name = a.name;
     this.ready = true;
+    return true;
+  }
+  // 旧入口兼容：载入并设为活动资产（「载入音乐…」/导入回填/自动恢复共用）
+  async loadBlob(blob, name = '', id = null) {
+    const asset = await this.addAsset(blob, name, id);
+    this.setActiveAsset(asset.id);
     return this;
   }
+  // ---- v3 clip 通道（Player 调用；buffer 未就绪返回 false → Player 回退 el 通道） ----
+  ensureTransport() {
+    if (!this.transport) {
+      this.transport = new ClipTransport({ getContext: () => this.ensureCtx(), destination: () => this.ensureCtx()?.destination });
+    }
+    return this.transport;
+  }
+  resolveAssetBuffer(assetId) {
+    const a = this.assets.get(assetId);
+    return a?.buffer || null;
+  }
+  playClips(clips, fromSec, rate = 1) {
+    const t = this.ensureTransport();
+    return t.play(clips, { from: fromSec, rate, resolveBuffer: id => this.resolveAssetBuffer(id) });
+  }
+  seekClips(sec, rate = this.transport?.rate ?? 1) {
+    if (!this.transport?.playing) return;
+    const clipsRef = this.transport._clips;
+    this.transport.play(clipsRef, { from: sec, rate, resolveBuffer: id => this.resolveAssetBuffer(id) });
+  }
+  stopClips() { this.transport?.stopInternal(); }
+  get clipsPlaying() { return !!(this.transport?.playing); }
+  get clipsPosition() { return this.transport?.position ?? 0; }
+  setTrackGain(g) { this.transport?.setTrackGain(g); }
+  setTrackMuted(m) { this.transport?.setTrackMuted(m); }
+
   play(offsetSec, rate = 1) {
     this.el.playbackRate = rate;
     this.el.currentTime = Math.max(0, Math.min(offsetSec, this.duration || offsetSec));
@@ -1636,6 +2388,8 @@ class AudioController {
     this.url = null; this.peaks = null; this.ready = false; this.duration = 0; this.blob = null;
   }
 }
+
+// 波形峰值（活动资产 0..1 归一化，旧 drawWave 用；clip 绘制用资产 env，见 audio-clips.computeWaveEnvelope）
 function computePeaks(audioBuffer, buckets = 1800) {
   const ch = audioBuffer.getChannelData(0);
   const per = Math.floor(ch.length / buckets) || 1;
@@ -1663,8 +2417,15 @@ FS.player = FS.player || {};
 (function(){
 'use strict';
 const { computeSegments, spb, beatToSec, secToBeat, currentFormationIndexAt } = FS.model;
+const { lastClipEndSec } = FS.audioClips;
 // 回放引擎：音频时钟 / 虚拟时钟、数拍入场、循环、节拍器
+// v3（exp/audition-lite）：音频通道升级双轨——clip 调度（ClipTransport，WebAudio）为主，
+// <audio> 元素旧通道为回退（buffer 解码失败/无 clip 的边界）。播放语义（规格 §2/§6）：
+// 播放头进 clip → 调度（srcStart+偏移）；出 clip → 段间静音（时间轴时钟继续走）；
+// ended = 越过最后 clip 终点与 totalBeats 取先到（先到者按 #7 混合语义处置：
+// 时间轴未完 → _audioEnded 虚拟接管；已完 → 统一终态 ended）。既有守卫全部继承。
 /* import from model */
+/* import from audio-clips */
 class Player {
   constructor({ audio, getProject, onTick, onStateChange, onCountin, onPreviewEnd }) {
     this.audio = audio;           // AudioController
@@ -1684,12 +2445,18 @@ class Player {
     this._stopAt = null;          // 预览过渡时的结束拍
     this._ciBase = null;          // 数拍起数的基准拍（取消倒计时回到这里）
     this._audioEnded = false;     // 音频先于时间轴自然结束：true=后续播放由虚拟时钟接管（见 useAudio）
+    this._clipsActive = false;    // 本次播放是否走 clip 调度通道（起播时定格；中途不切换）
   }
   get useAudio() {
     if (this._forceVirtual) return false;
     if (this._audioEnded) return false; // 音频已放完：虚拟时钟接管至 totalBeats（重按 ▶ 从当前拍续走）
     const p = this.getProject();
     return !!(p?.audio?.name && this.audio?.ready);
+  }
+  // clip 通道判定：活动资产已解码出 buffer 且项目有 clip（v1 迁移后载入音乐即有全长 clip）
+  _useClips(p) {
+    p = p || this.getProject();
+    return !!(this.audio?.bufferReady && Array.isArray(p?.timeline?.audioClips) && p.timeline.audioClips.length > 0);
   }
   // 切帧预览中（有限段虚拟播放）：不抢占用户选择的队形高亮
   get previewing() {
@@ -1717,7 +2484,14 @@ class Player {
       if (this.playing) return; // 防御：已被其他路径启动
       this.playing = true;
       this._lastIntBeat = null;
-      if (this.useAudio) {
+      this._clipsActive = this.useAudio && this._useClips(p); // useAudio=false（_audioEnded/_forceVirtual）→ 虚拟接管
+      if (this._clipsActive) {
+        // clip 调度通道：从当前拍的秒位起播（播放头出 clip 区间 = 段间静音，时钟继续走）；
+        // el playbackRate 镜像（保持「音频通道速率」可观测，TC-P5-06 口径）
+        this.audio.setRate(this.speed);
+        this.audio.playClips(p.timeline.audioClips, beatToSec(p, this.beat), this.speed);
+        this._virtual = null;
+      } else if (this.useAudio) {
         this.audio.setRate(this.speed);
         this.audio.play(beatToSec(p, this.beat), this.speed);
         this._virtual = null;
@@ -1784,7 +2558,8 @@ class Player {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     if (!this.playing) return;
     this.playing = false;
-    if (this.useAudio) this.audio.pause();
+    if (this._clipsActive) this.audio.stopClips();
+    else if (this.useAudio) this.audio.pause();
     this._virtual = null;
     this._forceVirtual = false;    this.onStateChange?.({ playing: false });
   }
@@ -1805,15 +2580,25 @@ class Player {
       const { totalBeats } = computeSegments(p);
       b = Math.max(0, Math.min(b, totalBeats));
       // 音频结束态下把播放头拖回音频范围内 → 恢复音频时钟（下次起播重新走 audio 通道）
-      if (this._audioEnded && this.audio?.duration && beatToSec(p, b) < this.audio.duration - 0.02) {
-        this._audioEnded = false;
-      }
+      const audioEndSec = this._clipsEndSec(p);
+      const inAudio = audioEndSec !== null
+        ? beatToSec(p, b) < audioEndSec - 0.02
+        : (this.audio?.duration && beatToSec(p, b) < this.audio.duration - 0.02);
+      if (this._audioEnded && inAudio) this._audioEnded = false;
     }
     this.beat = b;
-    if (this.useAudio) this.audio.seek(beatToSec(p, b));
+    if (this.playing && this._clipsActive) this.audio.seekClips(beatToSec(p, b), this.speed); // clip 通道：重调度
+    else if (this.useAudio) this.audio.seek(beatToSec(p, b));
     else if (this.playing) this._virtual = { baseBeat: b, t0: performance.now() };
     this._lastIntBeat = null;
     this._emit();
+  }
+  // 音频通道的有效终点（时间线秒）：clip 通道=最后 clip 终点；el 通道=资产时长；无音乐=null
+  _clipsEndSec(p) {
+    p = p || this.getProject();
+    if (this._useClips(p)) return lastClipEndSec(p.timeline.audioClips);
+    if (p?.audio?.name && this.audio?.ready) return this.audio.duration || 0;
+    return null;
   }
   seekFormation(index) {
     const { segments } = this.segments();
@@ -1822,6 +2607,13 @@ class Player {
   }
   setSpeed(s) {
     this.speed = s;
+    if (this.playing && this._clipsActive) {
+      // clip 通道：重调度换 rate（buffer source 的 playbackRate 起播时定格）；
+      // el playbackRate 同步镜像（活动资产未播放，仅保持「音频通道速率」可观测，TC-P5-06 口径）
+      this.audio.setRate(s);
+      this.audio.seekClips(this.audio.clipsPosition, s);
+      return;
+    }
     if (this.useAudio) this.audio.setRate(s);
     if (this.playing && this._virtual) this._virtual = { baseBeat: this.beat, t0: performance.now() };
   }
@@ -1832,7 +2624,15 @@ class Player {
     if (!this.playing) return;
     const p = this.getProject();
     if (!p) { this.playing = false; return; }
-    if (this.useAudio && !this.audio.playing) {
+    if (this._clipsActive) {
+      // clip 通道：transport 停了 = 自然越过最后 clip 终点（或异常）→ 终态处置
+      if (!this.audio.clipsPlaying) {
+        const pos = this.audio.clipsPosition;
+        const endSec = this._clipsEndSec(p) || 0;
+        this._finish(pos >= endSec - 0.06, Math.min(pos, endSec || pos));
+        return;
+      }
+    } else if (this.useAudio && !this.audio.playing) {
       // 音频通道停了：区分「自然放完」（含 ended 事件抢先的窗口）与「异常中断」（任务#7/#3）
       this._finish(!!(this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02));
       return;
@@ -1841,7 +2641,11 @@ class Player {
     // 不再走 beat=this.beat 空转的「僵死播放」态
     if (!this.useAudio && !this._virtual && !this._forceVirtual) { this.pause(); return; }
     let beat;
-    if (this.useAudio && this.audio.playing) {
+    if (this._clipsActive) {
+      // clip 通道：beat 由 transport 双时钟位置反推（段间静音时时钟继续走、队形照常推进）
+      beat = secToBeat(p, this.audio.clipsPosition);
+      this._virtual = null;
+    } else if (this.useAudio && this.audio.playing) {
       beat = secToBeat(p, this.audio.currentTime);
       this._virtual = null;
     } else if (this._virtual) {
@@ -1876,8 +2680,13 @@ class Player {
         this.pause();
         this.beat = totalBeats;
         this.onStateChange?.({ playing: false, ended: true });
-      } else if (this.useAudio && this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.02) {
-        this._finish(true); // 任务#7（报告#8）：音频先于时间轴自然结束（ended 前的采样窗口）
+      } else {
+        // 任务#7（报告#8）：音频先于时间轴自然结束（ended 前的采样窗口）——
+        // clip 通道按「最后 clip 终点」判定，el 通道按资产时长判定（虚拟接管态不判）。
+        // 终点钳制：起播点越界（续播拍 > 音频终点，el 路径会 clamp seek）时播放头同样钳在音频末拍。
+        const endSec = (this._clipsActive || this.useAudio) ? this._clipsEndSec(p) : null;
+        const pos = this._clipsActive ? this.audio.clipsPosition : this.audio.currentTime;
+        if (endSec !== null && endSec > 0 && pos >= endSec - 0.02) this._finish(true, Math.min(pos, endSec));
       }
     }
     this._emit();
@@ -1886,13 +2695,15 @@ class Player {
   }
   // 音频通道结束的收尾：自然放完时把播放头钳在音频末拍（不越过波形）、
   // 时间轴还没走完则置 _audioEnded（下一次 ▶ 由虚拟时钟从当前拍接管至 totalBeats）
-  _finish(audioEnded) {
+  // endPos：clip 通道=transport 位置（时间线秒）；el 通道缺省读 el.currentTime
+  _finish(audioEnded, endPos = null) {
     this.pause();
     if (!audioEnded) return;
     const p = this.getProject();
     if (!p) return;
+    const pos = endPos ?? (this._clipsActive ? this.audio.clipsPosition : (this.audio.currentTime || this.audio.duration || 0));
     const { totalBeats } = this.segments();
-    const endBeat = Math.max(0, Math.min(secToBeat(p, this.audio.currentTime || this.audio.duration || 0), totalBeats));
+    const endBeat = Math.max(0, Math.min(secToBeat(p, pos || 0), totalBeats));
     if (totalBeats - endBeat <= 0.05) {
       this.beat = totalBeats;
       this.onStateChange?.({ playing: false, ended: true });
@@ -3004,10 +3815,32 @@ FS.timeline = FS.timeline || {};
 (function(){
 'use strict';
 const { drawScene } = FS.stage;
-const { computeSegments, spb, beatToSec, secToBeat, beatLabel, addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX } = FS.model;
+const { computeSegments, spb, beatToSec, secToBeat, beatLabel, addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX, clipsOf } = FS.model;
+const { clipEnd, computeOverlaps, applyAutoCrossfades, pruneAutoCrossfades, trimClipLeftAnchored, trimClipLeftBoundary, trimClipRightAnchored, trimClipRightBoundary, splitClipAt, rippleDeleteClips, trimClipsToRange, collectSnapCandidates, snapTime, nearestZeroCrossing, envAt, fadeEnvAt, MIN_CLIP_DUR, CLIP_DEFAULT_COLOR } = FS.audioClips;
 // 时间线：编辑模式队形条（缩略图+拖拽排序） / 音乐模式波形时间线（块拖拽、节拍吸附、播放头）
+// v3（exp/audition-lite）：常驻音频轨（简单态 26px / 展开态 Audition Lite 72px）——
+// clip 自由摆放（间隙=静音、重叠=自动等功率交叉淡化+菱形手柄）、Audition 式内容锚定 trim、
+// 分割（Ctrl/Cmd+K / 剃刀）、淡化/增益把手、时间选区、右键菜单、磁吸（clip 缘/块边界/tag/
+// 播放头/选区/零交叉）。纯 clip 模型操作在 audio-clips.js（node 可测），此处只做几何与手势。
 /* import from stage */
 /* import from model */
+/* import from audio-clips */
+const AUDIO_SIMPLE_H = 26;    // 简单态音轨高（常驻）
+const AUDIO_EXPANDED_H = 72;  // 展开态（Audition Lite）音轨高
+const TRIM_TOL_PX = 6;               // clip 缘/把手命中半径
+const SNAP_TOL_PX = 8;               // 磁吸阈值（像素，时间域换算）
+const ZC_RADIUS_SEC = 0.004;         // 零交叉吸附半径（消切点咔哒）
+const r6 = v => Math.round(v * 1e6) / 1e6;
+function store_getProjectId(hooks) {
+  try { return hooks.getProjectId?.() ?? null; } catch { return null; }
+}
+function hexA(hex, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(56,189,248,${a})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 // ---------- F-10（UX-10）：chip 触摸长按拖拽排序——纯几何决策（node 可测） ----------
 // 触屏不产生 HTML5 dragstart（UX-10 根因），排序走 Pointer Events 长按路径：
 // 长按 LP_MS 触发拿起态（lift 视觉 + 可选触觉反馈），此后 pointermove 实时预览插入位
@@ -3236,13 +4069,24 @@ class MusicTimeline {
   constructor({ canvas, overlay, scroll, hooks }) {
     this.cv = canvas; this.ov = overlay; this.scroll = scroll;
     this.inner = canvas.parentElement; // #tl-inner：tag 内联命名输入挂这里（随横向滚动移动）
-    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio}
+    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio, canEdit(), pauseIfPlaying(), onTimeSelection(range|null), onClipContextMenu(info), toast(msg)}
     this.secPerPx = 0;  // 0 = 自适应
     this.drag = null;
     this.hoverTag = null;      // 悬停旗点 id（×删除钮 + title 提示）
     this.activeTag = null;     // 点选旗点 id：×保持可见（触屏无 hover 的删除路径）
     this._tagGeom = new Map(); // id → {x, delX}（drawTags 落笔几何，命中 × 用）
     this._tagInput = null;     // 内联命名输入 {el, beat, id, done}
+    // ---- v3 音频轨（Audition Lite）状态 ----
+    this.expanded = false;     // 展开态（localStorage 记忆，构造时读）
+    this.snapOn = true;        // 磁吸（S 开关；localStorage 记忆）
+    this.razor = false;        // 剃刀模式（R 开关；会话态）
+    this.clipSel = new Set();  // 选中 clip id（单选/Ctrl 多选）
+    this.timeSel = null;       // 时间选区 {start, end}（秒；空白拖拽/尺规 Shift 拖拽）
+    this.hoverClipEdge = null; // {id, part} 悬停命中（光标 + 边缘高亮）
+    this.hoverAudio = false;   // 悬停音频轨（S/R 快捷键作用域判定）
+    this._projectId = null;    // 项目切换检测（清 clip 选择态）
+    try { this.expanded = localStorage.getItem('wuzhen:audioTrackExpanded') === '1'; } catch {}
+    try { this.snapOn = localStorage.getItem('wuzhen:audioSnap') !== '0'; } catch {}
     this._bind();
   }
   pxPerSec() { return this.secPerPx ? 1 / this.secPerPx : 0; }
@@ -3252,26 +4096,194 @@ class MusicTimeline {
     const w0 = this.scroll.clientWidth || 600;
     return Math.max(w0, this.secPerPx ? totalSec / this.secPerPx : totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
   }
+  // ---- v3 几何：音频轨夹在 tag 道与队形块区之间，块区改为紧随其后（不再底部锚定） ----
+  audioTop() { return (this.rulerH ?? 22) + TAG_LANE_H; }
+  audioLaneH() { return this.expanded ? AUDIO_EXPANDED_H : AUDIO_SIMPLE_H; }
+  audioBottom() { return this.audioTop() + this.audioLaneH(); }
+  blocksTopFor() { return this.audioBottom() + 6; }
+  totalHeightFor() {
+    // 兼容旧几何：简单态总高维持旧 #tl-scroll 高（桌面 150 / 移动 120），富余计入音轨与块区间隔——
+    // 常驻音轨 26px 为规格 mandated 的新增道，不挤压舞台几何（L2 移动端半径基线依赖旧高）。
+    // 展开态（72px）为新增布局，无旧几何可保：总高随内容（40+72+6+36+6=160）。
+    const mobile = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 1023.5px)').matches;
+    const base = mobile ? 120 : 150;
+    return Math.max(base, this.blocksTopFor() + 36 + 6);
+  } // 块 36 + 底边距 6
+  hasMedia(p) { return !!(p?.media?.assets?.length); }
+  assetDurOf(p, assetId) { return p?.media?.assets?.find(a => a.id === assetId)?.durationSec ?? Infinity; }
   render() {
     const p = this.hooks.getProject();
     if (!p) return;
+    // 项目切换：清 clip 选择态（clip id 属于项目数据）
+    const pid = store_getProjectId(this.hooks);
+    if (pid !== this._projectId) {
+      this._projectId = pid;
+      this.clipSel = new Set();
+      this.timeSel = null;
+      this.razor = false;
+    }
     const dpr = window.devicePixelRatio || 1;
-    const h = this.scroll.clientHeight || 120;
+    // 音频轨常驻：容器高度由 JS 按简单/展开态设定（简单 110 / 展开 156）
+    const h = this.totalHeightFor();
+    if (this.scroll && this.scroll.style && this.scroll.clientHeight !== h) this.scroll.style.height = h + 'px';
+    const H = Math.max(h, this.scroll.clientHeight || h);
     const W = this.layoutWidth(p);
     for (const c of [this.cv, this.ov]) {
-      c.width = Math.round(W * dpr); c.height = Math.round(h * dpr);
-      c.style.width = W + 'px'; c.style.height = h + 'px';
+      c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+      c.style.width = W + 'px'; c.style.height = H + 'px';
     }
-    this.W = W; this.H = h;
+    this.W = W; this.H = H;
     const ctx = this.cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#0b1220';
-    ctx.fillRect(0, 0, W, h);
-    this.drawRuler(ctx, p, h);
-    this.drawWave(ctx, p, h);
-    this.drawBlocks(ctx, p, h);
+    ctx.fillRect(0, 0, W, H);
+    this.drawRuler(ctx, p, H);
+    this.drawAudioLane(ctx, p, H);
+    this.drawBlocks(ctx, p, H);
     this.drawTags(ctx, p);
     this.drawPlayhead();
+    this.syncAudioDom(p);
+  }
+  // 音频轨 DOM 附属（轨左端展开/收起钮、展开态表头、空态入口）随几何同步
+  syncAudioDom(p) {
+    if (typeof document === 'undefined') return;
+    const media = this.hasMedia(p);
+    const tog = document.getElementById('tl-audio-toggle');
+    if (tog) {
+      tog.hidden = false;
+      tog.style.top = Math.round(this.audioTop() + this.audioLaneH() / 2 - 11) + 'px';
+      tog.textContent = this.expanded ? '⌃' : '⌄';
+      tog.title = this.expanded ? '收起音频轨（简单态）' : '展开音频轨（Audition Lite 剪辑）';
+      tog.setAttribute('aria-label', tog.title);
+    }
+    const head = document.getElementById('tl-head');
+    if (head) {
+      head.hidden = !(this.expanded && media);
+      head.style.top = this.audioTop() + 'px';
+      head.style.height = this.audioLaneH() + 'px';
+    }
+    const empty = document.getElementById('tl-audio-empty');
+    if (empty) {
+      empty.hidden = media;
+      empty.style.top = this.audioTop() + 'px';
+      empty.style.height = this.audioLaneH() + 'px';
+    }
+  }
+
+  // ---- v3 音频轨绘制 ----
+  drawAudioLane(ctx, p, h) {
+    const top = this.audioTop(), lh = this.audioLaneH();
+    ctx.save();
+    ctx.fillStyle = 'rgba(148,163,184,.05)';
+    ctx.fillRect(0, top, this.W, lh);
+    ctx.strokeStyle = 'rgba(148,163,184,.2)';
+    ctx.beginPath();
+    ctx.moveTo(0, top + lh + .5); ctx.lineTo(this.W, top + lh + .5);
+    ctx.moveTo(0, top + .5); ctx.lineTo(this.W, top + .5);
+    ctx.stroke();
+    const clips = clipsOf(p);
+    if (!this.hasMedia(p)) {
+      if (this.expanded) {
+        ctx.fillStyle = 'rgba(148,163,184,.55)';
+        ctx.font = '11px sans-serif'; ctx.textBaseline = 'middle';
+        ctx.fillText('载入音乐后在此剪辑（左上「＋ 载入音乐」或「📚 媒体库」）', 10, top + lh / 2);
+      }
+      ctx.restore();
+      return;
+    }
+    // 时间选区（蓝色高亮带，先画在底层）
+    if (this.timeSel) {
+      const pps0 = this.ppsOf(p);
+      const x0 = this.timeSel.start * pps0, x1 = this.timeSel.end * pps0;
+      ctx.fillStyle = 'rgba(56,189,248,.16)';
+      ctx.fillRect(x0, top, Math.max(1, x1 - x0), lh);
+      ctx.strokeStyle = 'rgba(56,189,248,.7)';
+      ctx.beginPath();
+      ctx.moveTo(x0 + .5, top); ctx.lineTo(x0 + .5, top + lh);
+      ctx.moveTo(x1 - .5, top); ctx.lineTo(x1 - .5, top + lh);
+      ctx.stroke();
+    }
+    const pps = this.ppsOf(p);
+    for (const c of clips) this.drawClipBox(ctx, p, c, top, lh, pps);
+    // 重叠自动交叉淡化：交叠中点菱形手柄
+    for (const ov of computeOverlaps(clips)) {
+      const mx = ((ov.start + ov.end) / 2) * pps;
+      const my = top + 10;
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = '#e879f9';
+      ctx.strokeStyle = 'rgba(232,121,249,.5)';
+      ctx.lineWidth = 1;
+      ctx.fillRect(-4, -4, 8, 8);
+      ctx.strokeRect(-4, -4, 8, 8);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  drawClipBox(ctx, p, c, top, lh, pps) {
+    const x0 = c.timelineStartSec * pps, x1 = clipEnd(c) * pps, w = x1 - x0;
+    if (x1 <= 0 || x0 >= this.W) return;
+    const pad = this.expanded ? 3 : 3;
+    const y0 = top + pad, y1 = top + lh - pad;
+    const color = c.color || CLIP_DEFAULT_COLOR;
+    const selected = this.clipSel.has(c.id);
+    const visX0 = Math.max(-2, x0), visX1 = Math.min(this.W + 2, x1);
+    ctx.save();
+    // 盒底
+    ctx.fillStyle = hexA(color, c.muted ? .05 : .13);
+    ctx.fillRect(visX0, y0, visX1 - visX0, y1 - y0);
+    // 波形（按淡化包络收窄、随增益缩放；静音置灰）
+    const env = this.hooks.audio?.assets?.get(c.assetId)?.env || null;
+    const mid = (y0 + y1) / 2;
+    const amp = (y1 - y0) / 2 - (this.expanded ? 6 : 4);
+    const step = Math.max(1, Math.floor(this.W / 2400));
+    ctx.fillStyle = hexA(color, c.muted ? .22 : .58);
+    for (let x = Math.ceil(visX0); x < visX1; x += step) {
+      const rel = (x - x0) / pps;
+      const src = c.srcStartSec + rel;
+      let v = env ? envAt(env, src) : .14;
+      v *= Math.min(1.6, c.gain ?? 1) * fadeEnvAt(c, rel);
+      const a = Math.max(1, v * amp);
+      ctx.fillRect(x, mid - a, step, a * 2);
+    }
+    // 名牌
+    const nm = (c.name || '音频') + (c.muted ? '（静音）' : '');
+    if (w > 34) {
+      ctx.fillStyle = c.muted ? 'rgba(148,163,184,.8)' : '#e2e8f0';
+      ctx.font = '10px sans-serif'; ctx.textBaseline = 'top';
+      const maxChars = Math.floor((w - 8) / 6.2);
+      if (maxChars > 1) ctx.fillText(nm.slice(0, maxChars), x0 + 4, y0 + 2);
+    }
+    if (this.expanded) {
+      // 增益包络横线（黄，中线）
+      ctx.strokeStyle = 'rgba(250,204,21,.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x0 + 2, mid); ctx.lineTo(x1 - 2, mid); ctx.stroke();
+      // 淡化把手（顶部方把手；auto 交叉淡化呈品红）
+      const drawFh = (fx, isAuto) => {
+        ctx.fillStyle = isAuto ? '#e879f9' : '#7dd3fc';
+        ctx.fillRect(fx - 3.5, y0 - 1.5, 7, 7);
+        ctx.strokeStyle = 'rgba(2,6,23,.6)'; ctx.lineWidth = 1;
+        ctx.strokeRect(fx - 3.5, y0 - 1.5, 7, 7);
+      };
+      if ((c.fadeInSec || 0) > 0.005) drawFh(x0 + c.fadeInSec * pps, !!c.fadeInAuto);
+      if ((c.fadeOutSec || 0) > 0.005) drawFh(x1 - c.fadeOutSec * pps, !!c.fadeOutAuto);
+      // trim 缘（红括号光标区）
+      const hotL = this.hoverClipEdge?.id === c.id && this.hoverClipEdge.part === 'trimL';
+      const hotR = this.hoverClipEdge?.id === c.id && this.hoverClipEdge.part === 'trimR';
+      ctx.fillStyle = hotL ? '#f43f5e' : 'rgba(244,63,94,.5)';
+      ctx.fillRect(x0 - 1.5, y0, 3, y1 - y0);
+      ctx.fillStyle = hotR ? '#f43f5e' : 'rgba(244,63,94,.5)';
+      ctx.fillRect(x1 - 1.5, y0, 3, y1 - y0);
+    }
+    // 选中高亮描边
+    if (selected) {
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x0 - 1, y0 - 1, w + 2, y1 - y0 + 2);
+    }
+    ctx.restore();
   }
 
   drawRuler(ctx, p, h) {
@@ -3311,37 +4323,12 @@ class MusicTimeline {
     ctx.restore();
     this.rulerH = rulerH;
   }
-  drawWave(ctx, p, h) {
-    const audio = this.hooks.audio;
-    const pps = this.ppsOf(p);
-    if (!audio?.peaks) {
-      if (audio?.ready) { // 无波形：画时长条
-        ctx.save();
-        ctx.fillStyle = 'rgba(56,189,248,.15)';
-        ctx.fillRect(0, this.rulerH, (audio.duration || 0) * pps, h - this.rulerH);
-        ctx.restore();
-      }
-      return;
-    }
-    const peaks = audio.peaks;
-    const mid = this.rulerH + (h - this.rulerH) * 0.42;
-    const amp = (h - this.rulerH) * 0.34;
-    ctx.save();
-    ctx.fillStyle = 'rgba(56,189,248,.5)';
-    const step = Math.max(1, Math.floor(this.W / 2000)); // 大宽度下抽稀绘制
-    for (let x = 0; x < this.W; x += step) {
-      const sec = x / pps;
-      const i = Math.floor(sec / (audio.duration || 1) * peaks.length);
-      const v = peaks[Math.max(0, Math.min(peaks.length - 1, i))] || 0;
-      ctx.fillRect(x, mid - v * amp, step, Math.max(1, v * amp * 2));
-    }
-    ctx.restore();
-  }
+  // 旧整曲波形道已由 v3 常驻音频轨取代（drawWave 移除）：波形按 clip 画在音轨内（drawClipBox）。
   drawBlocks(ctx, p, h) {
     const { segments } = computeSegments(p);
     const pps = this.ppsOf(p);
     const spbV = spb(p);
-    const top = h - 44, bh = 36;
+    const top = this.blocksTopFor(), bh = 36; // v3：块区紧随音频轨（不再底部锚定）
     const selIdx = this.hooks.getIndex();
     ctx.save();
     ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
@@ -3610,6 +4597,20 @@ class MusicTimeline {
     cv.addEventListener('pointerdown', e => this._down(e));
     cv.addEventListener('pointermove', e => this._move(e));
     cv.addEventListener('dblclick', e => this._dblclick(e));
+    // v3：clip 右键菜单（空白处=取消选择，规格 §4）
+    cv.addEventListener('contextmenu', e => {
+      const p = this.hooks.getProject();
+      if (!p) return;
+      const r = this.cv.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      if (y < this.audioTop() || y > this.audioBottom() || !clipsOf(p).length) return;
+      e.preventDefault();
+      const hit = this._audioHit(x, y, clipsOf(p));
+      this.hooks.onClipContextMenu?.({
+        clipId: hit ? hit.clip.id : null,
+        screenX: e.clientX, screenY: e.clientY,
+      });
+    });
     window.addEventListener('pointerup', e => this._up(e), { passive: true });
     // F-02（UX-02）：浏览器中途接管（滚动接管/来电横幅/系统手势）会发 pointercancel 而后续
     // pointerup 不再来——不置 drag=null 则拖拽状态卡死，之后无按键的鼠标 hover 路过即持续
@@ -3619,8 +4620,33 @@ class MusicTimeline {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         this.zoom(e.deltaY < 0 ? 1.2 : 1 / 1.2);
+      } else if (e.altKey) {
+        // C16：Alt+滚轮 锚定光标缩放（与左下 －/＋/⤢ 同义）
+        e.preventDefault();
+        this.zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX);
+      } else if (e.shiftKey) {
+        // C16：Shift+滚轮 横移
+        e.preventDefault();
+        this.scroll.scrollLeft += (Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX);
       }
     }, { passive: false });
+  }
+  // 锚定缩放：anchorClientX（视口坐标）下的时间点在缩放后保持原屏幕位
+  zoomAt(factor, anchorClientX) {
+    const p = this.hooks.getProject();
+    if (!p) return;
+    const oldPps = this.ppsOf(p);
+    const rect = this.scroll.getBoundingClientRect();
+    const anchorSec = (anchorClientX - rect.left + this.scroll.scrollLeft) / oldPps;
+    this.zoom(factor);
+    const newPps = this.ppsOf(p);
+    if (newPps > 0) this.scroll.scrollLeft = Math.max(0, anchorSec * newPps - (anchorClientX - rect.left));
+  }
+  // 视口坐标 → 时间线秒（C13 落点换算用）
+  secFromClientX(clientX) {
+    const p = this.hooks.getProject();
+    const r = this.scroll.getBoundingClientRect();
+    return Math.max(0, (clientX - r.left + this.scroll.scrollLeft) / this.ppsOf(p));
   }
   edgeHits(x) {
     const p = this.hooks.getProject();
@@ -3665,17 +4691,28 @@ class MusicTimeline {
       }
       return;
     }
+    // ---- v3 音频轨（Audition Lite / 简单态）----
+    const clips = clipsOf(p);
+    if (clips.length && y >= this.audioTop() && y <= this.audioBottom()) {
+      this._audioDown(e, x, y, clips);
+      return;
+    }
     const edges = this.edgeHits(x);
-    if (edges.length && y > this.rulerH) {
+    if (edges.length && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
       try { this.cv.setPointerCapture(e.pointerId); } catch {}
       this.drag = { ...edges[0], startX: x };
       return;
     }
     if (y <= this.rulerH) {
-      // 尺规：点击/拖动定位
+      // 尺规：点击/拖动定位（Shift+拖拽=时间选区，C11/C8；普通拖拽保持 scrub 兼容既有仪器）
       try { this.cv.setPointerCapture(e.pointerId); } catch {}
-      this.drag = { kind: 'scrub' };
-      this.hooks.seekBeat(this.xToBeat(x));
+      if (e.shiftKey) {
+        this.drag = { kind: 'timeSel', startSec: x / this.ppsOf(p), moved: false, fromRuler: true };
+        this.timeSel = { start: x / this.ppsOf(p), end: x / this.ppsOf(p) };
+      } else {
+        this.drag = { kind: 'scrub' };
+        this.hooks.seekBeat(this.xToBeat(x));
+      }
       return;
     }
     if (y >= this.blocksTop && y <= this.blocksTop + this.blocksH) {
@@ -3686,24 +4723,195 @@ class MusicTimeline {
       }
     }
   }
+  // ---- v3 音频轨命中与手势 ----
+  // 命中链（展开态）：fade 把手 → trim 缘 → 增益横线 → 盒体；简单态只有盒体（拖移/点击定位）
+  _audioHit(x, y, clips) {
+    const pps = this.ppsOf(this.hooks.getProject());
+    const laneMid = this.audioTop() + this.audioLaneH() / 2;
+    for (let i = clips.length - 1; i >= 0; i--) { // 数组顺序即 z 序，顶层优先
+      const c = clips[i];
+      const x0 = c.timelineStartSec * pps, x1 = clipEnd(c) * pps;
+      if (x < x0 - TRIM_TOL_PX || x > x1 + TRIM_TOL_PX) continue;
+      if (!this.expanded) return { clip: c, part: 'body' };
+      if ((c.fadeInSec || 0) > 0.005 && Math.abs(x - (x0 + c.fadeInSec * pps)) <= TRIM_TOL_PX && y - this.audioTop() <= 12) return { clip: c, part: 'fadeIn' };
+      if ((c.fadeOutSec || 0) > 0.005 && Math.abs(x - (x1 - c.fadeOutSec * pps)) <= TRIM_TOL_PX && y - this.audioTop() <= 12) return { clip: c, part: 'fadeOut' };
+      if (Math.abs(x - x0) <= TRIM_TOL_PX) return { clip: c, part: 'trimL' };
+      if (Math.abs(x - x1) <= TRIM_TOL_PX) return { clip: c, part: 'trimR' };
+      if (Math.abs(y - laneMid) <= 5 && x >= x0 && x <= x1) return { clip: c, part: 'gain' };
+      return { clip: c, part: 'body' };
+    }
+    return null;
+  }
+  _xFadeHit(x, y, clips) {
+    if (!this.expanded) return null;
+    const pps = this.ppsOf(this.hooks.getProject());
+    for (const ov of computeOverlaps(clips)) {
+      const mx = ((ov.start + ov.end) / 2) * pps;
+      if (Math.abs(x - mx) <= 7 && Math.abs(y - (this.audioTop() + 10)) <= 9) return ov;
+    }
+    return null;
+  }
+  // 磁吸候选（规格 C17：clip 缘/块边界/tag/播放头/时间选区/零交叉）
+  _snapCandidates(excludeId) {
+    const p = this.hooks.getProject();
+    const { segments } = computeSegments(p);
+    const blockSecs = [];
+    for (const s of segments) { blockSecs.push(beatToSec(p, s.holdStart), beatToSec(p, s.holdEnd), beatToSec(p, s.travelEnd)); }
+    const tagSecs = (p.timeline.tags || []).map(t => beatToSec(p, t.beat));
+    const player = this.hooks.getPlayer?.();
+    return collectSnapCandidates({
+      clips: clipsOf(p), excludeId,
+      playheadSec: player ? beatToSec(p, Math.max(0, player.beat)) : null,
+      selStartSec: this.timeSel?.start ?? null,
+      selEndSec: this.timeSel?.end ?? null,
+      blockSecs, tagSecs,
+    });
+  }
+  _snap(sec, excludeId) {
+    if (!this.snapOn) return { t: sec, line: null };
+    const pps = this.ppsOf(this.hooks.getProject());
+    return snapTime(sec, this._snapCandidates(excludeId), SNAP_TOL_PX / pps);
+  }
+  // 零交叉吸附（trim 缘；仅磁吸开启时）：把 src 侧端点吸到最近过零点（≤4ms 才生效）
+  _snapZeroCross(clip, side) {
+    if (!this.snapOn) return;
+    const buf = this.hooks.audio?.resolveAssetBuffer?.(clip.assetId);
+    if (!buf) return;
+    const sr = buf.sampleRate;
+    const ch0 = buf.getChannelData(0);
+    const srcSample = (side === 'in' ? clip.srcStartSec : clip.srcStartSec + clip.lengthSec) * sr;
+    const zc = nearestZeroCrossing(ch0, srcSample, ZC_RADIUS_SEC * sr);
+    const delta = (zc / sr) - (side === 'in' ? clip.srcStartSec : clip.srcStartSec + clip.lengthSec);
+    if (Math.abs(delta) > ZC_RADIUS_SEC) return;
+    if (side === 'in') {
+      clip.srcStartSec = r6(clip.srcStartSec + delta);
+      clip.timelineStartSec = r6(clip.timelineStartSec + delta);
+      clip.lengthSec = r6(clip.lengthSec - delta);
+    } else {
+      clip.lengthSec = r6(clip.lengthSec + delta);
+    }
+  }
+  _audioDown(e, x, y, clips) {
+    const p = this.hooks.getProject();
+    const editable = this.hooks.canEdit?.() !== false;
+    const pps = this.ppsOf(p);
+    const sec = x / pps;
+    this._lastX = x;
+    try { this.cv.setPointerCapture(e.pointerId); } catch {}
+    // 剃刀：点击 clip 即分割（C6）
+    if (this.razor) {
+      const hit = this._audioHit(x, y, clips);
+      if (hit && editable) {
+        this.hooks.pauseIfPlaying?.();
+        this.hooks.mutateLabeled?.(pr => { splitClipAt(pr.timeline.audioClips, hit.clip.id, sec); }, '分割音频剪辑');
+      }
+      this.drag = null;
+      return;
+    }
+    // 选择（C1）：单击=单选；Ctrl/Cmd=多选切换。空白拖拽=时间选区（C8）；空白单击=定位播放头（C12）
+    const ov = this._xFadeHit(x, y, clips);
+    if (ov && editable) {
+      this.drag = { kind: 'xFade', a: ov.a, b: ov.b, startX: x, moved: false, ovStart: ov.start, ovEnd: ov.end };
+      return;
+    }
+    const hit = this._audioHit(x, y, clips);
+    if (hit) {
+      if (e.ctrlKey || e.metaKey) {
+        if (this.clipSel.has(hit.clip.id)) this.clipSel.delete(hit.clip.id);
+        else this.clipSel.add(hit.clip.id);
+      } else if (!this.clipSel.has(hit.clip.id)) {
+        this.clipSel = new Set([hit.clip.id]);
+      }
+      const ids = [...this.clipSel];
+      if (hit.part === 'body') {
+        if (editable) {
+          this.hooks.pauseIfPlaying?.(); // 守卫：播放中移动先自动暂停
+          this.drag = { kind: 'clipMove', ids, primary: hit.clip, grabSec: sec - hit.clip.timelineStartSec, startX: x, moved: false };
+        } else this.drag = null;
+      } else if (editable) {
+        const part = hit.part;
+        const isTrim = part === 'trimL' || part === 'trimR';
+        if (isTrim) this.hooks.pauseIfPlaying?.(); // 守卫：播放中 trim 先自动暂停（淡化/增益实时不暂停）
+        this.drag = { kind: part === 'trimL' ? (e.shiftKey ? 'trimLB' : 'trimL') : part === 'trimR' ? (e.shiftKey ? 'trimRB' : 'trimR') : part, id: hit.clip.id, startX: x, moved: false };
+      } else {
+        this.drag = null;
+      }
+      this.render();
+      return;
+    }
+    this.drag = { kind: 'timeSel', startSec: sec, startX: x, moved: false };
+    this.timeSel = { start: sec, end: sec };
+    this.render();
+  }
+  _dragX(e) {
+    const r = this.cv.getBoundingClientRect();
+    return e.clientX - r.left;
+  }
+  _applyClipMove(drag, x) {
+    const p = this.hooks.getProject();
+    const pps = this.ppsOf(p);
+    let newStart = Math.max(0, x / pps - drag.grabSec);
+    // 磁吸：起点/终点就近候选（取距离更小者；不吸自己）
+    const snapS = this._snap(newStart, drag.primary.id);
+    const snapE = this._snap(newStart + drag.primary.lengthSec, drag.primary.id);
+    if (snapS.line !== null || snapE.line !== null) {
+      const dS = snapS.line !== null ? Math.abs(snapS.line - newStart) : Infinity;
+      const dE = snapE.line !== null ? Math.abs(snapE.line - (newStart + drag.primary.lengthSec)) : Infinity;
+      if (dS <= dE) newStart = snapS.line ?? newStart; else newStart = Math.max(0, (snapE.line ?? (newStart + drag.primary.lengthSec)) - drag.primary.lengthSec);
+    }
+    const delta = newStart - drag.primary.timelineStartSec;
+    if (!delta) return;
+    this.hooks.mutate(pr => {
+      for (const id of drag.ids) {
+        const c = pr.timeline.audioClips.find(k => k.id === id);
+        if (c) c.timelineStartSec = r6(Math.max(0, c.timelineStartSec + delta));
+      }
+      applyAutoCrossfades(pr.timeline.audioClips, drag.ids);
+      for (const id of drag.ids) pruneAutoCrossfades(pr.timeline.audioClips, id);
+    });
+    drag.moved = true;
+    this.render();
+  }
   _move(e) {
     const drag = this.drag;
+    const x0 = this._dragX(e);
+    const r0 = this.cv.getBoundingClientRect();
+    const y0 = e.clientY - r0.top;
+    // 悬停反馈（无拖拽时）：clip 命中光标 + tag 旗点 + 块高亮
     if (!drag) {
-      // 悬停反馈：边缘光标 + 块高亮 + tag 旗点（光标/title/×）
-      const r = this.cv.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const edges = this.edgeHits(x);
+      const x = x0, y = y0;
+      const p = this.hooks.getProject();
+      const edges = p ? this.edgeHits(x) : [];
       let hoverSeg = null;
       let hoverTag = null;
-      if (this.inTagLane(y)) {
+      this.hoverAudio = false;
+      this.hoverClipEdge = null;
+      if (p && this.inTagLane(y)) {
         // 旗点或 ×（几何）都算悬停该标记——× 在名称末端，鼠标移过去不能让 × 消失
         const hit = this.tagAt(x);
         hoverTag = hit ? hit.tag.id : this._tagGeomHit(x, 8);
+      } else if (p && y >= this.audioTop() && y <= this.audioBottom() && clipsOf(p).length) {
+        // v3 音频轨悬停：部件光标（trim/fade/gain/body/剃刀）
+        this.hoverAudio = true;
+        const clips = clipsOf(p);
+        if (!this._xFadeHit(x, y, clips)) {
+          const hit = this._audioHit(x, y, clips);
+          if (hit) {
+            this.hoverClipEdge = { id: hit.clip.id, part: hit.part };
+            const cursors = { trimL: 'ew-resize', trimR: 'ew-resize', trimLB: 'ew-resize', trimRB: 'ew-resize', fadeIn: 'ew-resize', fadeOut: 'ew-resize', gain: 'ns-resize', body: this.razor ? 'crosshair' : 'grab' };
+            this.cv.style.cursor = this.razor ? 'crosshair' : (cursors[hit.part] || 'default');
+            this._tagTitle(x, y);
+            this.render();
+            return;
+          }
+        }
+        this.cv.style.cursor = this.razor ? 'crosshair' : 'default';
+        this._tagTitle(x, y);
+        this.render();
+        return;
       } else {
         for (const hit of edges) hoverSeg = hit.seg.i;
         if (hoverSeg === null && y >= (this.blocksTop ?? 0) && y <= (this.blocksTop ?? 0) + (this.blocksH ?? 0)) {
-          const p = this.hooks.getProject();
           if (p) {
             const beat = this.xToBeat(x);
             for (const s of computeSegments(p).segments) {
@@ -3728,6 +4936,79 @@ class MusicTimeline {
     const minBeats = 0.5;
     if (drag.kind === 'scrub') {
       this.hooks.seekBeat(this.xToBeat(x));
+      return;
+    }
+    // ---- v3 音频轨拖拽族 ----
+    const clips = clipsOf(p);
+    if (drag.kind === 'clipMove') {
+      this._applyClipMove(drag, x);
+      return;
+    }
+    if (drag.kind === 'trimL' || drag.kind === 'trimLB' || drag.kind === 'trimR' || drag.kind === 'trimRB') {
+      const c = clips.find(k => k.id === drag.id);
+      if (!c) return;
+      const assetDur = this.assetDurOf(p, c.assetId);
+      let sec = x / this.ppsOf(p);
+      const snapped = this._snap(sec, c.id);
+      if (snapped.line !== null) sec = snapped.t;
+      let ok = false;
+      if (drag.kind === 'trimL') { ok = trimClipLeftAnchored(c, sec, assetDur); if (ok) this._snapZeroCross(c, 'in'); }
+      else if (drag.kind === 'trimLB') ok = trimClipLeftBoundary(c, sec, assetDur);
+      else if (drag.kind === 'trimR') { ok = trimClipRightAnchored(c, sec, assetDur); if (ok) this._snapZeroCross(c, 'out'); }
+      else ok = trimClipRightBoundary(c, sec, assetDur);
+      if (ok) {
+        drag.moved = true;
+        this.hooks.mutate(pr => {
+          applyAutoCrossfades(pr.timeline.audioClips, [c.id]);
+          pruneAutoCrossfades(pr.timeline.audioClips, c.id);
+        });
+        this.render();
+      }
+      return;
+    }
+    if (drag.kind === 'fadeIn' || drag.kind === 'fadeOut') {
+      const c = clips.find(k => k.id === drag.id);
+      if (!c) return;
+      const pps = this.ppsOf(p);
+      const x0c = c.timelineStartSec * pps, x1c = clipEnd(c) * pps;
+      let f = drag.kind === 'fadeIn' ? (x - x0c) / pps : (x1c - x) / pps;
+      f = Math.max(0, Math.min(c.lengthSec, f));
+      c[drag.kind === 'fadeIn' ? 'fadeInSec' : 'fadeOutSec'] = r6(f);
+      c[drag.kind === 'fadeIn' ? 'fadeInAuto' : 'fadeOutAuto'] = false; // 手动淡化（拖开不还原）
+      drag.moved = true;
+      this.hooks.mutate(() => {});
+      this.render();
+      return;
+    }
+    if (drag.kind === 'xFade') {
+      // 菱形手柄：调交叉淡化比例（双方同步同一淡化时长，钳在重叠区间内）
+      let f = (x / this.ppsOf(p)) - drag.ovStart;
+      const span = drag.ovEnd - drag.ovStart;
+      f = Math.max(MIN_CLIP_DUR * 2, Math.min(span, f));
+      drag.a.fadeOutSec = r6(f); drag.b.fadeInSec = r6(f);
+      drag.a.fadeOutAuto = false; drag.b.fadeInAuto = false;
+      drag.moved = true;
+      this.hooks.mutate(() => {});
+      this.render();
+      return;
+    }
+    if (drag.kind === 'gain') {
+      const c = clips.find(k => k.id === drag.id);
+      if (!c) return;
+      const laneMid = this.audioTop() + this.audioLaneH() / 2;
+      const g = Math.max(0, Math.min(2, 1 + (laneMid - y0) / (this.audioLaneH() / 2 - 6)));
+      c.gain = r6(g);
+      drag.moved = true;
+      this.hooks.mutate(() => {});
+      this.render();
+      return;
+    }
+    if (drag.kind === 'timeSel') {
+      const sec = Math.max(0, x / this.ppsOf(p));
+      drag.moved = drag.moved || Math.abs(x - drag.startX) > 3 || !!drag.fromRuler;
+      this.timeSel = { start: Math.min(drag.startSec, sec), end: Math.max(drag.startSec, sec) };
+      this.hooks.onTimeSelection?.(this.timeSel);
+      this.render();
       return;
     }
     if (drag.kind === 'tag') {
@@ -3781,9 +5062,178 @@ class MusicTimeline {
     if (this.drag && (this.drag.kind === 'hold' || this.drag.kind === 'travel')) {
       this.hooks.commitEdit?.('调整时长');
     }
+    // ---- v3 音频轨拖拽提交 ----
+    const d = this.drag;
+    if (d && (d.kind === 'clipMove' || d.kind === 'trimL' || d.kind === 'trimR' || d.kind === 'trimLB' || d.kind === 'trimRB')) {
+      if (d.moved) this.hooks.commitEdit?.(d.kind.startsWith('trim') ? '修剪音频剪辑' : '移动音频剪辑');
+      else if (d.kind === 'clipMove') this.hooks.seekBeat(this.xToBeat(this._lastX ?? 0)); // 单击 clip=定位播放头（C12）
+    } else if (d && (d.kind === 'fadeIn' || d.kind === 'fadeOut' || d.kind === 'xFade')) {
+      if (d.moved) this.hooks.commitEdit?.('调整淡化');
+    } else if (d && d.kind === 'gain') {
+      if (d.moved) this.hooks.commitEdit?.('剪辑增益');
+    } else if (d && d.kind === 'timeSel') {
+      if (!d.moved) { // 空白单击：清选区+定位播放头（C12）
+        this.timeSel = null;
+        this.hooks.onTimeSelection?.(null);
+        this.hooks.seekBeat(this.xToBeat(this._lastX ?? 0));
+      }
+    }
+    this._lastX = null;
     this.drag = null;
   }
-  // tag 道双击：空白=在该拍打点（内联命名，默认「标记 N」）；旗点=改名。
+  // ---- v3 clip 原子操作（键盘/右键菜单入口；守卫：编辑锁 + 播放中先自动暂停） ----
+  _guard(editableOnly = true) {
+    const p = this.hooks.getProject();
+    if (!p || !clipsOf(p).length) return false;
+    if (editableOnly && this.hooks.canEdit?.() === false) {
+      this.hooks.toast?.('编辑已关闭，无法修改（选择/预览可用）');
+      return false;
+    }
+    return true;
+  }
+  _pauseIfPlaying() { this.hooks.pauseIfPlaying?.(); }
+  playheadSec() {
+    const p = this.hooks.getProject();
+    const player = this.hooks.getPlayer?.();
+    return p && player ? beatToSec(p, Math.max(0, player.beat || 0)) : 0;
+  }
+  // C6：播放头处分割（Ctrl/Cmd+K）。有选中切选中；无选中切所有跨播放头的 clip（Razor All）
+  splitAtPlayhead() {
+    if (!this._guard()) return;
+    this._pauseIfPlaying();
+    const t = this.playheadSec();
+    this.hooks.mutateLabeled?.(pr => {
+      const clips = pr.timeline.audioClips;
+      const ids = this.clipSel.size ? [...this.clipSel] : clips.map(c => c.id);
+      for (const id of ids) splitClipAt(clips, id, t);
+    }, '分割音频剪辑');
+    this.render();
+  }
+  // C10：删除/波纹删除选中（有时间选区时无选中=删除选区内 clip？——规格把选区作为
+  // 「修剪到时间选区」的作用域；删除始终以选中 clip 为对象）
+  deleteSelected(ripple = false) {
+    if (!this._guard()) return;
+    if (!this.clipSel.size) return;
+    this._pauseIfPlaying();
+    const ids = [...this.clipSel];
+    this.hooks.mutateLabeled?.(pr => {
+      const clips = pr.timeline.audioClips;
+      if (ripple) rippleDeleteClips(clips, ids);
+      const set = new Set(ids);
+      pr.timeline.audioClips = clips.filter(c => !set.has(c.id));
+    }, ripple ? '波纹删除音频剪辑' : '删除音频剪辑');
+    this.clipSel = new Set();
+    this.render();
+  }
+  // C9：静音/取消静音选中 clip（实时，可播放中操作）
+  toggleMuteSelected() {
+    if (!this._guard(false)) return;
+    if (!this.clipSel.size) return;
+    const p = this.hooks.getProject();
+    const sel = clipsOf(p).filter(c => this.clipSel.has(c.id));
+    const anyAudible = sel.some(c => !c.muted);
+    this.hooks.mutateLabeled?.(pr => {
+      for (const c of pr.timeline.audioClips) if (this.clipSel.has(c.id)) { if (anyAudible) c.muted = true; else delete c.muted; }
+    }, anyAudible ? '静音音频剪辑' : '取消静音音频剪辑');
+    this.render();
+  }
+  resetGainSelected() {
+    if (!this._guard(false) || !this.clipSel.size) return;
+    this.hooks.mutateLabeled?.(pr => {
+      for (const c of pr.timeline.audioClips) if (this.clipSel.has(c.id)) c.gain = 1;
+    }, '增益重置');
+    this.render();
+  }
+  renameSelected(name) {
+    if (!this._guard(false) || !this.clipSel.size) return false;
+    const n = String(name || '').trim().slice(0, 80);
+    if (!n) return false;
+    const p = this.hooks.getProject();
+    const first = clipsOf(p).find(c => this.clipSel.has(c.id));
+    if (!first) return false;
+    this.hooks.mutateLabeled?.(pr => {
+      const c = pr.timeline.audioClips.find(k => k.id === first.id);
+      if (c) c.name = n;
+    }, '重命名音频剪辑');
+    this.render();
+    return true;
+  }
+  setSelectedColor(color) {
+    if (!this._guard(false) || !this.clipSel.size) return;
+    this.hooks.mutateLabeled?.(pr => {
+      for (const c of pr.timeline.audioClips) if (this.clipSel.has(c.id)) c.color = color;
+    }, '剪辑颜色');
+    this.render();
+  }
+  // 修剪到时间选区（右键菜单；作用域=选中 clip ∩ [start,end]）
+  trimSelectedToTimeSel() {
+    if (!this._guard()) return;
+    if (!this.timeSel || !this.clipSel.size) { this.hooks.toast?.('先框出时间选区并选中 clip'); return; }
+    this._pauseIfPlaying();
+    const ids = [...this.clipSel];
+    const { start, end } = this.timeSel;
+    this.hooks.mutateLabeled?.(pr => {
+      const dropped = trimClipsToRange(pr.timeline.audioClips, ids, start, end);
+      if (dropped.length) pr.timeline.audioClips = pr.timeline.audioClips.filter(c => !dropped.includes(c.id));
+    }, '修剪到时间选区');
+    this.render();
+  }
+  // C3：←/→ 微移（plain=逐帧 10ms；Shift=按网格步进即整拍）
+  nudgeSelected(deltaSec, { grid = false } = {}) {
+    if (!this._guard()) return;
+    if (!this.clipSel.size) return;
+    this._pauseIfPlaying();
+    const p = this.hooks.getProject();
+    const gridSec = grid ? spb(p) : 0.01;
+    const step = (deltaSec >= 0 ? 1 : -1) * gridSec;
+    const ids = [...this.clipSel];
+    this.hooks.mutate(pr => {
+      for (const id of ids) {
+        const c = pr.timeline.audioClips.find(k => k.id === id);
+        if (!c) continue;
+        let ns = c.timelineStartSec + step;
+        if (grid) ns = Math.round(ns / gridSec) * gridSec;
+        c.timelineStartSec = r6(Math.max(0, ns));
+      }
+      applyAutoCrossfades(pr.timeline.audioClips, ids);
+      for (const id of ids) pruneAutoCrossfades(pr.timeline.audioClips, id);
+    }, null);
+    this.hooks.commitEdit?.('微移音频剪辑');
+    this.render();
+  }
+  clearClipSelection() {
+    this.clipSel = new Set();
+    this.timeSel = null;
+    this.hooks.onTimeSelection?.(null);
+    this.render();
+  }
+  setExpanded(v) {
+    this.expanded = !!v;
+    try { localStorage.setItem('wuzhen:audioTrackExpanded', this.expanded ? '1' : '0'); } catch {}
+    this.render();
+  }
+  toggleSnap() {
+    this.snapOn = !this.snapOn;
+    try { localStorage.setItem('wuzhen:audioSnap', this.snapOn ? '1' : '0'); } catch {}
+    this.hooks.toast?.(`磁吸${this.snapOn ? '开' : '关'}（clip 缘/块边界/tag/播放头/选区/零交叉）`);
+    this.render();
+  }
+  setRazor(v) {
+    this.razor = v == null ? !this.razor : !!v;
+    this.hooks.toast?.(this.razor ? '剃刀模式：点击 clip 分割（R/Esc 退出）' : '剃刀模式关闭');
+    this.render();
+    return this.razor;
+  }
+  // C12：双击 clip=选中并循环预览（范围循环至手动停止）
+  previewSelectedClipAt(x, y, clips) {
+    const hit = this._audioHit(x, y, clips);
+    if (!hit) return false;
+    this.clipSel = new Set([hit.clip.id]);
+    this.hooks.previewClip?.(hit.clip);
+    this.render();
+    return true;
+  }
+  // 双击：tag 道=打点/改名；音频轨=clip 循环预览（选中）或空白取消全选（C1/C12）。
   // × 删除后 400ms 内的双击忽略（双击 × 只删一次，不应原地加回）。
   _dblclick(e) {
     const p = this.hooks.getProject();
@@ -3791,6 +5241,12 @@ class MusicTimeline {
     if (performance.now() - (this._delAt || 0) < 400) return;
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
+    const clips = clipsOf(p);
+    if (clips.length && y >= this.audioTop() && y <= this.audioBottom()) {
+      // 双击空白=取消全选；双击 clip=选中并循环预览
+      if (!this.previewSelectedClipAt(x, y, clips)) this.clearClipSelection();
+      return;
+    }
     if (!this.inTagLane(y)) return;
     const hit = this.tagAt(x);
     if (hit) this._openTagInput({ id: hit.tag.id, initial: hit.tag.name });
@@ -3798,7 +5254,7 @@ class MusicTimeline {
   }
 }
 
-Object.assign(FS.timeline, { TOUCH_DRAG, dragTargetIndex, shiftSlots, EditStrip, TAG_LANE_H, MusicTimeline });
+Object.assign(FS.timeline, { AUDIO_SIMPLE_H, AUDIO_EXPANDED_H, TOUCH_DRAG, dragTargetIndex, shiftSlots, EditStrip, TAG_LANE_H, MusicTimeline });
 })();
 
 /* ===== module: export ===== */
@@ -3863,10 +5319,29 @@ function exportPNG(project, formation, theme = 'dark') {
   const cv = renderFormation(project, formation, { theme });
   cv.toBlob(blob => download(blob, `${safeName(project.meta.title)}-${safeName(formation.name)}.png`));
 }
-// includeAudio=true 时把音乐以 base64 内嵌进项目文件（格式 v2），导入后无需重新找音乐
-async function exportProjectJSON(project, audioBlob, { share = false } = {}) {
+// includeAudio=true 时把音乐以 base64 内嵌进项目文件（格式 v2），导入后无需重新找音乐。
+// v3：内嵌**全部媒体资产**（data.media.assets[i].dataBase64/dataFormat）；audio.dataBase64
+// 仅在活动资产 blob 未随资产内嵌时兜底写入（避免单资产项目体积翻倍）。旧版本应用导入
+// 新 v2 文件会丢配乐（实验分支接受；本应用读旧 v2/v1 文件全兼容）。
+// opts.assets = [{ id, name, durationSec, size, blob }]（缺失 blob 的资产跳过内嵌，仅元数据随行）。
+async function exportProjectJSON(project, audioBlob, { share = false, assets = null } = {}) {
   const data = cloneBasic(project);
-  if (audioBlob) {
+  let embeddedActive = false;
+  if (assets && assets.some(a => a.blob)) {
+    data.version = 2;
+    if (data.media && Array.isArray(data.media.assets)) {
+      for (const a of data.media.assets) {
+        const src = (assets || []).find(x => x.id === a.id);
+        if (src?.blob) {
+          a.dataBase64 = await blobToBase64(src.blob);
+          a.dataFormat = src.blob.type || 'audio/mpeg';
+          if (!a.size) a.size = src.blob.size;
+          if (src.blob === audioBlob) embeddedActive = true;
+        }
+      }
+    }
+  }
+  if (audioBlob && !embeddedActive) {
     data.version = 2;
     data.audio.dataBase64 = await blobToBase64(audioBlob);
     data.audio.dataFormat = audioBlob.type || 'audio/mpeg';
@@ -3875,7 +5350,7 @@ async function exportProjectJSON(project, audioBlob, { share = false } = {}) {
   const filename = `${safeName(project.meta.title)}.formation.json`;
   if (share) await shareOrDownload(blob, filename);
   else download(blob, filename);
-  return { withAudio: !!audioBlob, bytes: blob.size };
+  return { withAudio: !!(audioBlob || (assets && assets.some(a => a.blob))), bytes: blob.size };
 }
 function cloneBasic(project) {
   // 音频不内嵌（体积大），仅记录元信息
@@ -3888,6 +5363,21 @@ async function readProjectFile(file) {
   let json;
   try { json = JSON.parse(text); } catch { throw new Error('不是合法的 JSON 文件'); }
   // v2 格式：先提取内嵌音乐（validate 会剥离内嵌字段），还原为 Blob
+  // v3：data.media.assets[i].dataBase64 = 多资产内嵌；audio.dataBase64 = 旧单音频内嵌（兼容读）
+  const assetBlobs = [];
+  for (const a of (json.media && Array.isArray(json.media.assets) ? json.media.assets : [])) {
+    if (a && a.dataBase64) {
+      try {
+        assetBlobs.push({
+          id: typeof a.id === 'string' ? a.id : null,
+          name: String(a.name || 'audio'),
+          blob: base64ToBlob(String(a.dataBase64), a.dataFormat || 'audio/mpeg'),
+        });
+      } catch {}
+      delete a.dataBase64;
+      delete a.dataFormat;
+    }
+  }
   let audioBlob = null;
   if (json.audio && json.audio.dataBase64) {
     audioBlob = base64ToBlob(String(json.audio.dataBase64), json.audio.dataFormat || 'audio/mpeg');
@@ -3896,7 +5386,7 @@ async function readProjectFile(file) {
   }
   const r = validateProject(json);
   if (!r.ok) throw new Error(r.errors.join('；'));
-  return { project: r.project, audioBlob };
+  return { project: r.project, audioBlob, assetBlobs };
 }
 
 // 打印 / PDF：每队形一页
@@ -4047,6 +5537,100 @@ function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, onDelet
   menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
 }
 
+// ---------- 媒体库弹窗（v3 音乐剪辑 · 规格 §3） ----------
+// 多文件导入 / 列表（名称·时长·大小）/ 用作配乐 / 重命名 / 删除（当前配乐删除需 confirm）；
+// 拖音频文件入弹窗=导入；资产行可拖到音轨落点生成 clip（dataTransfer: text/x-wuzhen-asset）。
+function showMediaLibraryModal({ getProject, acts, toast: t }) {
+  // acts: { importFiles(files), setActive(id), rename(id, name), remove(id) }
+  const wrap = h('div', {});
+  let dragDepth = 0;
+  const render = () => {
+    const p = getProject();
+    if (!p) return;
+    wrap.innerHTML = '';
+    const assets = p.media?.assets || [];
+    const tb = assets.map(a => {
+      const active = p.media.activeAssetId === a.id;
+      const missing = !acts.hasBlob?.(a.id);
+      return h('div', { class: 'mlib-row' + (active ? ' mlib-active' : ''), draggable: 'true', title: missing ? '该资产音频数据缺失（重新导入文件可恢复）' : '拖到时间轴音轨可在落点生成剪辑' },
+        h('span', { class: 'mlib-name' }, (active ? '🎵 ' : '') + a.name),
+        h('span', { class: 'dim' }, `${(a.durationSec || 0).toFixed(1)}s · ${fmtSize(a.size)}${missing ? ' · 数据缺失' : ''}`),
+        h('span', { class: 'grp-ops' },
+          active ? h('span', { class: 'chip chip-on' }, '配乐') : h('button', { class: 'btn small', onclick: () => { acts.setActive(a.id); render(); } }, '用作配乐'),
+          h('button', { class: 'btn small', onclick: () => { acts.rename(a.id); } }, '重命名'),
+          h('button', { class: 'btn small danger', onclick: () => { acts.remove(a.id); render(); } }, '删除')));
+    });
+    wrap.append(
+      h('div', { class: 'prop-group' },
+        h('div', { class: 'pg-title' }, `音乐资产（${assets.length}）`),
+        assets.length ? tb : h('div', { class: 'dim' }, '还没有音频：点下方「导入音频」，或把音频文件直接拖进本弹窗。'),
+        h('div', { style: 'display:flex;gap:6px;margin-top:8px' },
+          h('button', { class: 'btn small primary', onclick: () => acts.pickFiles() }, '＋ 导入音频…')),
+        h('div', { class: 'dim', style: 'margin-top:6px' }, '「配乐」= 时间轴播放使用的资产；其余资产可被 clip 引用。删除当前配乐需确认。')),
+    );
+  };
+  render();
+  const m = modal('📚 媒体库 · 音乐资产', wrap, [], { onClose: () => { dragDepth = 0; } });
+  // 拖音频文件入弹窗 = 导入（dragover/drop，忽略非音频）
+  const back = m.back;
+  back.addEventListener('dragover', e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; });
+  back.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); });
+  back.addEventListener('drop', e => {
+    e.preventDefault();
+    dragDepth = 0;
+    const files = [...(e.dataTransfer?.files || [])].filter(f => !f.type || f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
+    if (files.length) { acts.importFiles(files); }
+    const assetId = e.dataTransfer?.getData('text/x-wuzhen-asset');
+    void assetId; // 弹窗内落点不生成 clip（落点在时间轴音轨）
+    setTimeout(render, 600); // 导入是异步的：稍后刷新列表（订阅更新另有兜底）
+  });
+  const unsub = subscribe(() => { const np = getProject(); if (np) render(); });
+  const oldClose = m.close;
+  m.close = () => { unsub?.(); oldClose(); };
+  // modal 的关闭按钮走内部 close()——统一包一层
+  return m;
+}
+function fmtSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + 'MB';
+  if (b >= 1024) return (b / 1024).toFixed(0) + 'KB';
+  return b + 'B';
+}
+
+// ---------- 通用右键菜单（音频剪辑用；与 .unit-menu 同风格，fixed 定位跟光标） ----------
+function showContextMenu(items, { x, y, id = '' } = {}) {
+  // items: [{ label, fn, danger?, sep? }]；{ sep: true } 为分隔线
+  closeContextMenu();
+  const menu = h('div', { class: 'unit-menu', id: id || 'clip-ctx-menu' });
+  for (const it of items) {
+    if (it.sep) { menu.append(h('div', { style: 'border-top:1px solid var(--line);margin:2px 0' })); continue; }
+    if (it.el) { menu.append(it.el); continue; }
+    const b = h('button', { class: 'um-btn' }, it.label);
+    if (it.danger) b.style.color = '#ef4444';
+    b.addEventListener('click', () => { closeContextMenu(); it.fn?.(); });
+    menu.append(b);
+  }
+  menu.style.position = 'fixed';
+  menu.style.zIndex = '150';
+  document.body.append(menu);
+  const dismiss = ev => { if (!menu.contains(ev.target)) closeContextMenu(); };
+  const keyClose = ev => { if (ev.key === 'Escape') closeContextMenu(); };
+  document.addEventListener('pointerdown', dismiss, true);
+  document.addEventListener('keydown', keyClose, true);
+  ctxMenuCleanup = () => {
+    menu.remove();
+    document.removeEventListener('pointerdown', dismiss, true);
+    document.removeEventListener('keydown', keyClose, true);
+  };
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
+}
+let ctxMenuCleanup = null;
+function closeContextMenu() {
+  if (ctxMenuCleanup) { ctxMenuCleanup(); ctxMenuCleanup = null; }
+}
+
 // ---------- 项目库 ----------
 function renderLibrary(container, { projects, onOpen, onNew, onDelete, onDuplicate }) {
   const grid = document.getElementById('library-grid');
@@ -4195,7 +5779,7 @@ function showRosterModal({ mutate, toast: t, getProject }) {
   return m;
 }
 
-Object.assign(FS.ui, { h, toast, modal, fmtDate, createHistorySentinel, closeLibCardMenu, showLibCardMenu, renderLibrary, showNewProjectModal, showRosterModal });
+Object.assign(FS.ui, { h, toast, modal, fmtDate, createHistorySentinel, closeLibCardMenu, showLibCardMenu, showMediaLibraryModal, fmtSize, showContextMenu, closeContextMenu, renderLibrary, showNewProjectModal, showRosterModal });
 })();
 
 /* ===== module: manual-assets ===== */
@@ -4472,7 +6056,9 @@ const { StageView, drawScene } = FS.stage;
 const { EditStrip, MusicTimeline } = FS.timeline;
 const { AudioController } = FS.audio;
 const { Player } = FS.player;
-const { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel } = FS.ui;
+const { autoSplitAtBoundaries, clipEnd, lastClipEndSec, CLIP_COLORS } = FS.audioClips;
+const { uid } = FS.model;
+const { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHistorySentinel, showMediaLibraryModal, showContextMenu, closeContextMenu, fmtSize } = FS.ui;
 const { renderManual } = FS.manual;
 // 应用编排：视图路由、状态订阅渲染、交互接线、快捷键
 /* import from store */
@@ -4482,12 +6068,14 @@ const { renderManual } = FS.manual;
 /* import from timeline */
 /* import from audio */
 /* import from player */
+/* import from audio-clips */
+/* import from model */
 /* import from export */
 /* import from ui */
 /* import from manual */
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-30-batches';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-30-batches');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-31-audition';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-31-audition');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -4828,9 +6416,21 @@ async function runDeeplinkImport(deps) {
   let json;
   try { json = JSON.parse(await resp.text()); }
   catch { return done({ status: 'error', reason: 'parse', message: '深链导入失败：文件不是合法 JSON' }); }
-  // v2 项目文件可内嵌音乐（dataBase64）：validateProject 会剥离该字段，先还原为 Blob，导入后回填
+  // v2 项目文件可内嵌音乐：v3 多资产（media.assets[i].dataBase64）+ 旧单音频（audio.dataBase64）。
+  // validateProject 会剥离内嵌字段，先还原为 Blob，导入后回填。
   let audioBlob = null;
+  const assetBlobs = [];
   try {
+    for (const a of (json?.media?.assets || [])) {
+      if (a && a.dataBase64) {
+        const bin = atob(String(a.dataBase64));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        assetBlobs.push({ id: typeof a.id === 'string' ? a.id : null, name: String(a.name || 'audio'), blob: new Blob([bytes], { type: a.dataFormat || 'audio/mpeg' }) });
+        delete a.dataBase64;
+        delete a.dataFormat;
+      }
+    }
     if (json && json.audio && json.audio.dataBase64) {
       const bin = atob(String(json.audio.dataBase64));
       const bytes = new Uint8Array(bin.length);
@@ -4839,14 +6439,18 @@ async function runDeeplinkImport(deps) {
       delete json.audio.dataBase64;
       delete json.audio.dataFormat;
     }
-  } catch { audioBlob = null; }
+  } catch { audioBlob = audioBlob || null; }
   const r = deps.validate(json);
   if (!r.ok) return done({ status: 'error', reason: 'validate', errors: r.errors, message: `深链导入失败：${r.errors[0] || '项目校验未通过'}` });
   deps.importProject(r.project);
+  if (assetBlobs.length) {
+    try { await deps.onAssets?.(assetBlobs, r.project); } catch {}
+  }
   if (audioBlob) { try { await deps.onAudio?.(audioBlob); } catch {} }
   const title = r.project.meta.title || '导入项目';
-  deps.toast?.(`已导入项目：${title}${audioBlob ? '（音乐已恢复）' : ''}`);
-  return done({ status: 'imported', title, hasAudio: !!audioBlob, project: r.project });
+  const restored = assetBlobs.length ? true : !!audioBlob;
+  deps.toast?.(`已导入项目：${title}${restored ? '（音乐已恢复）' : ''}`);
+  return done({ status: 'imported', title, hasAudio: restored, project: r.project });
 }
 async function wireDeeplinkImport() {
   try {
@@ -4856,10 +6460,9 @@ async function wireDeeplinkImport() {
       fetchImpl: (u, o) => fetch(u, o),
       validate: M.validateProject,
       importProject: p => { player?.stop(); store.importProject(p); },
+      onAssets: assetBlobs => restoreProjectAudio(assetBlobs, null), // v3 多资产内嵌回填（id 保持）
       onAudio: async blob => { // 与「导入项目文件…」同语义：内嵌音乐回填到新项目 id
-        await store.storage.putAudio(store.getState().projectId, blob);
-        // DEFECT-R26-3 同源：下载版存储往返不可用，直接回填会话音频（在线通道行为不变）
-        await audio.loadBlob(blob, store.getState().project?.audio?.name || blob.name || '').catch(() => {});
+        await restoreProjectAudio([], blob);
       },
       toast,
       replaceState: cleaned => history.replaceState(null, '', cleaned),
@@ -4981,17 +6584,70 @@ function buildStrips() {
     canvas: $('tl-canvas'), overlay: $('tl-overlay'), scroll: $('tl-scroll'),
     hooks: {
       getProject: () => store.getState().project,
+      getProjectId: () => store.getState().projectId,
       getPlayer: () => player,
       audio,
       getIndex: () => store.getState().formationIndex,
       ripple: () => store.getState().ripple,
+      canEdit: () => store.getState().editMode, // 编辑锁：关闭=clip 编辑禁用（选择/预览可用）
+      pauseIfPlaying: () => { if (player.playing || player.countin) player.pause(); }, // 守卫：播放中先自动暂停
       onSelectFormation: i => switchFormation(i),
       mutate: fn => store.mutate(fn, null),
       mutateLabeled: (fn, label) => store.mutate(fn, label), // 标记打点/改名/删除：单操作即时一条历史
       commitEdit: label => { store.commit(label); syncLoopAfterBlockEdit(); }, // 拖边改时长后循环区间跟随（DEFECT-R26-4）
       seekBeat: b => player.seekBeat(Math.max(0, b)),
+      toast,
+      onTimeSelection: applyTimeSelLoop,   // C11：播放限制在选区=临时循环
+      previewClip,                          // C12：双击 clip=选中并循环预览
+      onClipContextMenu: showClipMenu,      // §4：右键菜单
     },
   });
+}
+// ---- v3：时间选区临时循环 / clip 循环预览 ----
+function applyTimeSelLoop(range) {
+  if (!player) return;
+  const p = store.getState().project;
+  if (!p) return;
+  if (range && range.end - range.start > 0.05) {
+    player.setLoop(true, Math.max(0, M.secToBeat(p, range.start)), Math.max(0, M.secToBeat(p, range.end)));
+  } else if ($('pb-loop')?.checked) updateLoop();
+  else player.setLoop(false, 0, 0);
+}
+function previewClip(clip) {
+  if (!clip) return;
+  player.pause();
+  const p = store.getState().project;
+  if (!p) return;
+  const b0 = Math.max(0, M.secToBeat(p, clip.timelineStartSec));
+  const b1 = Math.max(b0 + 0.01, M.secToBeat(p, clipEnd(clip)));
+  player.setLoop(true, b0, b1);
+  player.play(b0, { countIn: false });
+  toast(`循环预览「${clip.name || '音频剪辑'}」——停止后恢复循环设置`);
+}
+// ---- v3：音频剪辑右键菜单（规格 §4） ----
+function showClipMenu({ clipId, screenX, screenY }) {
+  const p = store.getState().project;
+  if (!p) return;
+  if (!clipId) {
+    showContextMenu([{ label: '取消选择', fn: () => musicTl.clearClipSelection() }], { x: screenX, y: screenY });
+    return;
+  }
+  if (!musicTl.clipSel.has(clipId)) { musicTl.clipSel = new Set([clipId]); musicTl.render(); }
+  const clip = M.clipById(p, clipId);
+  if (!clip) return;
+  const swatches = h('div', { class: 'ctx-swatches' },
+    ...CLIP_COLORS.map(c => h('button', { class: 'ctx-sw', style: `background:${c}`, title: '剪辑颜色', onclick: () => { closeContextMenu(); musicTl.setSelectedColor(c); } })));
+  showContextMenu([
+    { label: '分割于播放头(K)', fn: () => musicTl.splitAtPlayhead() },
+    { label: '修剪到时间选区', fn: () => musicTl.trimSelectedToTimeSel() },
+    { label: clip.muted ? '取消静音' : '静音', fn: () => musicTl.toggleMuteSelected() },
+    { label: '波纹删除', fn: () => musicTl.deleteSelected(true) },
+    { label: '删除', danger: true, fn: () => musicTl.deleteSelected(false) },
+    { sep: true },
+    { label: '重命名', fn: () => { const n = prompt('剪辑名称', clip.name || ''); if (n && n.trim()) musicTl.renameSelected(n); } },
+    { el: swatches },
+    { label: '增益重置', fn: () => musicTl.resetGainSelected() },
+  ], { x: screenX, y: screenY });
 }
 // 手动切换队形帧：更新选中；若开启切帧预览，播放一段纯舞台 UI 动画（不经播放引擎、不动播放头/时间线）
 function switchFormation(i) {
@@ -5061,8 +6717,7 @@ function wireTopbar() {
     try { exp.printFormations(store.getState().project, 'light'); } catch (e) { toast(e.message); }
   });
   // 取「应当随项目导出」的音频 Blob：优先本地存储（在线=IndexedDB）；下载版（file://→localStorage）
-  // 音频不落盘、getAudio 恒为 null → 回退当前会话 AudioController 手里的 Blob（DEFECT-R26-2：
-  // 否则下载版「含音乐导出」永远导不出音乐，文档承诺的「含乐导出兜底配乐不持久」失效）。
+  // 音频不落盘、getAudio 恒为 null → 回退当前会话 AudioController 手里的 Blob（DEFECT-R26-2：）
   async function getExportAudioBlob() {
     const s = store.getState();
     let blob = null;
@@ -5070,14 +6725,33 @@ function wireTopbar() {
     if (!blob && audio?.ready && audio.blob) blob = audio.blob;
     return blob;
   }
+  // v3：收集全部媒体资产 blob（存储层优先，会话兜底）——含乐导出 v2 内嵌全部资产
+  async function getExportAssets() {
+    const s = store.getState();
+    const out = [];
+    for (const a of s.project?.media?.assets || []) {
+      let blob = null;
+      try { blob = await store.storage.getAsset(s.projectId, a.id); } catch {}
+      if (!blob) blob = audio?.assets?.get(a.id)?.blob || null;
+      out.push({ id: a.id, name: a.name, durationSec: a.durationSec, size: a.size || blob?.size || 0, blob });
+    }
+    return out;
+  }
   const doExportJSON = async (includeAudio, share) => {
     const s = store.getState();
-    const blob = includeAudio ? await getExportAudioBlob() : null; // 任务#1：不含乐=明确不取 blob，导出 v1
-    const res = await exp.exportProjectJSON(s.project, blob, { share });
+    let blob = null, assets = null;
+    if (includeAudio) {
+      assets = await getExportAssets();
+      const act = s.project?.media?.activeAssetId;
+      blob = assets.find(a => a.id === act)?.blob || null;
+      if (!blob) blob = await getExportAudioBlob(); // legacy 键兜底（如项目未经资产迁移）
+    }
+    const res = await exp.exportProjectJSON(s.project, blob, { share, assets });
     if (res === 'cancelled') return;
     const how = res === 'shared' ? '已通过系统分享发送' : '已导出';
     // 任务#1（报告#1）：按钮语义与行为严格对齐——不含乐导出在 toast 里明示可后补音乐
-    const what = includeAudio && blob ? '（含音乐）' : '（不含音乐，可稍后重新载入）';
+    const nAssets = (assets || []).filter(a => a.blob).length;
+    const what = includeAudio && (blob || nAssets) ? `（含音乐${nAssets > 1 ? `：${nAssets} 个资产` : ''}）` : '（不含音乐，可稍后重新载入）';
     toast(`${how}项目文件${what}`);
   };
   $('exp-json-audio').addEventListener('click', async () => {
@@ -5097,19 +6771,12 @@ function wireTopbar() {
     inp.addEventListener('change', async () => {
       if (!inp.files[0]) return;
       try {
-        const { project, audioBlob } = await exp.readProjectFile(inp.files[0]);
+        const { project, audioBlob, assetBlobs } = await exp.readProjectFile(inp.files[0]);
         store.importProject(project);
         player.stop();
-        if (audioBlob) {
-          await store.storage.putAudio(store.getState().projectId, audioBlob);
-          // DEFECT-R26-3：直接回填当前会话音频通道，不再依赖存储往返——下载版（file://→localStorage）
-          // putAudio/getAudio 均为 no-op，只走 restoreAudio 会导致「含乐文件导入后音乐仍丢失」，
-          // 与文档「导入成功（音乐已一并恢复）」承诺相悖；在线通道经此路径行为不变。
-          await audio.loadBlob(audioBlob, store.getState().project.audio.name || audioBlob.name || '').catch(() => {});
-          toast('导入成功（音乐已一并恢复）');
-        } else {
-          toast('导入成功（该项目文件不含音乐，请重新载入音乐）');
-        }
+        const restored = await restoreProjectAudio(assetBlobs || [], audioBlob);
+        if (restored && (assetBlobs?.length || audioBlob)) toast('导入成功（音乐已一并恢复）');
+        else toast('导入成功（该项目文件不含音乐，请重新载入音乐）');
       } catch (e) { toast('导入失败：' + e.message); }
     });
     inp.click();
@@ -5448,17 +7115,114 @@ function wireAudioPanel() {
   $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
   $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
   $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
+  // ---- v3 音频轨 ----
+  $('tl-audio-toggle').addEventListener('click', () => musicTl?.setExpanded(!musicTl.expanded));
+  $('tl-empty-load').addEventListener('click', () => $('audio-file').click());
+  $('tl-empty-library').addEventListener('click', openMediaLibrary);
+  $('btn-media-library').addEventListener('click', openMediaLibrary);
+  $('btn-auto-split').addEventListener('click', autoSplitByFormations);
+  $('media-files').addEventListener('change', async () => {
+    const files = [...$('media-files').files];
+    $('media-files').value = '';
+    if (files.length) await importMediaFiles(files);
+  });
+  buildAudioHead();
+  // C13：拖资产/音频文件到时间轴音轨 = 落点生成 clip
+  const tlScroll = $('tl-scroll');
+  tlScroll.addEventListener('dragover', e => {
+    if (e.dataTransfer && (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('text/x-wuzhen-asset'))) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  });
+  tlScroll.addEventListener('drop', async e => {
+    const hasFiles = [...(e.dataTransfer?.types || [])].includes('Files');
+    const assetId = e.dataTransfer?.getData('text/x-wuzhen-asset');
+    if (!hasFiles && !assetId) return;
+    e.preventDefault();
+    const sec = musicTl.secFromClientX(e.clientX);
+    const file = e.dataTransfer?.files?.[0] || null;
+    await createClipFromDrop(assetId || null, sec, hasFiles ? file : null);
+  });
   window.addEventListener('resize', () => { stageView?.requestDraw(); musicTl?.render(); });
+}
+// ---- v3 展开态音轨表头（120px，DOM 层）：资产名/时长/音量滑杆/静音/收起 ----
+let headRefs = null;
+const TRACK_LS_KEY = 'wuzhen:audioTrackMix';
+function trackMix() {
+  try { return JSON.parse(localStorage.getItem(TRACK_LS_KEY)) || {}; } catch { return {}; }
+}
+function buildAudioHead() {
+  const head = $('tl-head');
+  if (!head || headRefs) return;
+  head.innerHTML = '';
+  const name = h('div', { class: 'tlh-name', title: '配乐资产（点击打开媒体库）' }, '—');
+  name.addEventListener('click', openMediaLibrary);
+  const dur = h('div', { class: 'tlh-dur' }, '');
+  const mix = trackMix();
+  const vol = h('input', { type: 'range', min: '0', max: '1.5', step: '0.01', value: String(mix.gain ?? 1), title: '音轨音量' });
+  vol.addEventListener('input', () => {
+    const g = +vol.value;
+    audio.setTrackGain(g);
+    try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), gain: g })); } catch {}
+  });
+  const muteBtn = h('button', { class: 'btn', title: '音轨静音' }, '🔇');
+  const setMuteUI = m => { muteBtn.classList.toggle('toggled-on', !!m); muteBtn.textContent = m ? '🔇' : '🔊'; };
+  muteBtn.addEventListener('click', () => {
+    const m = !trackMix().muted;
+    audio.setTrackMuted(m);
+    setMuteUI(m);
+    try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), muted: m })); } catch {}
+  });
+  setMuteUI(!!mix.muted);
+  audio.ensureTransport(); // 懒建 transport：滑杆/静音在首次播放前也能即时生效
+  audio.setTrackGain(mix.gain ?? 1);
+  audio.setTrackMuted(!!mix.muted);
+  const collapse = h('button', { class: 'btn', title: '收起音频轨（回到简单态）' }, '⌃ 收起');
+  collapse.addEventListener('click', () => musicTl?.setExpanded(false));
+  head.append(
+    name, dur,
+    h('div', { class: 'tlh-row' }, h('span', { class: 'dim', style: 'font-size:10px' }, '音量'), vol),
+    h('div', { class: 'tlh-row' }, muteBtn, collapse));
+  headRefs = { name, dur };
+}
+function updateAudioHead() {
+  if (!headRefs) return;
+  const p = store.getState().project;
+  const act = M.activeAssetOf(p);
+  const nm = act?.name || p?.audio?.name || '未载入音乐';
+  if (headRefs.name.textContent !== nm) headRefs.name.textContent = nm;
+  headRefs.name.title = `${nm}（点击打开媒体库）`;
+  const d = act?.durationSec ?? p?.audio?.durationSec ?? 0;
+  headRefs.dur.textContent = d ? `${d.toFixed(1)}s` : '';
 }
 async function loadAudioFile(file) {
   // 任务#21（报告#21）：换曲前先停——旧实现播放中换曲会静默中断且无提示
   const wasPlaying = !!(player.playing || player.countin);
   if (wasPlaying) player.pause();
   try {
-    await audio.loadBlob(file); // 任务#3：失败时旧会话原样保留（audio.js 非破坏载入），项目 audio 字段不推进
-    const dur = audio.duration;
-    store.mutate(p => { p.audio.name = file.name; p.audio.durationSec = dur; }, '载入音乐');
-    await store.storage.putAudio(store.getState().projectId, file);
+    // v3：走资产库——解码入会话资产 Map（buffer+波形包络），并设为配乐；项目记录登记
+    // 元数据，首个音频若无任何 clip 则补全长 clip（与 v1 迁移语义逐拍等价，零体验变化）。
+    const asset = await audio.addAsset(file, file.name);
+    if (!asset.durationSec) throw new Error('音频无法解码');
+    const prevActiveId = audio.activeId;
+    audio.setActiveAsset(asset.id);
+    store.mutate(p => {
+      p.audio.name = file.name;
+      p.audio.durationSec = asset.durationSec;
+      p.media = p.media || { assets: [], activeAssetId: null };
+      let meta = p.media.assets.find(a => a.id === asset.id);
+      if (!meta) { meta = { id: asset.id, name: file.name, durationSec: asset.durationSec, size: file.size }; p.media.assets.push(meta); }
+      p.media.activeAssetId = asset.id;
+      // 「载入音乐」=替换配乐（旧语义）：移除引用旧配乐的 clip，补新资产全长 clip
+      //（媒体库导入不在此列，不动既有剪辑）
+      p.timeline.audioClips = p.timeline.audioClips.filter(c => c.assetId !== prevActiveId);
+      if (asset.durationSec > 0.005) {
+        p.timeline.audioClips.push({ id: uid('clip'), assetId: asset.id, timelineStartSec: 0, srcStartSec: 0, lengthSec: Math.round(asset.durationSec * 1e6) / 1e6, fadeInSec: 0, fadeOutSec: 0, gain: 1, name: file.name });
+      }
+    }, '载入音乐');
+    await store.storage.putAsset(store.getState().projectId, asset.id, file);
+    await store.storage.putAudio(store.getState().projectId, file); // legacy 键兜底（旧语义保留）
     toast(`音乐已载入：${file.name}${wasPlaying ? '（播放已停止）' : ''}`);
   } catch (e) {
     // 任务#3（报告#3）：损坏音频不再僵死——播放已停、按钮经 onStateChange 复位 ▶、
@@ -5466,13 +7230,210 @@ async function loadAudioFile(file) {
     toast('音频无法播放，已忽略');
   }
 }
+// 自动恢复上次项目时同步恢复音频：v3 先逐个还原媒体资产（clip 通道需要各资产 buffer），
+// 再设活动资产；旧档（legacy audio 键）兜底。
 async function restoreAudio() {
   const s = store.getState();
-  if (!s.project?.audio?.name) return;
+  const p = s.project;
+  if (!p?.audio?.name) return;
+  const assets = p.media?.assets || [];
+  for (const a of assets) {
+    if (audio.assets.has(a.id)) continue;
+    try {
+      const blob = await store.storage.getAsset(s.projectId, a.id);
+      if (blob) await audio.addAsset(blob, a.name, a.id);
+    } catch {}
+  }
+  const act = assets.find(a => a.id === p.media?.activeAssetId) || assets[0] || null;
+  if (act && audio.assets.get(act.id)?.buffer) { audio.setActiveAsset(act.id); return; }
+  if (act && audio.assets.has(act.id)) { audio.setActiveAsset(act.id); return; } // 元数据兜底（解码失败的资产照常展示）
   try {
     const blob = await store.storage.getAudio(s.projectId);
-    if (blob) await audio.loadBlob(blob, s.project.audio.name);
+    if (blob) await audio.loadBlob(blob, p.audio.name);
   } catch {}
+}
+// ---- v3 媒体资产往返（导入文件/深链/媒体库共用）----
+// assetBlobs=[{id,name,blob}]；legacyBlob=旧 v2 单音频。资产 id 保持项目记录引用一致。
+async function restoreProjectAudio(assetBlobs, legacyBlob) {
+  const s = store.getState();
+  const pid = s.projectId;
+  const p = s.project;
+  const assets = p?.media?.assets || [];
+  for (const ab of assetBlobs) {
+    if (!ab.blob) continue;
+    try {
+      const meta = assets.find(a => a.id === ab.id);
+      await audio.addAsset(ab.blob, meta?.name || ab.name, ab.id || undefined);
+      if (ab.id) await store.storage.putAsset(pid, ab.id, ab.blob);
+    } catch {}
+  }
+  if (!assetBlobs.length && legacyBlob) {
+    // 旧 v2 单音频：还原为项目记录里那个资产（v1 迁移产物）的同 id；无资产记录时走 legacy
+    if (assets.length === 1) {
+      try {
+        await audio.addAsset(legacyBlob, assets[0].name, assets[0].id);
+        await store.storage.putAsset(pid, assets[0].id, legacyBlob);
+        await store.storage.putAudio(pid, legacyBlob);
+      } catch {}
+    } else {
+      try { await store.storage.putAudio(pid, legacyBlob); } catch {}
+      await audio.loadBlob(legacyBlob, p?.audio?.name || legacyBlob.name || '').catch(() => {});
+    }
+  }
+  const act = assets.find(a => a.id === p?.media?.activeAssetId) || assets[0] || null;
+  if (act && audio.assets.has(act.id)) audio.setActiveAsset(act.id);
+  return !!(act || legacyBlob);
+}
+
+// ---- v3 媒体库（规格 §3）----
+function openMediaLibrary() {
+  showMediaLibraryModal({
+    getProject: () => store.getState().project,
+    toast,
+    acts: {
+      importFiles: files => importMediaFiles(files),
+      setActive: id => setActiveAssetFlow(id),
+      rename: id => {
+        const a = store.getState().project?.media?.assets?.find(x => x.id === id);
+        if (!a) return;
+        const n = prompt('资产名称', a.name);
+        if (n && n.trim()) {
+          store.mutate(p => { const m = p.media.assets.find(x => x.id === id); if (m) m.name = n.trim().slice(0, 120); }, '重命名音频资产');
+          const sa = audio.assets.get(id); if (sa) sa.name = n.trim().slice(0, 120);
+        }
+      },
+      remove: id => removeAssetFlow(id),
+      hasBlob: id => !!audio.assets.get(id)?.blob,
+      pickFiles: () => $('media-files').click(),
+    },
+  });
+}
+async function importMediaFiles(files) {
+  const list = [...files].filter(f => !f.type || f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
+  if (!list.length) { toast('未识别到音频文件'); return; }
+  const wasPlaying = !!(player.playing || player.countin);
+  if (wasPlaying) player.pause();
+  let first = null;
+  for (const f of list) {
+    try {
+      const asset = await audio.addAsset(f, f.name);
+      if (!asset.durationSec) throw new Error('无法解码');
+      first = first || asset;
+      store.mutate(p => {
+        p.media = p.media || { assets: [], activeAssetId: null };
+        if (!p.media.assets.some(a => a.id === asset.id)) {
+          p.media.assets.push({ id: asset.id, name: f.name, durationSec: asset.durationSec, size: f.size });
+        }
+        // 项目原本无配乐：首个导入资产成为配乐并补全长 clip（等价 v1 迁移语义）
+        if (!p.audio.name) {
+          p.audio.name = f.name;
+          p.audio.durationSec = asset.durationSec;
+          p.media.activeAssetId = asset.id;
+          if (!p.timeline.audioClips.length) {
+            p.timeline.audioClips.push({ id: uid('clip'), assetId: asset.id, timelineStartSec: 0, srcStartSec: 0, lengthSec: Math.round(asset.durationSec * 1e6) / 1e6, fadeInSec: 0, fadeOutSec: 0, gain: 1, name: f.name });
+          }
+        }
+      }, '导入音频资产');
+      await store.storage.putAsset(store.getState().projectId, asset.id, f);
+    } catch { toast(`「${f.name}」无法解码，已跳过`); }
+  }
+  if (first && !audio.activeId) { try { audio.setActiveAsset(first.id); } catch {} }
+  toast(`已导入 ${list.length} 个音频文件到媒体库`);
+}
+function setActiveAssetFlow(id) {
+  const a = audio.assets.get(id);
+  const meta = store.getState().project?.media?.assets?.find(x => x.id === id);
+  if (!a && !meta) return;
+  if (a) audio.setActiveAsset(id);
+  store.mutate(p => {
+    p.media.activeAssetId = id;
+    if (a) { p.audio.name = a.name; p.audio.durationSec = a.durationSec; }
+  }, '切换配乐');
+  toast(`配乐已切换：${a?.name || meta?.name}`);
+}
+function removeAssetFlow(id) {
+  const s = store.getState();
+  const p = s.project;
+  const a = p?.media?.assets?.find(x => x.id === id);
+  if (!a) return;
+  const isActive = p.media.activeAssetId === id;
+  if (isActive && !confirm(`删除当前配乐「${a.name}」？其全部剪辑将一并移除（可用撤销恢复）。`)) return;
+  store.mutate(pr => {
+    pr.media.assets = pr.media.assets.filter(x => x.id !== id);
+    pr.timeline.audioClips = pr.timeline.audioClips.filter(c => c.assetId !== id);
+    if (pr.media.activeAssetId === id) pr.media.activeAssetId = pr.media.assets[0]?.id ?? null;
+    if (!pr.media.assets.length) { pr.audio.name = ''; pr.audio.durationSec = 0; }
+    else if (pr.media.activeAssetId === pr.media.assets[0].id && !pr.audio.name) {
+      pr.audio.name = pr.media.assets[0].name;
+      pr.audio.durationSec = pr.media.assets[0].durationSec;
+    }
+  }, '删除音频资产');
+  audio.assets.delete(id);
+  if (audio.activeId === id) {
+    const next = store.getState().project?.media?.activeAssetId;
+    if (next && audio.assets.has(next)) audio.setActiveAsset(next);
+    else { audio.dispose(); audio.activeId = null; }
+  }
+  toast(`已删除资产「${a.name}」`);
+}
+// 媒体资产 → 音轨落点生成 clip（C13：媒体库拖入 / 文件拖入时间轴）
+async function createClipFromDrop(assetId, sec, file) {
+  const s = store.getState();
+  if (!s.editMode) { toast('编辑已关闭，无法放置剪辑'); return; }
+  if (player.playing || player.countin) player.pause();
+  let assetIdFinal = assetId;
+  if (file) {
+    try {
+      const asset = await audio.addAsset(file, file.name);
+      if (!asset.durationSec) throw new Error('无法解码');
+      assetIdFinal = asset.id;
+      store.mutate(p => {
+        p.media = p.media || { assets: [], activeAssetId: null };
+        if (!p.media.assets.some(a => a.id === asset.id)) p.media.assets.push({ id: asset.id, name: file.name, durationSec: asset.durationSec, size: file.size });
+        if (!p.audio.name) { p.audio.name = file.name; p.audio.durationSec = asset.durationSec; p.media.activeAssetId = asset.id; }
+      }, '导入音频资产');
+      await store.storage.putAsset(s.projectId, asset.id, file);
+    } catch { toast('音频无法解码，已忽略'); return; }
+  }
+  const p = store.getState().project;
+  const meta = p.media?.assets?.find(a => a.id === assetIdFinal);
+  if (!meta) { toast('资产不存在'); return; }
+  const sameCount = M.clipsOf(p).filter(c => c.assetId === assetIdFinal).length;
+  store.mutate(pr => {
+    pr.timeline.audioClips.push({
+      id: uid('clip'), assetId: assetIdFinal,
+      timelineStartSec: Math.max(0, Math.round(sec * 1e6) / 1e6), srcStartSec: 0,
+      lengthSec: meta.durationSec, fadeInSec: 0, fadeOutSec: 0, gain: 1,
+      name: `${meta.name}${sameCount ? ' ' + (sameCount + 1) : ''}`,
+    });
+  }, '放置音频剪辑');
+  const created = M.clipsOf(store.getState().project).at(-1);
+  if (created) { musicTl.clipSel = new Set([created.id]); musicTl.render(); }
+}
+// 「按队形段自动切」（P1 · C18）：块边界→分割点；段间交叉淡化时长=过渡拍
+function autoSplitByFormations() {
+  const s = store.getState();
+  const p = s.project;
+  if (!p) return;
+  if (!s.editMode) { toast('编辑已关闭，无法切分'); return; }
+  if (!M.clipsOf(p).length) { toast('请先载入音乐'); return; }
+  if (player.playing || player.countin) player.pause();
+  const { segments } = M.computeSegments(p);
+  const times = [];
+  for (let i = 1; i < segments.length; i++) {
+    const prev = segments[i - 1];
+    times.push({
+      t: M.beatToSec(p, segments[i].holdStart),
+      fade: prev.hasTravel ? M.beatToSec(p, prev.travelEnd) - M.beatToSec(p, prev.holdEnd) : 0,
+    });
+  }
+  if (!times.length) { toast('只有一个队形块，无需切分'); return; }
+  let res = { splits: 0, fades: 0 };
+  store.mutate(pr => {
+    res = autoSplitAtBoundaries(pr.timeline.audioClips, times, id => pr.media?.assets?.find(a => a.id === id)?.durationSec ?? Infinity);
+  }, '按队形段自动切');
+  if (!res.splits && !res.fades) toast('没有可切分的块边界（可能已切过）');
+  else toast(`按队形段自动切完成：分割 ${res.splits} 处 · 交叉淡化 ${res.fades} 段（可继续逐个微调）`);
 }
 
 // ---------- 移动端 Tab ----------
@@ -5782,6 +7743,17 @@ function wireKeyboard() {
       const ov = $('manual-overlay');
       if (ov && !ov.hidden) { ov.hidden = true; return; }
     }
+    // v3 音频轨：Esc=退出剃刀 → 清 clip 选择/时间选区（规格 §5）
+    if (e.key === 'Escape' && musicTl) {
+      if (musicTl.razor) { musicTl.setRazor(false); return; }
+      if (musicTl.clipSel.size || musicTl.timeSel) { musicTl.clearClipSelection(); return; }
+    }
+    // v3：Ctrl/Cmd+K = 播放头处分割选中 clip（规格 §5/C6）
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      musicTl?.splitAtPlayhead();
+      return;
+    }
     if (e.key === 'Escape') {
       if (player?.countin && player.cancelCountin()) return; // 任务#5：数拍入场中 Esc=取消倒计（先于其它取消语义）
       if (stageView?.gestureCancel()) return; store.setUI({ selection: [] }); return;
@@ -5804,6 +7776,30 @@ function wireKeyboard() {
     }
     if (e.key.toLowerCase() === 'e') { store.setUI({ editMode: !s.editMode }); return; } // 编辑开关
     if (!s.editMode) return; // 查看模式下禁用编辑类快捷键
+    // ---- v3 音频轨快捷键（规格 §5）----
+    if (e.key.toLowerCase() === 's' && musicTl?.hoverAudio) { e.preventDefault(); musicTl.toggleSnap(); return; } // S（hover 音轨）=磁吸开关
+    if (e.key.toLowerCase() === 'r' && musicTl?.hoverAudio) { e.preventDefault(); musicTl.setRazor(); return; }   // R（hover 音轨）=剃刀
+    if ((e.key === 'Delete' || e.key === 'Backspace') && musicTl?.clipSel?.size && !s.selection.length) {
+      e.preventDefault();
+      musicTl.deleteSelected(e.altKey); // Alt+Delete=波纹删除
+      return;
+    }
+    if (e.key === 'Home' && musicTl) { e.preventDefault(); player.seekBeat(0); return; }
+    if (e.key === 'End' && musicTl) {
+      e.preventDefault();
+      const p = store.getState().project;
+      if (p) {
+        const endSec = Math.min(M.beatToSec(p, M.computeSegments(p).totalBeats), lastClipEndSec(M.clipsOf(p)));
+        player.seekBeat(M.secToBeat(p, endSec));
+      }
+      return;
+    }
+    if (e.key.startsWith('Arrow') && musicTl?.clipSel?.size && !s.selection.length) {
+      e.preventDefault(); // C3：选中 clip 微移（plain=逐帧 10ms；Shift=按网格步进整拍）
+      const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (dir) musicTl.nudgeSelected(dir, { grid: e.shiftKey });
+      return;
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (s.selection.length) {
         e.preventDefault();
@@ -5990,6 +7986,7 @@ function render(state) {
     $('bc-sec').textContent = `（${M.beatLabel(p, 0)} 起 · 共 ${M.totalDurationSec(p).toFixed(1)}s）`;
   }
   $('audio-name').textContent = audio.ready ? `${p.audio.name} (${(p.audio.durationSec || 0).toFixed(1)}s)` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
+  updateAudioHead(); // v3 展开态表头（资产名/时长）跟随
   updateMusicLock(); // 任务#2：随渲染同步 BPM/首拍/点拍锁态（暂停/播放切换的兜底刷新面）
   $('pb-formation').textContent = currentFormation() ? `${state.formationIndex + 1}. ${currentFormation().name}` : '';
   // 播放/数拍中按钮态（任务#20：数拍期同样呈 ⏸，点击=取消倒计）
@@ -6029,14 +8026,20 @@ if (typeof window !== 'undefined') window.__fs = {
   drawScene: (ctx, rect, project, positions, opts) => drawScene(ctx, rect, project, positions, opts || {}),
   snapshot() {
     const s = store.getState();
+    const p = s.project;
     return {
       view: s.view, formationIndex: s.formationIndex,
       selection: s.selection,
-      dancers: s.project?.dancers.length, groups: (s.project?.groups || []).length,
-      formations: s.project?.formations.map(f => ({ name: f.name, n: Object.keys(f.positions).length })),
+      dancers: p?.dancers.length, groups: (p?.groups || []).length,
+      formations: p?.formations.map(f => ({ name: f.name, n: Object.keys(f.positions).length })),
       positions: currentFormation()?.positions,
-      blocks: s.project?.timeline.blocks,
-      audio: { name: s.project?.audio.name, bpm: s.project?.audio.bpm, ready: audio.ready, duration: audio.duration },
+      blocks: p?.timeline.blocks,
+      audio: { name: p?.audio.name, bpm: p?.audio.bpm, ready: audio.ready, duration: audio.duration },
+      media: { assets: (p?.media?.assets || []).map(a => ({ ...a })), activeAssetId: p?.media?.activeAssetId ?? null },
+      clips: (p?.timeline?.audioClips || []).map(c => ({ ...c })),
+      clipSel: [...(musicTl?.clipSel || [])],
+      timeSel: musicTl?.timeSel ? { ...musicTl.timeSel } : null,
+      audioTrack: { expanded: musicTl?.expanded, snap: musicTl?.snapOn, razor: musicTl?.razor },
       beat: player?.beat, playing: player?.playing,
     };
   },

@@ -171,7 +171,10 @@
               <!-- 主行（常驻，服务对齐编辑）：载入/更换音乐、BPM、首拍+对齐、节拍器；缩放服务时间线查看 -->
               <button id="btn-load-audio" class="btn small">载入音乐…</button>
               <input type="file" id="audio-file" accept="audio/*" hidden>
+              <input type="file" id="media-files" accept="audio/*" multiple hidden>
               <span id="audio-name" class="dim">未载入音乐</span>
+              <button id="btn-media-library" class="btn small" title="媒体库：导入/管理音乐资产（多文件），指定配乐">📚<span class="hide-mobile"> 媒体库</span></button>
+              <button id="btn-auto-split" class="btn small" title="按队形段自动切：块边界→分割点，段间自动交叉淡化（时长=过渡拍）；结果为一组自由 clip，可继续逐个微调">✂<span class="hide-mobile"> 按队形段自动切</span></button>
               <span class="vsep"></span>
               <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" style="width:56px"></label>
               <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" style="width:64px">s</label>
@@ -194,10 +197,19 @@
               </details>
             </div>
           </details>
-          <div id="tl-scroll"><div id="tl-inner">
-            <canvas id="tl-canvas"></canvas>
-            <canvas id="tl-overlay"></canvas>
-          </div></div>
+          <div id="tl-body">
+            <!-- 音轨附属 DOM 层（v3）：轨左端展开/收起钮、展开态表头（120px）、空态入口 -->
+            <button id="tl-audio-toggle" title="展开音频轨（Audition Lite 剪辑）" aria-label="展开音频轨">⌄</button>
+            <div id="tl-head" hidden title="音轨表头（展开态）"></div>
+            <div id="tl-audio-empty" hidden>
+              <button id="tl-empty-load" class="btn small" title="载入音乐文件（mp3/wav/m4a…）">＋ 载入音乐</button>
+              <button id="tl-empty-library" class="btn small" title="打开媒体库（多文件导入 / 指定配乐）">📚 媒体库</button>
+            </div>
+            <div id="tl-scroll"><div id="tl-inner">
+              <canvas id="tl-canvas"></canvas>
+              <canvas id="tl-overlay"></canvas>
+            </div></div>
+          </div>
         </div>
       </div>
     </div>
