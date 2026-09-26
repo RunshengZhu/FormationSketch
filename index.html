@@ -166,6 +166,7 @@
         <button id="mtb-auto-split" class="btn small" title="按队形段自动切：块边界→分割点，段间自动交叉淡化">按队形段自动切</button>
         <span class="vsep"></span>
         <button id="mtb-tag-drop" class="btn small" title="在当前播放头位置打一个节奏段起点标记（主歌/副歌/间奏…）；划分轨双击空白也可打点">⚑ 打点</button>
+        <button id="mtb-seg-index" class="btn small" title="乐段索引面板（⌘⇧L）：段名/拍位/秒位目录 + 段内小节格，点击行跳转播放头">索引</button>
         <label class="ctl">BPM <input id="bpm-input-music" type="number" min="30" max="300" step="1" style="width:56px"></label>
         <label class="ctl">首拍 <input id="offset-input-music" type="number" min="0" step="0.01" style="width:64px">s</label>
         <button id="btn-tap-music" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
@@ -241,7 +242,7 @@
                 <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
               </div>
             </details>
-            <button id="ms-tags" class="btn small" title="节奏段索引：点击打开段列表（段名·拍位·秒位），点段名播放头跳段起点" disabled>tag 0 个 · 跳转列表</button>
+            <button id="ms-tags" class="btn small" title="乐段索引面板（⌘⇧L）：段名/拍位/秒位目录 + 段内小节格，点击行跳转播放头" disabled>tag 0 个 · 跳转列表</button>
             <span class="spacer"></span>
             <button id="tl-scale-toggle" class="btn small" title="尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住">拍刻度</button>
             <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>

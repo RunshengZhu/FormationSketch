@@ -14,8 +14,8 @@ import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHi
 import { renderManual } from './manual.js';
 import { iconHtml } from './icons.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-35-w3';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-35-w3');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-36-idx';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-36-idx');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -602,6 +602,7 @@ function buildPlayer() {
       }
       stageView?.requestDraw();
       musicTl?.drawPlayhead();
+      siTick(); // W4：面板开着时播放头行/当前行高亮实时跟随（关着零开销）
       drawMusicPreview(); // W1：preview 栏随播放头同步（formationIndex 高亮 + 当前块信息，IR-W1-5）
     },
     onPreviewEnd: () => {
@@ -1228,9 +1229,10 @@ function wireAudioPanel() {
   $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
   $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
   $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
-  // ---- W2 C14 摘要条专属：「编辑音乐 →」显性入口（IR-W2-3，与 M 键等效）+ 段索引列表 + 空态灰字 ----
+  // ---- W2 C14 摘要条专属：「编辑音乐 →」显性入口（IR-W2-3，与 M 键等效）+ 段索引面板 + 空态灰字 ----
+  // W4：段索引入口升级为完整面板（原弹出列表退役）；按钮文案/禁用态同步逻辑不变
   $('ms-edit').addEventListener('click', () => setUiMode('music'));
-  $('ms-tags').addEventListener('click', openSegIndexList);
+  $('ms-tags').addEventListener('click', toggleSegIndexPanel);
   $('tl-audio-empty').addEventListener('click', () => setUiMode('music')); // C12：空态灰字点击跳音乐模式
   $('media-files').addEventListener('change', async () => {
     const files = [...$('media-files').files];
@@ -1289,20 +1291,111 @@ function auditionFirstBeat() {
   audio.play(from, 1);
   setTimeout(() => { if (!player.playing) audio.pause(); }, 4500);
 }
-// ---- W2 C14 摘要条段索引列表（「tag N 个 · 跳转列表」）：段名·小节·拍位·秒位，点段名跳段起点 ----
-function openSegIndexList() {
+// ---- W4 §2.5 乐段索引面板（双模式共用快速乐段索引，替代原摘要条段索引弹出列表）----
+// 三层层级：段行（色块 4 色循环与节奏划分轨同色序 + 段名 + 拍区间 + 秒区间）▸ 展开段内小节格
+//（按全局 audio.beatsPerBar 折算，每行=1 小节）+ 顶部播放头行（▶ 当前拍/秒/小节，onTick 实时）。
+// 数据源零新 schema：段=相邻 tags 派生（M.sectionSegmentsOf）；点击行=播放头跳转（播放中续播，
+// seekBeat 既有语义）。同一组件两处挂载：编舞=摘要条「tag N 个」钮 / 音乐=工具条「索引」钮 / ⌘⇧L。
+// 无 tags 空态「无节奏划分——到音乐模式自动划分」。长曲虚拟滚动本轮降级为全量渲染（200+ 行可接受）。
+const siState = { open: false, root: null, list: null, ph: null, rows: [], expanded: new Set() }; // expanded: 已展开段的 tagId 集（跨重渲染保持）
+function siEnsureDom() {
+  if (siState.root) return;
+  siState.root = h('div', {
+    id: 'seg-index-panel',
+    style: 'position:fixed;right:8px;top:calc(var(--tb-h) + 8px);bottom:calc(var(--pb-h) + 8px);width:min(280px,78vw);'
+      + 'background:var(--bg2);border:1px solid var(--line);border-radius:var(--rad);box-shadow:0 8px 24px rgba(0,0,0,.45);'
+      + 'z-index:70;display:none;flex-direction:column;overflow:hidden',
+  },
+    h('div', { style: 'display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line);flex:none' },
+      h('span', { style: 'font-weight:600;font-size:13px;flex:1' }, '乐段索引'),
+      h('button', { class: 'btn small', title: '关闭（Esc / ⌘⇧L）', onclick: closeSegIndexPanel }, '✕')),
+    h('div', { id: 'si-playhead', class: 'mono', style: 'padding:4px 10px;font-size:12px;color:var(--acc);border-bottom:1px solid var(--line);flex:none;white-space:nowrap;overflow:hidden' }, '▶ 当前 0.0 拍'),
+    h('div', { id: 'si-list', style: 'flex:1;overflow-y:auto;overscroll-behavior:contain' }));
+  siState.list = siState.root.querySelector('#si-list');
+  siState.ph = siState.root.querySelector('#si-playhead');
+  document.body.append(siState.root);
+}
+// 全量重建面板行（打开时与 store render 兜底时调用；expanded 集保证展开态不丢）
+function renderSegIndexPanel() {
+  siEnsureDom();
+  const p = store.getState().project;
+  const list = siState.list;
+  list.innerHTML = '';
+  siState.rows = [];
+  const { segs } = p ? M.sectionSegmentsOf(p) : { segs: [] };
+  if (!segs.length) {
+    list.append(h('div', { id: 'si-empty', style: 'padding:18px 12px;color:var(--dim);font-size:13px;text-align:center' },
+      '无节奏划分——到音乐模式自动划分'));
+    return;
+  }
+  const bpb = p.audio.beatsPerBar || 4;
+  const COLORS = MusicTimeline.SEG_COLORS;
+  segs.forEach((s, k) => {
+    // 色序与节奏划分轨一致：tag.color 覆盖，缺省按段序 4 色循环（timeline.js 同式）
+    const color = COLORS[((s.tag.color ?? k) % COLORS.length + COLORS.length) % COLORS.length];
+    const open = siState.expanded.has(s.tag.id);
+    const row = h('div', {
+      class: 'si-seg', 'data-start': String(s.start), 'data-end': String(s.end),
+      style: 'display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--line);font-size:13px',
+      onclick: e => { if (e.target.closest('.si-tw')) return; siSeek(s.start); },
+    },
+      h('button', {
+        class: 'si-tw btn small', style: 'padding:0 6px;min-width:22px;flex:none',
+        title: open ? '收起小节格' : '展开小节格',
+        onclick: () => { if (open) siState.expanded.delete(s.tag.id); else siState.expanded.add(s.tag.id); renderSegIndexPanel(); siTick(); },
+      }, open ? '▾' : '▸'),
+      h('span', { style: `width:10px;height:18px;border-radius:3px;background:${color};flex:none` }),
+      h('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, s.tag.name),
+      h('span', { class: 'mono', style: 'color:var(--dim);font-size:11px;flex:none' },
+        `${Math.round(s.start * 10) / 10}→${Math.round(s.end * 10) / 10}拍 · ${M.beatToSec(p, s.start).toFixed(1)}→${M.beatToSec(p, s.end).toFixed(1)}s`));
+    list.append(row);
+    siState.rows.push({ el: row, start: s.start, end: s.end });
+    if (!open) return;
+    // 段内小节格：段拍数/beatsPerBar 向上取整（末行可为不满小节）；拍号=全局（拍号 v1 不建模，§2.5 已裁定）
+    const nBars = Math.ceil((s.end - s.start) / bpb);
+    for (let j = 0; j < nBars; j++) {
+      const bs = Math.round((s.start + j * bpb) * 100) / 100;
+      const bLen = Math.min(bpb, s.end - bs);
+      const bar = h('div', {
+        class: 'si-bar', 'data-beat': String(bs),
+        style: 'display:flex;align-items:center;gap:6px;padding:3px 8px 3px 34px;cursor:pointer;font-size:12px;color:var(--dim)',
+        onclick: () => siSeek(bs),
+      },
+        h('span', { class: 'mono', style: 'flex:1' }, `小节 ${Math.floor(bs / bpb) + 1}`),
+        h('span', { class: 'mono' }, `${Math.round(bLen * 10) / 10}拍 @${M.beatToSec(p, bs).toFixed(1)}s`));
+      list.append(bar);
+      siState.rows.push({ el: bar, start: bs, end: Math.min(s.end, bs + bpb) });
+    }
+  });
+}
+// 点击行=播放头跳转（播放中续播：seekBeat 既有语义），播放头行即时跟进
+function siSeek(beat) {
+  player?.seekBeat(beat);
+  musicTl?.drawPlayhead();
+  siTick();
+}
+// 播放头跟随行（简化实现 §2.5：顶部固定一行实时呈示 + 当前行高亮，不强求滚动跟随）
+function siTick() {
+  if (!siState.open || !siState.root) return;
   const p = store.getState().project;
   if (!p) return;
-  const { segs } = M.sectionSegmentsOf(p);
-  if (!segs.length) return;
-  const items = segs.map(s => ({
-    label: `${s.tag.name} · ${M.beatLabel(p, s.start)} 小节（${Math.round(s.start * 10) / 10} 拍 · ${M.beatToSec(p, s.start).toFixed(1)}s）`,
-    fn: () => { player.seekBeat(s.start); musicTl?.drawPlayhead(); },
-  }));
-  const btn = $('ms-tags');
-  const r = btn.getBoundingClientRect();
-  showContextMenu(items, { x: Math.min(r.left, window.innerWidth - 240), y: r.bottom + 4 });
+  const b = Math.max(0, player ? player.beat : 0);
+  siState.ph.textContent = `▶ 当前 ${Math.round(b * 10) / 10} 拍 · ${M.beatToSec(p, b).toFixed(1)}s（${M.beatLabel(p, b)} 小节）`;
+  // 段行与其当前小节行同时高亮（两者区间都命中播放头；未展开时仅段行亮）
+  for (const r of siState.rows) r.el.style.background = (b >= r.start && b < r.end) ? 'var(--bg3)' : '';
 }
+function openSegIndexPanel() {
+  siEnsureDom();
+  siState.open = true;
+  siState.root.style.display = 'flex';
+  renderSegIndexPanel();
+  siTick();
+}
+function closeSegIndexPanel() {
+  siState.open = false;
+  if (siState.root) siState.root.style.display = 'none';
+}
+function toggleSegIndexPanel() { siState.open ? closeSegIndexPanel() : openSegIndexPanel(); }
 
 // ---------- W1 音乐模式主区化：新接线 ----------
 // 块时长 ±1 拍步进（钳制 0.5–999）：编舞块栏（bc-*）与音乐 preview 栏（mp-*）共用；
@@ -1340,6 +1433,8 @@ function wireMusicToolbar() {
   $('mtb-auto-split').addEventListener('click', autoSplitByFormations);
   // ⚑ 打点（修 E-08：音乐模式打 tag 入口）
   $('mtb-tag-drop').addEventListener('click', () => musicTl?.stampTag());
+  // 乐段索引（W4 §2.5：音乐模式唤出同一面板，与编舞摘要条「tag N 个」钮同组件同数据）
+  $('mtb-seg-index').addEventListener('click', toggleSegIndexPanel);
   // BPM/首拍（与块栏同名控件同模型同守卫：播放/数拍中禁改，change 拦截 + 还原显示值）
   $('bpm-input-music').addEventListener('change', () => {
     if (rejectLockedMusicEdit()) return;
@@ -2213,10 +2308,15 @@ function wireKeyboard() {
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); return; }
+    // ⌘⇧L = 乐段索引面板开/关（W4 §2.5 可选项；两模式同组件）
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault(); toggleSegIndexPanel(); return;
+    }
     // 说明书全屏覆盖层开着时 Esc=先关层（不穿透到舞台手势/选择）
     if (e.key === 'Escape') {
       const ov = $('manual-overlay');
       if (ov && !ov.hidden) { ov.hidden = true; return; }
+      if (siState.open) { closeSegIndexPanel(); return; } // W4：乐段索引面板 Esc=先关面板
     }
     // v3 音频轨：Esc=退出剃刀 → 清 clip 选择/时间选区（规格 §5）
     if (e.key === 'Escape' && musicTl) {
@@ -2487,6 +2587,8 @@ function render(state) {
   const msTags = nTags ? `tag ${nTags} 个 · 跳转列表` : 'tag 0 个';
   if ($('ms-tags').textContent !== msTags) $('ms-tags').textContent = msTags;
   $('ms-tags').disabled = !nTags;
+  // W4：乐段索引面板开着时随数据变更重建（tags/BPM/首拍/拍号改动即时反映；expanded 集保展开态）
+  if (siState.open) { renderSegIndexPanel(); siTick(); }
   // 音乐工具条镜像（音乐模式呈示面；与编舞面板同模型同步）
   $('mtb-audio-name').textContent = audio.ready ? `${p.audio.name} · ${(p.audio.durationSec || 0).toFixed(1)}s` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
   if (document.activeElement !== $('bpm-input-music')) $('bpm-input-music').value = Math.round(p.audio.bpm);
