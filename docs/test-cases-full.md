@@ -731,3 +731,9 @@ W3（整改方案 §6 批次 W3）落地对既有用例口径的影响，供后�
 5. **数拍 preview 大字**：音乐模式数拍入场大字改呈 `#mp-countin`（preview 条内，修 P12——原 `#countin-overlay` 挂 `#stage-wrap` 在音乐模式不可见）；编舞模式 overlay 路径零变化（TC-P5 数拍族不受影响）。
 6. **仪器改写三项（授权）**：`run-userflows-p7.mjs` TC-P7-03 内嵌音频断言位置 `audio.dataBase64` → `media.assets[0].dataBase64`（v3 多资产设计，导出字节级一致性不变）；TC-P7-B2 前置 audio 表计数 1→2（v3 双键 `pid` + `pid:assetId`；删除双清断言不变）；`run-userflows-p6.mjs` TC-P6-B3 版本徽标断言由硬编码 build 号改为读运行时 `window.__MAIN_BUILD`（round20 遗留③）。
 7. **新增可测项**：`tests/w3-music.test.js` 9 条（移动 laneH 上限 64 / 分键纯函数 / 旧键播种退役）；`lab/w3-verify.mjs` 42 项（IR-W3-1..4 对账 + IR-C 交互抽查 + 移动全动线截图），证据 `lab/out/round54-w3/`。
+
+## 就绪信号轮 附注：E2E 纪律与条件等待（2026-09-24；本节为附注，上方用例零改动）
+
+**E2E 纪律（新增，对全部后续驱动生效）**：**禁 ≥1s 固定盲等（sleep）；一律条件等待——boot 用 `__fs.ready`，渲染用 `__fs.renderSeq`，持久化断言前用 `__fs.flushNow()`；时序采样类（点拍间隔 / D1 取证 / 数拍时间窗内取样等真时间窗断言）除外，须就地注释「合法时序采样」**。共享助手 `lab/lib-wait.mjs`：`waitForBoot(page)` / `waitForRender(page, {fromSeq})`（配 `renderSeqNow(page)` 取基线）/ `waitForFlush(page)` / `waitForExpr(page, fn, arg, {timeoutMs, label})`，全部带超时上限、超时抛错附现场 dump（URL/build/renderSeq/视图/播放态/toast）。
+
+应用侧信号（`window.__fs` 纯加法，见 js/main.js 末尾注释）：`ready`（boot=store init+lastProject 恢复+首帧渲染 完成 Promise）；`renderSeq`（状态驱动重绘计数：MusicTimeline.render 出口与 StageView.requestDraw 出口各 +1；rAF/切帧动效逐帧与 drawPlayhead 局部重绘不计）；`flushNow()`（清 400ms 防抖并立即 putProject，幂等，无项目 no-op）。示范改造 3 处：`w1-verify.mjs` 盲等 1400ms（播放跨段界）→waitForExpr 条件等待、盲等 400ms（视口重绘）→waitForRender；`w3-verify.mjs` 盲等 500ms（变速 toast）→waitForExpr；数拍时间窗 sleep 标注「合法时序采样」保留。单测 `tests/ready-signals.test.js` +4（node --test 总数 308→312，run-l2 红线 pin 已按回填链协议同步）。

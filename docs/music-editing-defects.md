@@ -469,3 +469,29 @@ project.timeline.audioClips[i].trackId   clip 归属轨；缺失/悬挂在清洗
 - 轨操作历史：加轨/删轨/改名/静音各成一条（「加音轨/删音轨/重命名音轨/静音音轨」）；轨音量滑杆不进历史（同 clip 增益把手口径）。
 - v1 导出剥离：`doExportJSON(false,…)` 路径一行接 `stripTracksForV1`（12.5 预留接线点）；探针实测不含乐文件无 `timeline.tracks`/`clip.trackId`、含乐文件随行。
 - 探针：`lab/probe-merge-multitrack.mjs` 27/27 PASS（图标化呈示断言 6 + 多轨动线 18 + v1 剥离 + 说明书 9 图解码 + 零 pageerror；证据 `out/merge-multitrack/`）。
+
+## 十三、就绪信号轮附表（2026-09-24，E2E 确定性完成信号 + 盲等整改，build-35-w3 工作树）
+
+**背景**：E2E subagent 普遍以长固定 sleep 盲等 canvas 渲染/存储落盘/boot，根因是应用未暴露确定性完成信号。本轮两层根治：应用暴露信号（纯加法）+ 测试纪律与助手。
+
+**① 应用信号（`window.__fs` 增补，全部加法、既有字段零改动）**：
+
+| 信号 | 定义/触发点 | 消费示例 |
+| --- | --- | --- |
+| `__fs.ready` | Promise；boot 全流程（store.init + lastProject 恢复 + 深链 + 首帧渲染 + 订阅挂载）完成后 resolve（js/main.js boot 尾）；重复读取同一 Promise，boot 已完成则 resolved | `await page.evaluate(() => window.__fs.ready)` 替代 goto 后盲等 |
+| `__fs.renderSeq` | 数字（只读语义）；状态驱动重绘计数，计点两处：`MusicTimeline.render()` 出口（js/timeline.js）与 `StageView.requestDraw()` 出口（js/stage.js）各 +1（一次完整 render() 通常 +2）。口径：rAF/切帧动效逐帧直调 `draw()` 不计、`drawPlayhead` 局部重绘不计；播放 onTick 的舞台重绘经 requestDraw 出口会计（本质状态驱动） | `waitForRender(page,{fromSeq})` 轮询 `renderSeq > fromSeq` |
+| `__fs.flushNow()` | async；清 400ms 防抖定时器并立即 `storage.putProject(state.project)`（js/store.js 导出 `flushNow`：无项目 no-op；无挂起写时只等在途写完成——幂等，updatedAt 不被无谓刷新） | `await page.evaluate(() => window.__fs.flushNow())` 替代「盲等 400/900ms 防抖」后再断言持久化 |
+
+**② 测试纪律与助手**：E2E 纪律入 `docs/test-cases-full.md` 附录（禁 ≥1s 固定盲等；一律条件等待；时序采样类除外需注释「合法时序采样」）。共享助手 `lab/lib-wait.mjs`（`waitForBoot`/`waitForRender`+`renderSeqNow`/`waitForFlush`/`waitForExpr`，超时抛错附现场 dump）。
+
+**③ 示范改造对照表（lab/w1-verify.mjs、lab/w3-verify.mjs 各自批次驱动，共 3 处）**：
+
+| 位置 | 前（盲等） | 后（条件等待） | 实测省时 |
+| --- | --- | --- | --- |
+| w1-verify.mjs IR-W1-5b | `sleep(1400)` 播放跨段界 | `waitForExpr`：轮询 formationIndex 翻转 + preview 帧名同步（超时 5s） | ~1.0s/次 |
+| w1-verify.mjs IR-W1-1h | `sleep(400)` 视口改矮后重绘 | `waitForRender`（setViewportSize 前取 `renderSeqNow` 基线） | ~0.35s/次 |
+| w3-verify.mjs IR-W3-2g | `sleep(500)` 等变速体检 toast | `waitForExpr`：轮询 toast 文本含「变速曲」（超时 5s） | ~0.45s/次 |
+
+保留并注释「合法时序采样」：w3-verify 数拍大字两处 `sleep(350)`（数拍=真实时间窗 2 拍@120BPM≈1s，须窗内取样）。w3-verify-r55.mjs 为 round55 存档快照，有意不改。
+
+**④ 单测与回归**：`tests/ready-signals.test.js` +4（flushNow 幂等/无项目 no-op/在途写收口 + renderSeq 计数语义：requestDraw +1、动画帧直调 draw() 不计）；node --test 总数 308→312 全绿，run-l2 红线 pin 按回填链协议 308→312。复跑：node --test 312/312、run-l0 20/20、run-l1 29/29、run-l2 12/12、w1-verify 36/36、w2-verify 39/39、w3-verify 42/42、默认编舞模式冒烟（拖动/undo/renderSeq/flushNow 持久化）绿、零 pageerror。

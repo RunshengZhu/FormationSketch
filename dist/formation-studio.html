@@ -2624,6 +2624,9 @@ function setUI(patch) {
 // ---------- 撤销/重做 ----------
 const history = { stack: [], index: -1, max: 60 };
 let saveTimer = null;
+// E2E 确定性落盘辅助：savePending=有防抖写挂起；saveInFlight=最近一次在途写 Promise
+//（防抖回调已触发但写未完成时，flushNow 也要等它——保证 await 后最新状态必然已持久）。
+let savePending = false, saveInFlight = null;
 
 function snapshotNow(label) { return { snap: JSON.stringify(state.project), label }; }
 function commit(label = '修改') {
@@ -2669,14 +2672,29 @@ function mutate(fn, label = null) {
   emit();
 }
 function scheduleSave() {
+  savePending = true;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { if (state.project) storage.putProject(state.project); }, 400);
+  saveTimer = setTimeout(() => {
+    savePending = false;
+    saveInFlight = state.project ? storage.putProject(state.project) : null;
+  }, 400);
+}
+// E2E 确定性落盘出口（window.__fs.flushNow 的内部钩子，最小加法）：
+// 清防抖定时器并立即写盘；幂等——无待写内容时不重复写盘（updatedAt 不被无谓刷新），
+// 仅等待在途写完成；无项目时 no-op。供测试在断言持久化前调用，替代「盲等 400ms 防抖」。
+function flushNow() {
+  if (!state.project) return Promise.resolve();          // 无项目 no-op
+  if (!savePending) return saveInFlight || Promise.resolve(); // 无挂起写：等在途写（可能为 null=已落稳）
+  savePending = false;
+  clearTimeout(saveTimer); saveTimer = null;
+  return (saveInFlight = storage.putProject(state.project));
 }
 // 页面隐藏/关闭前立即落盘，避免 debounce 丢最后一次编辑
 if (typeof document !== 'undefined' && typeof window !== 'undefined') {
   const flush = () => {
     if (document.visibilityState === 'hidden' && state.project) {
       clearTimeout(saveTimer);
+      savePending = false; // 与 flushNow 同口径：已立即落盘，清挂起标记（行为零变化，仅记账）
       storage.putProject(state.project);
     }
   };
@@ -2776,7 +2794,7 @@ async function duplicateProject(id) {
 /* import from model */
 Object.assign(FS.store, { M });
 
-Object.assign(FS.store, { isFileOrigin, STORAGE_MODE, storage, getState, subscribe, emit, setUI, commit, canUndo, canRedo, undo, redo, undoLabel, mutate, init, refreshLibrary, createNewProject, openProject, importProject, closeProject, deleteProjectById, duplicateProject });
+Object.assign(FS.store, { isFileOrigin, STORAGE_MODE, storage, getState, subscribe, emit, setUI, commit, canUndo, canRedo, undo, redo, undoLabel, mutate, flushNow, init, refreshLibrary, createNewProject, openProject, importProject, closeProject, deleteProjectById, duplicateProject });
 })();
 
 /* ===== module: audio ===== */
@@ -4068,6 +4086,8 @@ class StageView {
   requestDraw() {
     // 同步重绘：画布元素少开销低，且不受 rAF/定时器节流影响
     this.draw();
+    // E2E 信号：状态驱动重绘公共出口 +1（切帧动效逐帧直调 draw() 不计；Node 导入无 window 跳过）
+    if (typeof window !== 'undefined' && window.__fs) window.__fs.renderSeq++;
   }
 
   // ---- 切帧动效（纯舞台 UI 动画：不经过播放引擎、不动播放头/时间线） ----
@@ -4927,6 +4947,8 @@ class MusicTimeline {
     }
     this.drawPlayhead();
     this.syncAudioDom(p);
+    // E2E 信号：全量渲染出口 +1（drawPlayhead 单独局部重绘不经此处，不计；Node 导入无 window 跳过）
+    if (typeof window !== 'undefined' && window.__fs) window.__fs.renderSeq++;
   }
 
   // ---- W2 节奏划分浓缩呈现（§2.2.1③b，编舞模式专用）----
@@ -7728,6 +7750,11 @@ async function wireDeeplinkImport() {
 }
 
 // ---------- 启动 ----------
+// E2E 就绪信号（确定性完成信号，替代 boot 盲等）：boot 全流程（store init + lastProject 恢复
+// + 深链 + 首帧渲染 + 订阅挂载）完成后 resolve；消费方重复读取返回同一 Promise；
+// boot 已完成后再读取即为 resolved 态。Node 导入（无 document）不 boot，永不 resolve（无害）。
+let __fsReadyResolve;
+const __fsReady = new Promise(res => { __fsReadyResolve = res; });
 async function boot() {
   buildStage();
   buildPlayer();
@@ -7758,6 +7785,7 @@ async function boot() {
   await wireDeeplinkImport(); // Phase 4 深链：在 init 之后执行 → 显式 import 参数优先于 lastProject 自动恢复
   render(store.getState());
   store.subscribe(render);
+  __fsReadyResolve(); // E2E 信号：boot 完成（首帧已渲染、订阅已挂）
 }
 function buildStage() {
   const cv = $('stage-canvas');
@@ -9725,6 +9753,16 @@ if (typeof window !== 'undefined') window.__fs = {
   store, player: () => player, audio, M, shapes, exp,
   stageView: () => stageView,
   musicTl: () => musicTl,
+  // ---- E2E 就绪信号三件套（纯加法，既有字段不动）----
+  // ready：boot（store init + lastProject 恢复 + 首帧渲染）完成信号；await window.__fs.ready
+  ready: __fsReady,
+  // renderSeq：状态驱动重绘计数（只读语义，消费方勿写）。计点两处：MusicTimeline.render()
+  // 出口与 StageView.requestDraw() 出口各 +1（一次完整 render() 故 +2）；rAF/切帧动效逐帧
+  // 直调 draw() 不计、drawPlayhead 局部重绘不计。waitForRender 即轮询本值变化。
+  renderSeq: 0,
+  // flushNow：清防抖定时器并立即 storage.putProject（幂等；无项目/无挂起写时只等在途写），
+  // 供测试在断言持久化前确定性落盘，替代「盲等 400ms 防抖」
+  flushNow: () => store.flushNow(),
   async loadAudioUrl(url, name = 'test.wav') {
     const r = await fetch(url);
     const b = await r.blob();
