@@ -479,6 +479,8 @@ export class MusicTimeline {
     }
     this.drawPlayhead();
     this.syncAudioDom(p);
+    // E2E 信号：全量渲染出口 +1（drawPlayhead 单独局部重绘不经此处，不计；Node 导入无 window 跳过）
+    if (typeof window !== 'undefined' && window.__fs) window.__fs.renderSeq++;
   }
 
   // ---- W2 节奏划分浓缩呈现（§2.2.1③b，编舞模式专用）----

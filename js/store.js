@@ -185,6 +185,9 @@ export function setUI(patch) {
 // ---------- 撤销/重做 ----------
 const history = { stack: [], index: -1, max: 60 };
 let saveTimer = null;
+// E2E 确定性落盘辅助：savePending=有防抖写挂起；saveInFlight=最近一次在途写 Promise
+//（防抖回调已触发但写未完成时，flushNow 也要等它——保证 await 后最新状态必然已持久）。
+let savePending = false, saveInFlight = null;
 
 function snapshotNow(label) { return { snap: JSON.stringify(state.project), label }; }
 export function commit(label = '修改') {
@@ -230,14 +233,29 @@ export function mutate(fn, label = null) {
   emit();
 }
 function scheduleSave() {
+  savePending = true;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { if (state.project) storage.putProject(state.project); }, 400);
+  saveTimer = setTimeout(() => {
+    savePending = false;
+    saveInFlight = state.project ? storage.putProject(state.project) : null;
+  }, 400);
+}
+// E2E 确定性落盘出口（window.__fs.flushNow 的内部钩子，最小加法）：
+// 清防抖定时器并立即写盘；幂等——无待写内容时不重复写盘（updatedAt 不被无谓刷新），
+// 仅等待在途写完成；无项目时 no-op。供测试在断言持久化前调用，替代「盲等 400ms 防抖」。
+export function flushNow() {
+  if (!state.project) return Promise.resolve();          // 无项目 no-op
+  if (!savePending) return saveInFlight || Promise.resolve(); // 无挂起写：等在途写（可能为 null=已落稳）
+  savePending = false;
+  clearTimeout(saveTimer); saveTimer = null;
+  return (saveInFlight = storage.putProject(state.project));
 }
 // 页面隐藏/关闭前立即落盘，避免 debounce 丢最后一次编辑
 if (typeof document !== 'undefined' && typeof window !== 'undefined') {
   const flush = () => {
     if (document.visibilityState === 'hidden' && state.project) {
       clearTimeout(saveTimer);
+      savePending = false; // 与 flushNow 同口径：已立即落盘，清挂起标记（行为零变化，仅记账）
       storage.putProject(state.project);
     }
   };

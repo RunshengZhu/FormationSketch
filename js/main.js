@@ -521,6 +521,11 @@ async function wireDeeplinkImport() {
 }
 
 // ---------- 启动 ----------
+// E2E 就绪信号（确定性完成信号，替代 boot 盲等）：boot 全流程（store init + lastProject 恢复
+// + 深链 + 首帧渲染 + 订阅挂载）完成后 resolve；消费方重复读取返回同一 Promise；
+// boot 已完成后再读取即为 resolved 态。Node 导入（无 document）不 boot，永不 resolve（无害）。
+let __fsReadyResolve;
+const __fsReady = new Promise(res => { __fsReadyResolve = res; });
 async function boot() {
   buildStage();
   buildPlayer();
@@ -551,6 +556,7 @@ async function boot() {
   await wireDeeplinkImport(); // Phase 4 深链：在 init 之后执行 → 显式 import 参数优先于 lastProject 自动恢复
   render(store.getState());
   store.subscribe(render);
+  __fsReadyResolve(); // E2E 信号：boot 完成（首帧已渲染、订阅已挂）
 }
 function buildStage() {
   const cv = $('stage-canvas');
@@ -2518,6 +2524,16 @@ if (typeof window !== 'undefined') window.__fs = {
   store, player: () => player, audio, M, shapes, exp,
   stageView: () => stageView,
   musicTl: () => musicTl,
+  // ---- E2E 就绪信号三件套（纯加法，既有字段不动）----
+  // ready：boot（store init + lastProject 恢复 + 首帧渲染）完成信号；await window.__fs.ready
+  ready: __fsReady,
+  // renderSeq：状态驱动重绘计数（只读语义，消费方勿写）。计点两处：MusicTimeline.render()
+  // 出口与 StageView.requestDraw() 出口各 +1（一次完整 render() 故 +2）；rAF/切帧动效逐帧
+  // 直调 draw() 不计、drawPlayhead 局部重绘不计。waitForRender 即轮询本值变化。
+  renderSeq: 0,
+  // flushNow：清防抖定时器并立即 storage.putProject（幂等；无项目/无挂起写时只等在途写），
+  // 供测试在断言持久化前确定性落盘，替代「盲等 400ms 防抖」
+  flushNow: () => store.flushNow(),
   async loadAudioUrl(url, name = 'test.wav') {
     const r = await fetch(url);
     const b = await r.blob();

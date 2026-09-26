@@ -314,6 +314,8 @@ export class StageView {
   requestDraw() {
     // 同步重绘：画布元素少开销低，且不受 rAF/定时器节流影响
     this.draw();
+    // E2E 信号：状态驱动重绘公共出口 +1（切帧动效逐帧直调 draw() 不计；Node 导入无 window 跳过）
+    if (typeof window !== 'undefined' && window.__fs) window.__fs.renderSeq++;
   }
 
   // ---- 切帧动效（纯舞台 UI 动画：不经过播放引擎、不动播放头/时间线） ----
