@@ -82,3 +82,11 @@
   4. 时间选区临时循环与「循环」复选框并存：选区建立即挂 loop、清除即按复选框恢复；两者同时操作以后写者为准。
   5. 简单态空域（clip 之外）点击=定位播放头；拖移只对命中 clip 生效——与规格一致，但无空态拖选（选择只在展开态）。
   6. skill vendor 同步（见 §6 首行）须由编排层执行；L2 原驱动在同步前会因红线门禁跳过。
+
+## 9. W3 后状态标注（round54，2026-09-26，build-35-w3）
+
+本实验交付的 Audition Lite（clip 引擎/资产库/媒体库）已并入双模式主线的**音乐模式**（整改方案 §2.2，W1 主区化）。W3 收尾后口径：
+
+- 原「展开态」概念随 W1 C6/C7 退役：音乐剪辑 UI 常驻音乐模式（`musicTl.mode==='music'` 即满血态，`expanded` 为只读派生访问器）；`probe-irc-v3.mjs` 的 C1 展开几何用例随之废弃，其余 C 系交互在音乐模式下延续（W3 抽查 C2/C5/C8/C9/C12 全绿，见 `lab/out/round54-w3/w3-report.json` Context F）。
+- 刻度记忆分键：`wuzhen:rulerScale.stage` / `.music`（W3 §4.3①），变速 toast「切秒刻度」动作钮仅音乐模式显钮。
+- 导出内嵌位置 v3：`media.assets[i].dataBase64`（`audio.dataBase64` 仅旧单音频兜底）；TC-P7-03/B2 仪器已按 v3 改写复跑绿。

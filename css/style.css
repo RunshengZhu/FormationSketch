@@ -50,10 +50,11 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 .dd-menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 10px;border-radius:6px}
 .dd-menu button:hover{background:var(--bg3)}
 
-/* ---- 双 UI 模式（round46 Lane A）----
+/* ---- 双 UI 模式（round46 Lane A；W1 音乐模式主区化）----
    编舞模式（默认）= 既有布局零变化；音乐模式 = #editor-view[data-uimode="music"]：
-   舞台列收窄为侧看版（画面保留、播放照常联动），横向余量让给属性面板；
-   队形块区（canvas 内）与块时长栏（#block-ctl[hidden]）由 JS 隐藏。
+   舞台三栏（#editor-main）与移动端 Tab 整体隐藏，底部区反转为垂直主体——
+   时间轴多轨区 flex 撑满（≥60% 视口），右侧 280px 队形 mini-preview 栏；
+   「音乐与节拍」行（#audio-disc）在该模式由 #music-toolbar 替代（C1/C2/C3/C5/C9 的 W1 侧）。
    断言口径：切换往返两侧状态零丢失（选择/tag/播放位置/循环/时间轴缩放）。 */
 .seg{display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:var(--rad);overflow:hidden;flex:none}
 .seg .seg-btn{background:transparent;border:0;border-radius:0;padding:5px 12px;color:var(--dim);font-size:13px;line-height:1.4}
@@ -61,10 +62,25 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 .seg .seg-btn:hover:not(.active){color:var(--fg);background:var(--bg3)}
 .seg .seg-btn.active{background:var(--bg3);color:var(--acc);font-weight:600}
 .seg-short{display:none}
-#editor-view[data-uimode="music"] #stage-col{flex:0 0 320px}
-#editor-view[data-uimode="music"] #right-panel{flex:1 1 auto;width:auto;min-width:250px}
+/* W1 空间反转：音乐模式主区=多轨时间轴（bottom-area flex:1 吃掉 #editor-main 让出的空间）；
+   行序按 §2.2：工具条 → 多轨区+preview → playbar 沉底（CSS order，DOM 不搬家）。
+   W2：编舞摘要条（#music-summary）只属编舞，音乐模式隐藏（工具条承接）；移动端 #mobile-tabs
+   同步隐藏（DEFECT-W1-R1：音乐模式三键死栏，§2.2 隐藏清单口径） */
+#editor-view[data-uimode="music"] #editor-main{display:none}
+#editor-view[data-uimode="music"] #bottom-area{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+#editor-view[data-uimode="music"] #music-toolbar{order:1}
+#editor-view[data-uimode="music"] #timeline-area{order:2;flex:1 1 auto;min-height:0;display:flex;flex-direction:row}
+#editor-view[data-uimode="music"] #playbar{order:3}
+#editor-view[data-uimode="music"] #music-strip{flex:1 1 auto;min-width:0;min-height:0}
+#editor-view[data-uimode="music"] #music-summary{display:none} /* 音乐模式职责已由 #music-toolbar 承接 */
+#editor-view[data-uimode="music"] #mobile-tabs{display:none}
+#editor-view[data-uimode="music"] #tl-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden}
+#editor-view[data-uimode="music"] #tl-scroll{height:100%} /* 容器 flex 撑满；画布高由 render 实测推导 */
+#music-toolbar{display:none}
+#editor-view[data-uimode="music"] #music-toolbar{display:flex}
+#music-preview{display:none}
+#editor-view[data-uimode="music"] #music-preview{display:flex}
 @media (max-width:1023.5px){
-  #editor-view[data-uimode="music"] #stage-col{flex:0 0 42%}
   /* 移动端顶栏紧凑：模式开关呈单字（编/乐）；顶栏过挤时内部横滚（同 #stage-tools 既有模式，
      scrollWidth 仍 ≤375，L2 C-09a 口径不破） */
   .seg-full{display:none}
@@ -72,7 +88,53 @@ input:focus,select:focus{outline:1px solid var(--acc)}
   #ui-mode-seg .seg-btn{padding:5px 8px}
   #topbar{overflow-x:auto;scrollbar-width:none}
   #topbar::-webkit-scrollbar{display:none}
+  /* W1 移动端音乐模式：三栏隐藏已由上方通用规则覆盖（修复 E-09 的 58% 空白）；
+     W3 §2.3：preview 条改移动形态（88px 底部横条，见下方专段），不再整体隐藏 */
+  #editor-view[data-uimode="music"] #music-toolbar{overflow-x:auto;scrollbar-width:none}
+  #editor-view[data-uimode="music"] #music-toolbar::-webkit-scrollbar{display:none}
+  /* 编舞模式 data-mtab 残留不串场：音乐模式时间轴恒可见 */
+  #editor-view[data-uimode="music"] #tl-scroll{display:block}
+  /* ---- W3 §2.3 移动端音乐模式重排 ----
+     纵序：音乐工具条 40（横滚）→ 尺规/tag/lanes（flex:1；>2 轨/内容超出时 #tl-body 纵滚，
+     laneH 上限 64 由 timeline.musicLaneH maxH 参数承担）→ preview 条 88px → playbar 44。
+     #timeline-area 转 column（桌面为 row 双栏），#music-strip 吃满余量，preview 条沉底。 */
+  #editor-view[data-uimode="music"] #timeline-area{flex-direction:column}
+  #editor-view[data-uimode="music"] #music-strip{flex:1 1 auto}
+  #editor-view[data-uimode="music"] #music-preview{
+    display:grid;grid-template-columns:88px minmax(0,1fr);grid-template-rows:auto auto;
+    gap:3px 10px;align-items:center;flex:none;height:88px;min-height:0;padding:8px 10px;
+    border-left:none;border-top:1px solid var(--line);overflow:hidden}
+  #editor-view[data-uimode="music"] #mp-canvas{grid-row:1/3;width:88px;height:60px}
+  #editor-view[data-uimode="music"] #music-preview .mp-name{grid-column:2;grid-row:1;min-width:0}
+  #editor-view[data-uimode="music"] #music-preview .mp-block{grid-column:2;grid-row:2;flex-direction:row;gap:10px;flex-wrap:nowrap;min-width:0}
+  #editor-view[data-uimode="music"] #music-preview .mp-block .ctl{font-size:11px;gap:3px}
+  #editor-view[data-uimode="music"] #music-preview .btn.step{padding:0 7px;line-height:18px;font-size:13px}
+  /* 值里的「·秒」段移动端隐藏（防 375 横溢；拍数与 ± 步进保留——§2.3「当前块名/拍步进」） */
+  #editor-view[data-uimode="music"] #music-preview .mp-s{display:none}
+  /* 对齐到播放头为桌面纵栏能力；移动横条 375 内放不下（无横溢红线 C-09a），收纳隐藏 */
+  #editor-view[data-uimode="music"] #mp-align{display:none}
 }
+
+/* ---- 音乐工具条 40px（W1 新增）---- */
+#music-toolbar{align-items:center;gap:8px;padding:0 10px;height:40px;flex:none;border-bottom:1px solid var(--line);background:var(--bg2);white-space:nowrap}
+#music-toolbar .ctl input[type=number]{padding:2px 5px}
+#mtb-audio-name{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- 队形 mini-preview 栏 280px（W1 C15 新增；音乐模式只读对齐参照）----
+   W3：#music-preview 需作 #mp-countin（数拍大字）的定位上下文 */
+#music-preview{flex:0 0 280px;flex-direction:column;gap:8px;padding:10px;border-left:1px solid var(--line);background:var(--bg2);min-height:0;overflow-y:auto;position:relative}
+#mp-canvas{display:block;width:100%;height:170px;flex:none;background:#f8fafc;border:1px solid var(--line);border-radius:8px}
+[data-theme="dark"] #mp-canvas{background:#0b1220}
+#music-preview .mp-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#music-preview .mp-block{display:flex;flex-direction:column;gap:6px}
+#music-preview .ctl{white-space:nowrap}
+#music-preview .btn.step{padding:0 9px;line-height:20px;font-size:14px}
+/* W3 C17（修 P12）：音乐模式数拍入场大字——盖在 preview 条上（桌面=280 纵栏、移动=88 横条皆居中）。
+   编舞模式走 #stage-wrap>#countin-overlay 既有路径（该元素随 #editor-main 隐藏，无干扰） */
+#mp-countin{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;
+  font-size:56px;font-weight:800;color:var(--acc);pointer-events:none;
+  text-shadow:0 4px 30px rgba(0,0,0,.55);background:rgba(2,6,23,.18);border-radius:inherit}
+#mp-countin[hidden]{display:none}
 
 /* ---- 项目库 ---- */
 #library-view{display:flex;flex-direction:column;overflow:auto}
@@ -164,42 +226,58 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 #block-ctl .btn.step{padding:0 9px;line-height:20px;font-size:14px}
 /* ⚑ 打点与 ± 步进同高（避免行高变化挤压舞台几何——D-08 类像素仪器对布局位移敏感） */
 #block-ctl #btn-tag-drop{padding:0 9px;line-height:20px;font-size:14px}
-#music-strip{display:flex;flex-direction:column}
-#audio-disc{border-bottom:1px solid var(--line)}
-#audio-disc summary{cursor:pointer;list-style:none;padding:6px 10px;color:var(--dim);font-size:12px;user-select:none}
-#audio-disc summary::-webkit-details-marker{display:none}
-#audio-disc summary::before{content:'▸ ';}
-#audio-disc[open] summary::before{content:'▾ ';}
-#audio-panel{display:flex;align-items:center;gap:8px;padding:7px 10px;flex-wrap:wrap}
-/* 校准子行（嵌套折叠 details）：默认收起，主行保持对齐编辑动线；展开后独占一行铺开 */
-#calib-disc{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:100%}
-#calib-disc summary{cursor:pointer;list-style:none;color:var(--dim);font-size:12px;user-select:none;white-space:nowrap}
-#calib-disc summary::-webkit-details-marker{display:none}
-#calib-disc summary::before{content:'▸ ';}
-#calib-disc[open] summary::before{content:'▾ ';}
-#calib-panel{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-#tl-scroll{overflow-x:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120/展开160 写入 */
-#tl-inner{position:relative;height:100%}
-#tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
-/* ---- v3 音频轨（Audition Lite）附属 DOM 层 ----
-   #tl-body 定位上下文：轨左端展开钮/展开态表头/空态入口绝对定位其上，top 由 timeline.render 按几何写入 */
-#tl-body{position:relative}
-#tl-audio-toggle{position:absolute;left:4px;z-index:8;width:22px;height:22px;line-height:1;border:1px solid var(--line);border-radius:6px;background:var(--bg2);color:var(--dim);font-size:12px;padding:0}
-#tl-audio-toggle:hover{color:var(--acc);border-color:var(--acc)}
-#tl-head{position:absolute;left:0;z-index:7;width:120px;background:var(--bg2);border-right:1px solid var(--line);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:2px;padding:4px 6px;font-size:11px;overflow:hidden}
-#tl-head .tlh-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#tl-head .tlh-dur{color:var(--dim);font-size:10px}
-#tl-head .tlh-row{display:flex;align-items:center;gap:4px}
-#tl-head input[type=range]{width:52px;padding:0;height:14px}
-#tl-head .btn{padding:0 6px;line-height:16px;font-size:11px}
-#tl-audio-empty{position:absolute;left:32px;z-index:7;display:flex;align-items:center;gap:8px}
-#audio-disc summary .ic{margin-bottom:-1px}/* 图标化行高补偿：svg 行内框比原 emoji 字形高 1px，吸收之保持 audio-disc/舞台视口几何与图标化前逐值一致（stage 视口尺度进 E2E 像素/几何基线） */
+/* 对齐到播放头（W2 自摘要条迁入块栏）：与打点/步进同高，同口径防行高位移 */
+#block-ctl #btn-align-playhead{padding:0 9px;line-height:20px;font-size:14px}
 /* 图标化几何补偿（汇合轮）：⚑→SVG 后按钮宽 +7.6px，375px 视口 #block-ctl 行内放不下 flex
    spacer → spacer 独占一行令整条高 10px（舞台画布随之变矮，L2 移动端几何/半径基线依赖旧值）。
    移动端 spacer 本为 0.7px 视觉空隙，隐藏之恢复单行布局（与图标化前逐像素一致）。 */
 @media (max-width:1023.5px){#block-ctl .spacer{display:none}}
-/* 多轨轨头（汇合轮，音乐模式）：每轨 轨名/音量/静音/删轨 + 底部加轨条；容器 top/height 由 timeline.syncAudioDom 设定 */
-#tl-tracks-head{position:absolute;left:0;z-index:7;width:120px;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;font-size:11px;overflow:hidden}
+#music-strip{display:flex;flex-direction:column}
+/* ---- W2 C14 编舞模式音乐摘要条（30px 单行）----
+   替代「🎵 音乐与节拍」折叠面板（C1 退役，原 summary 25px + audio-panel 78px）：
+   单行 30px 摘要 + 校准浮层（details 打开为绝对定位浮层，不撑高条身）。
+   高度红线：条身高 30±4px（IR-W2-1）； freed 高度返还舞台（编舞主区）。 */
+#music-summary{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:0 10px;min-height:30px;flex:none;border-bottom:1px solid var(--line);background:var(--bg2);white-space:nowrap}
+#music-summary .ms-note{color:var(--acc);font-size:14px;flex:none}
+#music-summary .ms-name{color:var(--dim);font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis;flex:none;min-width:0}
+#music-summary .ms-meta{color:var(--dim);font-size:12px;flex:none}
+#music-summary .btn.small{flex:none}
+#music-summary .spacer{flex:1}
+/* 校准展开（编舞摘要条内的 details）：收起=条上 30px 单行之一；展开=整条折行到第二行
+   （同旧「音乐与节拍」面板的校准子行语义——不悬浮、不遮挡时间轴画布，仪器与直点动线不受遮拦）。
+   IR-W2-1b 的 30±4px 锚定收起态（默认）。 */
+#music-summary #calib-disc{position:relative;display:inline-flex;align-items:center;flex:none}
+#music-summary #calib-disc summary{cursor:pointer;list-style:none;color:var(--dim);font-size:13px;user-select:none;white-space:nowrap}
+#music-summary #calib-disc summary::-webkit-details-marker{display:none}
+#music-summary #calib-disc summary::before{content:'▸ ';}
+#music-summary #calib-disc[open] summary::before{content:'▾ ';}
+#music-summary #calib-disc[open] summary{color:var(--acc)}
+#music-summary #calib-disc[open]{flex-basis:100%;order:9} /* 折行独占第二行 */
+#music-summary #calib-panel{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 0 6px;min-width:0}
+#music-summary #calib-panel input[type=number][readonly]{color:var(--dim);background:transparent;border-style:dashed}
+#music-summary #calib-panel input[type=number][readonly]{color:var(--dim);background:transparent;border-style:dashed}
+/* 移动端摘要条：单行横滚（同 #music-toolbar 既有模式），scrollWidth≤375 口径不破（L2 C-09a）；
+   nowrap 覆盖桌面的 flex-wrap（校准展开折行为桌面形态，移动端 W3 再定） */
+@media (max-width:1023.5px){
+  #music-summary{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  #music-summary::-webkit-scrollbar{display:none}
+  #music-summary .ms-name{max-width:150px}
+}
+/* C12 空态（W2 合并）：一行灰字浮于音频简单道上，点击跳音乐模式；旧双钮已退役 */
+#tl-audio-empty{position:absolute;left:10px;z-index:7;display:flex;align-items:center;color:var(--dim);font-size:12px;cursor:pointer;user-select:none}
+#tl-audio-empty:hover{color:var(--acc)}
+#tl-scroll{overflow-x:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120/展开160 写入 */
+#tl-inner{position:relative;height:100%}
+#tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
+/* ---- v3 音频轨附属 DOM 层 ----
+   #tl-body 定位上下文：多轨轨头/空态入口绝对定位其上，top 由 timeline.render 按几何写入。
+   W1 退役：#tl-audio-toggle 展开钮与 #tl-head 展开态表头样式随 DOM 一并删除（C6/C7）。 */
+#tl-body{position:relative}
+/* ---- v3 音频轨附属 DOM 层 ----
+   #tl-body 定位上下文：多轨轨头/空态入口绝对定位其上，top 由 timeline.render 按几何写入。
+   W1 退役：#tl-audio-toggle 展开钮与 #tl-head 展开态表头样式随 DOM 一并删除（C6/C7）。
+   W2（C12）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（样式见 #music-summary 区块）。 */
+#tl-tracks-head{position:absolute;left:0;z-index:7;width:140px;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;row-gap:12px;font-size:11px;overflow:hidden}
 #tl-tracks-head .tl-track{border-top:1px solid var(--line);padding:2px 6px;display:flex;flex-direction:column;justify-content:flex-start;gap:2px;overflow:hidden}
 #tl-tracks-head .tl-track:first-child{border-top:none}
 #tl-tracks-head .tlt-row{display:flex;align-items:center;gap:3px;min-width:0}
@@ -321,6 +399,11 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 /* ---- Toast ---- */
 #toasts{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:200;align-items:center;pointer-events:none}
 .toast{background:var(--toast-bg);border:1px solid var(--line);border-radius:10px;padding:9px 16px;box-shadow:0 6px 24px rgba(0,0,0,.5);animation:toast-in .18s ease-out}
+/* W3：toast 动作钮（变速提示「切秒刻度」）——条内小钮，主题色描边。
+   #toasts 容器 pointer-events:none（防整条挡交互），动作钮显式恢复可点（修复烟测实测缺陷：
+   音乐模式 toast 悬于时间轴画布上，无 auto 则画布拦截点击，钮永不可点） */
+.toast .toast-act{pointer-events:auto;margin-left:12px;padding:2px 10px;font-size:12.5px;line-height:1.5;border-color:var(--acc);color:var(--acc);background:transparent;border-radius:7px;cursor:pointer}
+.toast .toast-act:hover{background:var(--bg3)}
 @keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
 /* ---- 移动端紧凑化 ---- */

@@ -241,6 +241,7 @@ IR 验收草案：
 - **IR-W2-5** 节奏划分浓缩呈现：有 tags 时段边界强调刻度线渲染（像素）+ 摘要条索引点击跳转正确；无 tags 时零残留。
 
 ### 批次 W3：收尾（M，2 人日 + 回归 1 人日）
+> **✅ W3 完成（round54，build-35-w3）**：移动端音乐模式布局（§2.3：工具条 40 横滚 + 多轨区 flex（laneH 上限 64）+ preview 条 88px + playbar 44，scrollW≤375）✅；刻度按模式分键（`wuzhen:rulerScale.stage`/`.music`，旧单键一次性播种退役）+ 变速 toast「切秒刻度」动作钮（仅音乐模式显钮）✅；拖移中跨轨 lane 高亮 ✅；数拍 preview 大字（#mp-countin，修 P12）✅；p7 TC-P7-03/TC-P7-B2 与 uf-p6 徽标仪器改写复跑 ✅。**裁剪项：轨 solo 与 masterGain 入项目未做**（4.2 可选项，4 轨规模 mute 足够，留待用户拍板）。证据 `lab/out/round54-w3/`（w3-verify.mjs 42/42 + 回归 harness + r2-a 复跑）。
 范围：移动端音乐模式布局（§2.3）+ preview 条；数拍 preview 呈示；刻度按模式分键 + 变速 toast 动作钮；轨 solo（可选）+ masterGain 入项目；说明书/快捷键/`docs/test-cases-full.md` 附注更新；旧用例改写执行。
 IR 验收草案：
 - **IR-W3-1** 375×724 音乐模式：无横向溢出（scrollWidth≤375，C-09a 口径）；preview 条可见；>2 轨时多轨区纵向可滚。

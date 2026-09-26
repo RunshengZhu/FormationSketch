@@ -151,7 +151,43 @@
           <select id="pb-speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
         </label>
         <label class="ctl" title="循环当前队形段"><input type="checkbox" id="pb-loop">循环</label>
-        <!-- 节拍器已移至「🎵 音乐与节拍」主行（id=pb-metro 不变，接线与仪器兼容） -->
+        <!-- 节拍器（W2 C13 落位）：§2.4 矩阵「节拍器/速度/循环→playbar（不变）」——
+             原「🎵 音乐与节拍」主行退役（C1）后回归播放条；id=pb-metro 不变，接线与仪器兼容 -->
+        <label class="ctl" title="节拍器（播放时每拍一声，小节首拍高音）"><input type="checkbox" id="pb-metro">节拍器</label>
+      </div>
+      <!-- 音乐工具条 40px（W1 §2.2）：音乐模式专属，替代「音乐与节拍」行在该模式的职责——
+           资产组（载入/媒体库/按队形段自动切，C2 迁移）+ ⚑打点（修 E-08）+ BPM/首拍 + 节拍组（W2 C3 收尾：
+           点拍/小节/数拍入场/试听 自编舞摘要条「校准」孪生同源）+ 尺规组（C5 迁移）+ 自动划分 ▸（节奏划分轨三来源）。
+           编舞模式隐藏（该模式走 #music-summary 摘要条，W2 C14）。
+           控件为音乐模式孪生件（-music 后缀），与摘要条内同名控件同模型同守卫 -->
+      <div id="music-toolbar">
+        <button id="mtb-load-audio" class="btn small">＋ 载入音乐</button>
+        <button id="mtb-media-library" class="btn small" title="媒体库：导入/管理音乐资产（多文件），指定配乐">媒体库</button>
+        <button id="mtb-auto-split" class="btn small" title="按队形段自动切：块边界→分割点，段间自动交叉淡化">按队形段自动切</button>
+        <span class="vsep"></span>
+        <button id="mtb-tag-drop" class="btn small" title="在当前播放头位置打一个节奏段起点标记（主歌/副歌/间奏…）；划分轨双击空白也可打点">⚑ 打点</button>
+        <label class="ctl">BPM <input id="bpm-input-music" type="number" min="30" max="300" step="1" style="width:56px"></label>
+        <label class="ctl">首拍 <input id="offset-input-music" type="number" min="0" step="0.01" style="width:64px">s</label>
+        <button id="btn-tap-music" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
+        <label class="ctl" title="每小节拍数">小节 <select id="bpb-select-music"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
+        <label class="ctl" title="入场倒计拍数">数拍 <input id="countin-input-music" type="number" min="0" max="32" style="width:44px"></label>
+        <button id="btn-offset-test-music" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
+        <span class="vsep"></span>
+        <button id="tl-scale-toggle-music" class="btn small" title="尺规刻度：拍（小节/8 拍）与秒切换。选择会记住">拍刻度</button>
+        <button id="tl-zoom-out-music" class="btn small" title="缩小时间线">－</button>
+        <button id="tl-zoom-in-music" class="btn small" title="放大时间线">＋</button>
+        <button id="tl-zoom-fit-music" class="btn small" title="适应宽度">⤢</button>
+        <span class="vsep"></span>
+        <div class="dropdown" id="auto-seg-dd">
+          <button id="btn-auto-segments" class="btn small" title="自动划分节奏段（落为段起点标记，整表替换现有标记；可撤销）">自动划分 ▾</button>
+          <div class="dd-menu" hidden>
+            <button id="seg-auto-even" title="按全曲拍数均分 N 段（默认 8 的倍数）">均分 N 段…</button>
+            <button id="seg-auto-bars" title="主歌 16 拍 / 副歌 8 拍 交替落标（规则表后续可接 DENSITY_RULES）">按小节规则（主歌16/副歌8）</button>
+            <button id="seg-auto-import" title="粘贴「前奏8 主歌32 副歌32…」文本解析落段">导入段落表…</button>
+          </div>
+        </div>
+        <span class="spacer"></span>
+        <span id="mtb-audio-name" class="dim">未载入音乐</span>
       </div>
       <div id="timeline-area">
         <div id="block-ctl">
@@ -168,63 +204,86 @@
             <span id="bc-travel" class="mono bc-val">8拍</span>
             <button id="bc-travel-plus" class="btn small step" title="＋1拍">＋</button>
           </span>
+          <!-- 对齐到播放头（W2 C3 归位）：调整的是队形块起点（编舞域），自「🎵 音乐与节拍」面板迁入块时长栏；
+               id/行为/仪器口径不变（TC-P4-13..15 直接点击本钮）。移动端先收纳（W3 移动形态，防块栏折行） -->
+          <button id="btn-align-playhead" class="btn small hide-mobile" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">对齐到播放头</button>
           <button id="btn-tag-drop" class="btn small" title="在当前播放头位置打一个音乐标记（主歌/副歌/间奏…）；时间轴 tag 道双击空白也可打点"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="flag" aria-hidden="true" style="vertical-align:-2px"><path d="M6 21V4"/><path d="M6 5c2-1.3 4-1.3 6 0s4 1.3 6 0v8c-2 1.3-4 1.3-6 0s-4-1.3-6 0"/></svg><span class="hide-mobile"> 打点</span></button>
           <span id="bc-sec" class="dim hide-mobile"></span>
           <span class="spacer"></span>
+          <!-- 连续时长（W2 C4 迁移）：只影响块编辑（归编舞），自「校准」子折叠迁入块时长栏；
+               id=ripple-check 不变（TC-P4-11 / uf2 直接 dispatch change）。移动端先收纳（W3 移动形态） -->
+          <label class="ctl hide-mobile" title="开：改某块保持时长后续块顺延；关：压缩自身过渡、后续块不动"><input type="checkbox" id="ripple-check" checked>连续时长</label>
           <span class="dim hide-mobile">拖动块边缘可连续调节（自动吸附节拍）</span>
         </div>
         <div id="music-strip">
-          <details id="audio-disc" open>
-            <summary title="展开/收起音乐设置"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="music" aria-hidden="true" style="vertical-align:-2px"><path d="M9 18V5.5L20 3.5V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg> 音乐与节拍</summary>
-            <div id="audio-panel">
-              <!-- 主行（常驻，服务对齐编辑）：载入/更换音乐、BPM、首拍+对齐、节拍器；缩放服务时间线查看 -->
-              <button id="btn-load-audio" class="btn small">载入音乐…</button>
-              <input type="file" id="audio-file" accept="audio/*" hidden>
-              <input type="file" id="media-files" accept="audio/*" multiple hidden>
-              <span id="audio-name" class="dim">未载入音乐</span>
-              <button id="btn-media-library" class="btn small" title="媒体库：导入/管理音乐资产（多文件），指定配乐"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="library" aria-hidden="true" style="vertical-align:-2px"><path d="M5 4v16M9 4v16"/><path d="M12.5 4.2l4.4-1.2 3.8 14.4-4.4 1.2z"/></svg><span class="hide-mobile"> 媒体库</span></button>
-              <button id="btn-auto-split" class="btn small" title="按队形段自动切：块边界→分割点，段间自动交叉淡化（时长=过渡拍）；结果为一组自由 clip，可继续逐个微调"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="razor" aria-hidden="true" style="vertical-align:-2px"><circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><path d="M8.3 7.8L20 19.5M8.3 16.2L20 4.5"/></svg><span class="hide-mobile"> 按队形段自动切</span></button>
-              <span class="vsep"></span>
-              <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" style="width:56px"></label>
-              <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" style="width:64px">s</label>
-              <button id="btn-align-playhead" class="btn small" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="align-left" aria-hidden="true" style="vertical-align:-2px"><path d="M5 4v16M20 12H9M12.5 8.5L9 12l3.5 3.5"/></svg> 对齐到播放头</button>
-              <label class="ctl" title="节拍器（播放时每拍一声，小节首拍高音）"><input type="checkbox" id="pb-metro">节拍器</label>
-              <span class="spacer"></span>
-              <!-- 尺规刻度切换（round46 Lane A·决策⑥）：拍=小节/8拍（恒定 BPM 口径，默认）；
-                   秒=变速曲/无节拍音乐的降级对齐刻度。选择 localStorage 记忆 -->
-              <button id="tl-scale-toggle" class="btn small" title="尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住">拍刻度</button>
-              <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>
-              <button id="tl-zoom-in" class="btn small" title="放大时间线">＋</button>
-              <button id="tl-zoom-fit" class="btn small" title="适应宽度">⤢</button>
-              <!-- 校准子行（默认收起）：低频校准工具收进折叠，主行保持对齐编辑动线最短 -->
-              <details id="calib-disc">
-                <summary title="展开/收起校准工具（点拍 / 小节 / 数拍入场 / 试听 / 连续时长）">校准</summary>
-                <div id="calib-panel">
-                  <button id="btn-tap" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
-                  <label class="ctl">小节 <select id="bpb-select"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
-                  <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
-                  <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
-                  <label class="ctl" title="开：改某块保持时长后续块顺延；关：压缩自身过渡、后续块不动"><input type="checkbox" id="ripple-check" checked>连续时长</label>
-                </div>
-              </details>
-            </div>
-          </details>
+          <!-- ===== W2 C14 编舞模式音乐摘要条（30px 单行，替代「🎵 音乐与节拍」折叠面板，C1 退役） =====
+               构成：♪ 资产名 64.0s · BPM120 4/4（只读呈示） · [点拍] [试听] [校准▸（BPM/首拍只读+小节/数拍）]
+                     [tag N 个 · 跳转列表] ┃ [拍刻度][－][＋][⤢]（C5 编舞尺规组留驻时间轴上沿） · [编辑音乐 →]
+               「编辑音乐 →」= setUiMode('music') 显性入口（IR-W2-3，与 M 键等效）。
+               载入/媒体库/按队形段自动切不入编舞（§2.4 矩阵：摘要条「编辑音乐 →」直达）——音乐模式工具条承接。
+               隐藏 file 输入为全应用音频导入管线（媒体库/空态/工具条共用），随条保留。
+               仪器兼容注：#audio-name/#bpm-input/#offset-input/#btn-tap/#btn-offset-test/#bpb-select/
+               #countin-input/#calib-disc/#ripple-check/#btn-align-playhead/#pb-metro 为既有用例锁定 id，
+               全部保留且功能不变（BPM/首拍在编舞呈只读 readonly，修改走音乐模式孪生件）。 -->
+          <div id="music-summary">
+            <span class="ms-note" aria-hidden="true">♪</span>
+            <span id="audio-name" class="ms-name" title="当前配乐">未载入音乐</span>
+            <span id="ms-meta" class="ms-meta mono" title="BPM 与小节（编舞模式只读呈示；修改请进音乐模式——BPM 是节拍划分产物）">—</span>
+            <span class="vsep"></span>
+            <button id="btn-tap" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
+            <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
+            <details id="calib-disc">
+              <summary title="BPM / 首拍（编舞模式只读）/ 小节 / 数拍入场">校准</summary>
+              <div id="calib-panel">
+                <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" readonly title="编舞模式只读呈示；修改请进音乐模式（M 或「编辑音乐 →」）" style="width:56px"></label>
+                <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" readonly title="编舞模式只读呈示；修改请进音乐模式（M 或「编辑音乐 →」）" style="width:64px">s</label>
+                <label class="ctl">小节 <select id="bpb-select" title="每小节拍数"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
+                <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
+              </div>
+            </details>
+            <button id="ms-tags" class="btn small" title="节奏段索引：点击打开段列表（段名·拍位·秒位），点段名播放头跳段起点" disabled>tag 0 个 · 跳转列表</button>
+            <span class="spacer"></span>
+            <button id="tl-scale-toggle" class="btn small" title="尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住">拍刻度</button>
+            <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>
+            <button id="tl-zoom-in" class="btn small" title="放大时间线">＋</button>
+            <button id="tl-zoom-fit" class="btn small" title="适应宽度">⤢</button>
+            <button id="ms-edit" class="btn small" title="切换到音乐模式（快捷键 M）：多轨剪辑、BPM/首拍、载入与节奏划分">编辑音乐 →</button>
+          </div>
+          <input type="file" id="audio-file" accept="audio/*" hidden>
+          <input type="file" id="media-files" accept="audio/*" multiple hidden>
           <div id="tl-body">
-            <!-- 音轨附属 DOM 层（v3）：轨左端展开/收起钮、展开态表头（120px）、空态入口 -->
-            <button id="tl-audio-toggle" title="展开音频轨（Audition Lite 剪辑）" aria-label="展开音频轨"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="chevron-down" aria-hidden="true" style="vertical-align:-2px"><path d="M6 10l6 6 6-6"/></svg></button>
-            <div id="tl-head" hidden title="音轨表头（展开态）"></div>
-            <!-- 多轨轨头（汇合轮，音乐模式）：每轨 轨名/音量/静音/删轨 + 底部加轨条，内容由 main.js 按项目轨态渲染 -->
+            <!-- 多轨轨头（W1 升级 140px，音乐模式常驻）：每轨 轨名/音量/静音/删轨 + 底部加轨条，
+                 内容由 main.js 按项目轨态渲染；E-06 修复见 setUiMode 补调 syncTracksHead -->
             <div id="tl-tracks-head" hidden></div>
-            <div id="tl-audio-empty" hidden>
-              <button id="tl-empty-load" class="btn small" title="载入音乐文件（mp3/wav/m4a…）">＋ 载入音乐</button>
-              <button id="tl-empty-library" class="btn small" title="打开媒体库（多文件导入 / 指定配乐）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="library" aria-hidden="true" style="vertical-align:-2px"><path d="M5 4v16M9 4v16"/><path d="M12.5 4.2l4.4-1.2 3.8 14.4-4.4 1.2z"/></svg> 媒体库</button>
-            </div>
+            <!-- C12 空态合并（W2）：旧「＋载入音乐/媒体库」双钮退役（音乐模式空态由工具条资产组承接）；
+                 编舞简单道无音乐时呈一行灰字，点击跳音乐模式 -->
+            <div id="tl-audio-empty" hidden title="到音乐模式载入（M 或点击本行）">未载入音乐 · 到音乐模式载入</div>
             <div id="tl-scroll"><div id="tl-inner">
               <canvas id="tl-canvas"></canvas>
               <canvas id="tl-overlay"></canvas>
             </div></div>
           </div>
         </div>
+        <!-- 队形 mini-preview 栏（W1 C15，音乐模式专属 280px）：只读画布随播放头同步当前队形 +
+             当前块 ±1 拍步进 + 对齐到播放头（「任意阶段可调整」最小集）；编舞模式隐藏。
+             W3 §2.3：移动端折为底部横条 88px（mini canvas 88×60 + 当前块名/拍步进）；
+             #mp-countin（W3 C17 修 P12）：音乐模式数拍入场大字呈示（舞台 overlay 在该模式不可见） -->
+        <aside id="music-preview" title="当前队形预览（随播放头同步；只读——舞台编辑请切回编舞模式）">
+          <canvas id="mp-canvas"></canvas>
+          <div id="mp-name" class="mp-name">—</div>
+          <div class="mp-block">
+            <span class="ctl">保持 <span id="mp-hold" class="mono">—</span>
+              <button id="mp-hold-minus" class="btn small step" title="−1拍">−</button>
+              <button id="mp-hold-plus" class="btn small step" title="＋1拍">＋</button>
+            </span>
+            <span class="ctl">过渡 <span id="mp-travel" class="mono">—</span>
+              <button id="mp-travel-minus" class="btn small step" title="−1拍">−</button>
+              <button id="mp-travel-plus" class="btn small step" title="＋1拍">＋</button>
+            </span>
+          </div>
+          <button id="mp-align" class="btn small" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">对齐到播放头</button>
+          <div id="mp-countin" hidden aria-hidden="true"></div>
+        </aside>
       </div>
     </div>
 

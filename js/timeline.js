@@ -4,7 +4,6 @@
 // 分割（Ctrl/Cmd+K / 剃刀）、淡化/增益把手、时间选区、右键菜单、磁吸（clip 缘/块边界/tag/
 // 播放头/选区/零交叉）。纯 clip 模型操作在 audio-clips.js（node 可测），此处只做几何与手势。
 import { drawScene } from './stage.js';
-import { iconHtml } from './icons.js';
 import { computeSegments, spb, beatToSec, secToBeat, beatLabel,
   addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX,
   clipsOf, TRACK_MAX, trackOfClip, moveClipToTrack } from './model.js';
@@ -15,23 +14,76 @@ import {
   collectSnapCandidates, snapTime, nearestZeroCrossing, envAt, fadeEnvAt,
   MIN_CLIP_DUR, CLIP_DEFAULT_COLOR,
 } from './audio-clips.js';
+import {
+  sectionSegmentsOf, splitSectionAt, mergeSectionWithNext, removeSection, setSectionColor,
+} from './model.js';
 
 export const AUDIO_SIMPLE_H = 26;    // 简单态音轨高（常驻，每条轨 lane）
-export const AUDIO_EXPANDED_H = 72;  // 展开态（Audition Lite）音轨高（每条轨 lane）
+export const AUDIO_EXPANDED_H = 72;  // 展开态（Audition Lite）音轨高（保留常量供几何换算；W1 起无展开态入口）
 export const TRACKS_OPS_H = 26;      // 多轨加轨条高（音乐模式底部 DOM 条：＋加轨；轨满时 disabled 提示）
 const TRIM_TOL_PX = 6;               // clip 缘/把手命中半径
 const SNAP_TOL_PX = 8;               // 磁吸阈值（像素，时间域换算）
 const ZC_RADIUS_SEC = 0.004;         // 零交叉吸附半径（消切点咔哒）
 const r6 = v => Math.round(v * 1e6) / 1e6;
 
-// ---------- round46 Lane A：双 UI 模式 + 恒定 BPM 显性化（纯函数，node 可测） ----------
-// 双 UI 模式（优化方案 R2 §3.2 / 决策③）：'stage'=编舞（默认，几何与既有版本完全一致）；
-// 'music'=音乐（块区不占位）。汇合轮（多轨 UI）：音乐模式音频区=每轨一条 lane（timeline.tracks），
-// 底部另留加轨条 TRACKS_OPS_H——总高=音频轨底+12+26；编舞分支保持原公式逐值不动（150/120/160）。
+// ---------- W1 音乐模式主区化几何（纯函数，node 可测） ----------
+// 编舞（stage）保持既有公式逐值不动（红线 E-12：150/120/160）；音乐（music）改为
+// 「容器实测高推导」：laneH = clamp((容器高 − 22 尺规 − 28 划分轨 − 26 加轨条 − 12×(n−1) 轨距) / n, 56, 120)，
+// 轨多超出容器时 #tl-body 纵向滚动（floor 56 托底仍放不下才滚）。
+export const TL_RULER_H = 22;        // 尺规高（drawRuler 同源）
+export const TAG_LANE_H = 18;        // 编舞模式 tag 道高（既有值不动——移动端 tl 120 基线依赖）
+export const SEG_LANE_H_MUSIC = 28;  // 音乐模式节奏划分轨高（tag 道升级，§2.2.1）
+export const MUSIC_LANE_GAP = 12;    // 音乐模式相邻 lane 间距
+export const MUSIC_LANE_MIN_H = 56;  // lane 高下限（多轨托底）
+export const MUSIC_LANE_MAX_H = 120; // lane 高上限（单轨封顶）
+export const MUSIC_LANE_MAX_H_MOBILE = 64; // 移动端 lane 高上限（W3 §2.3：触控友好 64px；floor 56 不变）
 export function tlTotalHeight(mode, audioBottomVal, mobile) {
-  if (mode === 'music') return audioBottomVal + 12 + TRACKS_OPS_H;
+  // W1 起音乐模式不走本函数（容器推导见 musicLaneH/musicContentH/totalHeightFor）；stage 分支逐值不动
   const base = mobile ? 120 : 150;
   return Math.max(base, audioBottomVal + 6 + 36 + 6);
+}
+// maxH：上限参数（缺省 120=桌面不变；移动端传 64——W3 §2.3「laneH 64」）。
+// 内容超出容器时 #tl-body 纵向滚动（overflow-y:auto 由 CSS 恒开，floor 托底仍放不下才滚）。
+export function musicLaneH(containerH, n, opsH = TRACKS_OPS_H, maxH = MUSIC_LANE_MAX_H) {
+  const k = Math.max(1, Math.floor(Number(n) || 1));
+  const cap = Math.max(MUSIC_LANE_MIN_H, Number(maxH) || MUSIC_LANE_MAX_H);
+  const raw = (Number(containerH) - TL_RULER_H - SEG_LANE_H_MUSIC - opsH - MUSIC_LANE_GAP * (k - 1)) / k;
+  if (!Number.isFinite(raw)) return cap;
+  return Math.max(MUSIC_LANE_MIN_H, Math.min(cap, raw));
+}
+export function musicContentH(laneH, n, opsH = TRACKS_OPS_H) {
+  const k = Math.max(1, Math.floor(Number(n) || 1));
+  return TL_RULER_H + SEG_LANE_H_MUSIC + k * laneH + MUSIC_LANE_GAP * (k - 1) + opsH;
+}
+// 旧展开键一次性迁移（C6）：无 uiMode 记录且 audioTrackExpanded=1 → 音乐模式（原「展开」语义）。
+// 读后即退役：键不再被任何代码写入。纯函数（node 可测）；ls 只需 {getItem}。
+export function resolveInitialUiMode(ls) {
+  let saved = null, legacy = null;
+  try { saved = ls?.getItem?.('wuzhen:uiMode') ?? null; } catch {}
+  if (saved === 'music') return 'music';
+  if (saved == null) {
+    try { legacy = ls?.getItem?.('wuzhen:audioTrackExpanded') ?? null; } catch {}
+    if (legacy === '1') return 'music';
+  }
+  return 'stage';
+}
+// ---- W3 尺规刻度按模式分键（整改方案 §4.3①）：wuzhen:rulerScale.stage / .music 各自记忆，互不串 ----
+// 缺省均=拍；旧单键 wuzhen:rulerScale 一次性播种到「当前模式」键后退役（读后即删，另一模式保持缺省拍）。
+// 纯函数（node 可测）；ls 只需 {getItem,setItem,removeItem}。
+export function rulerScaleKeyOf(mode) {
+  return mode === 'music' ? 'wuzhen:rulerScale.music' : 'wuzhen:rulerScale.stage';
+}
+export function resolveRulerScaleFor(ls, mode) {
+  let v = null;
+  try { v = ls?.getItem?.(rulerScaleKeyOf(mode)) ?? null; } catch {}
+  if (v === 'sec' || v === 'beat') return v;
+  // 旧单键迁移：有值 → 播种当前模式键并退役旧键；无值/异常 → 缺省拍
+  try { v = ls?.getItem?.('wuzhen:rulerScale') ?? null; } catch {}
+  if (v === 'sec' || v === 'beat') {
+    try { ls?.setItem?.(rulerScaleKeyOf(mode), v); ls?.removeItem?.('wuzhen:rulerScale'); } catch {}
+    return v;
+  }
+  return 'beat';
 }
 // 秒刻度（决策⑥降级刻度）：NICE 秒族主刻度步长——取「像素宽 ≥68px」的最小步长。
 // lightmix NICE_STEPS 秒族口径（0.1…3600），供变速曲/无节拍音乐按秒对齐。
@@ -283,20 +335,24 @@ export class EditStrip {
 // TAG_LANE_H：尺规与队形块之间的窄 tag 道（时间轴标记：打点/改名/拖动/删除/点击跳转，
 // 纯拍位标记不改播放逻辑）。道内交互独立分区：单点旗=预备跳转、拖旗=移动、×=删除、
 // 双击空白=打点、双击旗=改名；道内单击不 scrub 不选块（与尺规/块区互不越界）。
-export const TAG_LANE_H = 18;
 export class MusicTimeline {
+  // 段色板（4 色循环；tag.color 0..3 覆盖）——节奏划分轨呈示用
+  static SEG_COLORS = ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24'];
   constructor({ canvas, overlay, scroll, hooks }) {
     this.cv = canvas; this.ov = overlay; this.scroll = scroll;
     this.inner = canvas.parentElement; // #tl-inner：tag 内联命名输入挂这里（随横向滚动移动）
-    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio, canEdit(), pauseIfPlaying(), onTimeSelection(range|null), onClipContextMenu(info), toast(msg)}
+    this.hooks = hooks; // {getProject(), getPlayer(), onSelectFormation(i), mutate(fn,label), mutateLabeled(fn,label), commitEdit(label), seekBeat(b), audio, canEdit(), pauseIfPlaying(), onTimeSelection(range|null), onClipContextMenu(info), onSegContextMenu(info), toast(msg)}
     this.secPerPx = 0;  // 0 = 自适应
     this.drag = null;
     this.hoverTag = null;      // 悬停旗点 id（×删除钮 + title 提示）
     this.activeTag = null;     // 点选旗点 id：×保持可见（触屏无 hover 的删除路径）
     this._tagGeom = new Map(); // id → {x, delX}（drawTags 落笔几何，命中 × 用）
     this._tagInput = null;     // 内联命名输入 {el, beat, id, done}
-    // ---- v3 音频轨（Audition Lite）状态 ----
-    this.expanded = false;     // 展开态（localStorage 记忆，构造时读）
+    // ---- 节奏划分轨（W1）----
+    this.selSegId = null;      // 选中段（段起点 tag id）：高亮描边 + 单击段=跳段起点
+    this.hoverSegId = null;    // 悬停段 id（呈示高亮）
+    this._segGeom = [];        // 段落笔几何 [{id,x0,x1}]（命中用）
+    // ---- v3 音频轨状态（W1 起「展开态」退役：affordances 跟随模式——音乐=满血、编舞=简单） ----
     this.snapOn = true;        // 磁吸（S 开关；localStorage 记忆）
     this.razor = false;        // 剃刀模式（R 开关；会话态）
     this.clipSel = new Set();  // 选中 clip id（单选/Ctrl 多选）
@@ -304,21 +360,28 @@ export class MusicTimeline {
     this.hoverClipEdge = null; // {id, part} 悬停命中（光标 + 边缘高亮）
     this.hoverAudio = false;   // 悬停音频轨（S/R 快捷键作用域判定）
     this._projectId = null;    // 项目切换检测（清 clip 选择态）
+    this._mLaneH = MUSIC_LANE_MAX_H; // 音乐模式 lane 高（render 按容器实测推导缓存）
+    this._containerH = 0;            // tl-scroll 实测高（音乐模式每 render 采样）
+    this.dragHoverLane = null;       // W3：clip 拖移中指针所指目标 lane（纯前端高亮，不碰模型；松手清零）
     // ---- round46 Lane A：双 UI 模式（'stage'=编舞默认 | 'music'=音乐）----
-    // 旧键迁移（优化方案 §3.2）：无 uiMode 记录且 audioTrackExpanded=1 → 音乐模式（即原「展开」语义）
+    // 旧键一次性迁移（C6）：resolveInitialUiMode 读 uiMode/旧展开键，读后旧键退役（无人再写）
     this.mode = 'stage';
-    try {
-      const saved = localStorage.getItem('wuzhen:uiMode');
-      if (saved === 'music') this.mode = 'music';
-      else if (saved == null && localStorage.getItem('wuzhen:audioTrackExpanded') === '1') this.mode = 'music';
-    } catch {}
+    try { this.mode = resolveInitialUiMode(typeof localStorage !== 'undefined' ? localStorage : null); } catch {}
     // 尺规刻度（决策⑥）：'beat'=小节/8拍（默认，恒定 BPM 口径）| 'sec'=秒（变速曲降级对齐）
+    // W3 分键：按当前模式读 wuzhen:rulerScale.<mode>（旧单键一次性播种；两模式互不串）
     this.rulerScale = 'beat';
-    try { if (localStorage.getItem('wuzhen:rulerScale') === 'sec') this.rulerScale = 'sec'; } catch {}
-    try { this.expanded = localStorage.getItem('wuzhen:audioTrackExpanded') === '1'; } catch {}
+    try { this.rulerScale = resolveRulerScaleFor(typeof localStorage !== 'undefined' ? localStorage : null, this.mode); } catch {}
     try { this.snapOn = localStorage.getItem('wuzhen:audioSnap') !== '0'; } catch {}
+    // W1：容器尺寸变化（模式切换/窗口缩放/flex 反转）→ 重采样重绘（音乐模式高度不再写死）
+    if (typeof ResizeObserver !== 'undefined' && this.scroll) {
+      this._ro = new ResizeObserver(() => this.render());
+      this._ro.observe(this.scroll);
+    }
     this._bind();
   }
+  // 展开态退役（C6/C7）：affordances 改由模式派生——音乐=满血剪辑 UI、编舞=26px 简单道。
+  // 保留只读访问器兼容既有仪器快照（window.__fs.snapshot().audioTrack.expanded）。
+  get expanded() { return this.mode === 'music'; }
   pxPerSec() { return this.secPerPx ? 1 / this.secPerPx : 0; }
   layoutWidth(p) {
     const { totalBeats } = computeSegments(p);
@@ -326,31 +389,47 @@ export class MusicTimeline {
     const w0 = this.scroll.clientWidth || 600;
     return Math.max(w0, this.secPerPx ? totalSec / this.secPerPx : totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
   }
-  // ---- v3 几何：音频轨夹在 tag 道与队形块区之间，块区改为紧随其后（不再底部锚定） ----
+  // ---- v3 几何：音频轨夹在划分轨（tag 道）与队形块区之间，块区改为紧随其后（不再底部锚定） ----
   // 多轨（汇合轮）：编舞模式恒单 lane（既有行为，含多轨数据项目）；音乐模式每轨一条 lane。
   tracksOf(p) {
     const t = p?.timeline?.tracks;
     return (Array.isArray(t) && t.length) ? t : [];
   }
   trackCount(p) { return this.mode === 'music' ? Math.max(1, this.tracksOf(p).length) : 1; }
-  laneTopOf(p, i) { return this.audioTop() + i * this.audioLaneH(); }
+  // 划分轨高：编舞=tag 道 18（既有值不动，移动端 tl 120 基线依赖）；音乐=28（§2.2.1 升级）
+  segLaneH() { return this.mode === 'music' ? SEG_LANE_H_MUSIC : TAG_LANE_H; }
+  audioTop() { return (this.rulerH ?? TL_RULER_H) + this.segLaneH(); }
+  // lane 高：编舞=简单道 26（展开态已退役）；音乐=容器推导 clamp（render 缓存）
+  audioLaneH() { return this.mode === 'music' ? this._mLaneH : AUDIO_SIMPLE_H; }
+  lanePitch() { return this.audioLaneH() + (this.mode === 'music' ? MUSIC_LANE_GAP : 0); }
+  laneTopOf(p, i) { return this.audioTop() + i * this.lanePitch(); }
   // 指针 y → lane 序号（音乐模式多轨；越界钳到首/末 lane）
   laneIndexAt(p, y) {
     const n = this.trackCount(p);
-    return Math.max(0, Math.min(n - 1, Math.floor((y - this.audioTop()) / this.audioLaneH())));
+    return Math.max(0, Math.min(n - 1, Math.floor((y - this.audioTop()) / this.lanePitch())));
   }
   trackAtLane(p, i) { return this.tracksOf(p)[i] || null; }
-  audioTop() { return (this.rulerH ?? 22) + TAG_LANE_H; }
-  audioLaneH() { return this.expanded ? AUDIO_EXPANDED_H : AUDIO_SIMPLE_H; }
-  audioBottom(p) { return this.audioTop() + this.audioLaneH() * this.trackCount(p); }
+  audioBottom(p) {
+    const n = this.trackCount(p);
+    return this.audioTop() + n * this.audioLaneH() + Math.max(0, n - 1) * (this.mode === 'music' ? MUSIC_LANE_GAP : 0);
+  }
   blocksTopFor() { return this.audioBottom(this.hooks.getProject()) + 6; }
   totalHeightFor() {
     // 兼容旧几何：简单态总高维持旧 #tl-scroll 高（桌面 150 / 移动 120），富余计入音轨与块区间隔——
     // 常驻音轨 26px 为规格 mandated 的新增道，不挤压舞台几何（L2 移动端半径基线依赖旧高）。
-    // 展开态（72px）为新增布局，无旧几何可保：总高随内容（40+72+6+36+6=160）。
-    // 音乐模式（round46）：块区不占位 → 总高=音频轨底+12+加轨条 26（纯函数 tlTotalHeight 单一出处）。
+    // 音乐模式（W1 主区化）：不走固定公式——render 直接采样容器实测高推导（见 render/totalHeightMusic）。
     const mobile = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 1023.5px)').matches;
-    return tlTotalHeight(this.mode, this.audioBottom(this.hooks.getProject()), mobile);
+    return tlTotalHeight('stage', this.audioBottom(this.hooks.getProject()), mobile);
+  }
+  // 音乐模式画布内容高：尺规 22 + 划分轨 28 + n×laneH + (n−1)×12 轨距 + 加轨条 26；
+  // laneH=clamp((容器高−开销)/n, 56, 120)（移动端 §2.3 上限降 64——W3）。
+  // 内容不足容器时画布拉满容器（背景铺满）；floor 托底仍放不下 → #tl-body 纵滚。
+  totalHeightMusic(p) {
+    const c = this._containerH || (typeof this.scroll?.clientHeight === 'number' ? this.scroll.clientHeight : 0) || 0;
+    const n = this.trackCount(p);
+    const mobile = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 1023.5px)').matches;
+    this._mLaneH = musicLaneH(c, n, TRACKS_OPS_H, mobile ? MUSIC_LANE_MAX_H_MOBILE : MUSIC_LANE_MAX_H);
+    return Math.max(musicContentH(this._mLaneH, n), c);
   }
   hasMedia(p) { return !!(p?.media?.assets?.length); }
   assetDurOf(p, assetId) { return p?.media?.assets?.find(a => a.id === assetId)?.durationSec ?? Infinity; }
@@ -366,9 +445,17 @@ export class MusicTimeline {
       this.razor = false;
     }
     const dpr = window.devicePixelRatio || 1;
-    // 音频轨常驻：容器高度由 JS 按简单/展开态设定（简单 110 / 展开 156）
-    const h = this.totalHeightFor();
-    if (this.scroll && this.scroll.style && this.scroll.clientHeight !== h) this.scroll.style.height = h + 'px';
+    // 高度：编舞=固定公式（150/120/160，render 写入 scroll 高，既有行为零变化）；
+    // 音乐（W1 主区化）=容器实测推导（flex 撑满，不写高），内容不足时画布拉满容器。
+    let h;
+    if (this.mode === 'music') {
+      if (this.scroll && this.scroll.style && this.scroll.style.height) this.scroll.style.height = ''; // 清编舞模式写死的行内高，交还 flex
+      this._containerH = this.scroll?.clientHeight || 0;
+      h = this.totalHeightMusic(p);
+    } else {
+      h = this.totalHeightFor();
+      if (this.scroll && this.scroll.style && this.scroll.clientHeight !== h) this.scroll.style.height = h + 'px';
+    }
     const H = Math.max(h, this.scroll.clientHeight || h);
     const W = this.layoutWidth(p);
     for (const c of [this.cv, this.ov]) {
@@ -385,30 +472,53 @@ export class MusicTimeline {
     // 双 UI 模式：音乐模式跳过块区绘制（块几何置空 → 命中/悬停全关闭），块数据零触碰
     if (this.mode === 'stage') this.drawBlocks(ctx, p, H);
     else { this.blocksTop = null; this.blocksH = 0; }
-    this.drawTags(ctx, p);
+    if (this.mode === 'music') this.drawSegLane(ctx, p); // 节奏划分轨（28px：段色块/名称胶囊/边界线+旗）
+    else {
+      this.drawTags(ctx, p);
+      this.drawSegEmphasis(ctx, p); // W2 §2.2.1③b：编舞浓缩呈现——段边界强调刻度线（纯绘制层，零交互）
+    }
     this.drawPlayhead();
     this.syncAudioDom(p);
   }
-  // 音频轨 DOM 附属（轨左端展开/收起钮、展开态表头、多轨轨头、空态入口）随几何同步
+
+  // ---- W2 节奏划分浓缩呈现（§2.2.1③b，编舞模式专用）----
+  // 段边界以强调刻度线绘制：2px（粗于普通 1px 拍线）、段色着色（SEG_COLORS，tag.color 覆盖），
+  // 纵贯尺规 + tag 道 + 音频简单道（播放头 overlay 仍在最上层）。段名呈示由既有 tag 道名称胶囊
+  // 与旗点原生 title（空间不足时悬浮）承担，不重复绘制文本。纯绘制层增强：零交互变化、
+  // 零基础体验影响（红线 E-12 不动）；无 tags 时零残留（不画任何线，IR-W2-5）。
+  drawSegEmphasis(ctx, p) {
+    const tags = p.timeline.tags || [];
+    if (!tags.length) return;
+    const { segs } = sectionSegmentsOf(p);
+    if (!segs.length) return;
+    const pps = this.ppsOf(p);
+    const bottom = this.audioBottom(p);
+    const COLORS = MusicTimeline.SEG_COLORS;
+    ctx.save();
+    for (let k = 0; k < segs.length; k++) {
+      const s = segs[k];
+      const x = beatToSec(p, s.start) * pps;
+      if (x > this.W) break;
+      if (x < 0) continue;
+      const ci = ((s.tag.color ?? k) % COLORS.length + COLORS.length) % COLORS.length;
+      ctx.strokeStyle = COLORS[ci];
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // 音频轨 DOM 附属（多轨轨头、空态入口）随几何同步。
+  // W1 退役（C6/C7/C16）：#tl-audio-toggle 展开钮与 #tl-head 编舞展开态表头整体删除，
+  // 互斥显示逻辑随之消亡——轨头只看 music 模式。
+  // W2（C12 空态合并）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（点击跳音乐模式，
+  // main.js 接线），只在编舞模式无音乐时呈示；音乐模式空态由工具条资产组承接（恒可见载入/媒体库）。
   syncAudioDom(p) {
     if (typeof document === 'undefined') return;
     const media = this.hasMedia(p);
-    const tog = document.getElementById('tl-audio-toggle');
-    if (tog) {
-      tog.hidden = false;
-      tog.style.top = Math.round(this.audioTop() + this.audioLaneH() / 2 - 11) + 'px';
-      tog.innerHTML = iconHtml(this.expanded ? 'chevron-up' : 'chevron-down'); // 图标化（决策⑤）
-      tog.title = this.expanded ? '收起音频轨（简单态）' : '展开音频轨（Audition Lite 剪辑）';
-      tog.setAttribute('aria-label', tog.title);
-    }
     const multi = this.mode === 'music';
-    const head = document.getElementById('tl-head');
-    if (head) {
-      // 旧单轨表头（master 总控）只在编舞模式呈示；音乐模式由多轨轨头（#tl-tracks-head）接管
-      head.hidden = !(this.expanded && media) || multi;
-      head.style.top = this.audioTop() + 'px';
-      head.style.height = this.audioLaneH() + 'px';
-    }
     const th = document.getElementById('tl-tracks-head');
     if (th) {
       th.hidden = !multi;
@@ -417,23 +527,22 @@ export class MusicTimeline {
     }
     const empty = document.getElementById('tl-audio-empty');
     if (empty) {
-      empty.hidden = media;
+      empty.hidden = !(this.mode === 'stage' && !media); // 仅编舞模式无音乐时呈示灰字
       empty.style.top = this.audioTop() + 'px';
       empty.style.height = (this.audioBottom(p) - this.audioTop()) + 'px';
     }
   }
 
-  // ---- v3 音频轨绘制（汇合轮：音乐模式每轨一条 lane） ----
+  // ---- v3 音频轨绘制（汇合轮：音乐模式每轨一条 lane；W1 起 lane 间距 12px 仅音乐模式） ----
   drawAudioLane(ctx, p, h) {
     const n = this.trackCount(p);
     const lh = this.audioLaneH();
-    const top0 = this.audioTop();
-    const tracks = this.tracksOf(p);
+    const gap = this.mode === 'music' ? MUSIC_LANE_GAP : 0;
     ctx.save();
     // lane 底与上下缘（轨静音=lane 底更暗一档，呈示语义；轨分隔线隔开各轨）
     for (let i = 0; i < n; i++) {
-      const top = top0 + i * lh;
-      ctx.fillStyle = tracks[i]?.muted ? 'rgba(148,163,184,.028)' : 'rgba(148,163,184,.05)';
+      const top = this.laneTopOf(p, i);
+      ctx.fillStyle = this.tracksOf(p)[i]?.muted ? 'rgba(148,163,184,.028)' : 'rgba(148,163,184,.05)';
       ctx.fillRect(0, top, this.W, lh);
       ctx.strokeStyle = 'rgba(148,163,184,.2)';
       ctx.beginPath();
@@ -441,12 +550,26 @@ export class MusicTimeline {
       ctx.moveTo(0, top + .5); ctx.lineTo(this.W, top + .5);
       ctx.stroke();
     }
+    // W3 拖移中跨轨预览（§4.2 手势增强）：clip 拖移中按指针 y 高亮目标 lane——纯前端高亮，
+    // 不碰模型（跨轨落轨仍由既有 _applyClipMove 的 moveClipToTrack 承担）；非拖移态零残留。
+    if (this.mode === 'music' && n > 1 && this.dragHoverLane != null && this.dragHoverLane >= 0 && this.dragHoverLane < n) {
+      const top = this.laneTopOf(p, this.dragHoverLane);
+      ctx.fillStyle = 'rgba(56,189,248,.13)';
+      ctx.fillRect(0, top, this.W, lh);
+      ctx.strokeStyle = 'rgba(56,189,248,.65)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, top + 1); ctx.lineTo(this.W, top + 1);
+      ctx.moveTo(0, top + lh - 1); ctx.lineTo(this.W, top + lh - 1);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
     const clips = clipsOf(p);
     if (!this.hasMedia(p)) {
       if (this.expanded) {
         ctx.fillStyle = 'rgba(148,163,184,.55)';
         ctx.font = '11px sans-serif'; ctx.textBaseline = 'middle';
-        ctx.fillText('载入音乐后在此剪辑（左上「＋ 载入音乐」或「媒体库」）', 10, top0 + lh / 2); // canvas 呈示用纯文字（icon-mapping §六）
+        ctx.fillText('载入音乐后在此剪辑（工具条「＋ 载入音乐」或「媒体库」）', 10, this.audioTop() + lh / 2); // canvas 呈示用纯文字（icon-mapping §六）
       }
       ctx.restore();
       return;
@@ -456,28 +579,29 @@ export class MusicTimeline {
       const pps0 = this.ppsOf(p);
       const x0 = this.timeSel.start * pps0, x1 = this.timeSel.end * pps0;
       ctx.fillStyle = 'rgba(56,189,248,.16)';
-      ctx.fillRect(x0, top0, Math.max(1, x1 - x0), this.audioBottom(p) - top0);
+      ctx.fillRect(x0, this.audioTop(), Math.max(1, x1 - x0), this.audioBottom(p) - this.audioTop());
       ctx.strokeStyle = 'rgba(56,189,248,.7)';
       ctx.beginPath();
-      ctx.moveTo(x0 + .5, top0); ctx.lineTo(x0 + .5, this.audioBottom(p));
-      ctx.moveTo(x1 - .5, top0); ctx.lineTo(x1 - .5, this.audioBottom(p));
+      ctx.moveTo(x0 + .5, this.audioTop()); ctx.lineTo(x0 + .5, this.audioBottom(p));
+      ctx.moveTo(x1 - .5, this.audioTop()); ctx.lineTo(x1 - .5, this.audioBottom(p));
       ctx.stroke();
     }
     const pps = this.ppsOf(p);
     // clip 按轨分组绘制（组内保持数组 z 序；编舞模式 n=1 全量单 lane 既有行为）
     for (let i = 0; i < n; i++) {
-      const tid = tracks[i]?.id;
+      const tid = this.tracksOf(p)[i]?.id;
+      const top = this.laneTopOf(p, i);
       for (const c of clips) {
         if (n > 1 && (trackOfClip(p, c)?.id) !== tid) continue;
-        this.drawClipBox(ctx, p, c, top0 + i * lh, lh, pps);
+        this.drawClipBox(ctx, p, c, top, lh, pps);
       }
     }
     // 重叠自动交叉淡化：交叠中点菱形手柄。裁定③：computeOverlaps 不加轨过滤——跨轨重叠
     // 同样自动淡化（实现最简且听感合理）；菱形画在 ov.a 所在 lane。
     for (const ov of computeOverlaps(clips)) {
-      const li = n > 1 ? Math.max(0, tracks.findIndex(t => t.id === trackOfClip(p, ov.a)?.id)) : 0;
+      const li = n > 1 ? Math.max(0, this.tracksOf(p).findIndex(t => t.id === trackOfClip(p, ov.a)?.id)) : 0;
       const mx = ((ov.start + ov.end) / 2) * pps;
-      const my = top0 + li * lh + 10;
+      const my = this.laneTopOf(p, li) + 10;
       ctx.save();
       ctx.translate(mx, my);
       ctx.rotate(Math.PI / 4);
@@ -557,7 +681,7 @@ export class MusicTimeline {
 
   drawRuler(ctx, p, h) {
     const pps = this.ppsOf(p);
-    const rulerH = 22;
+    const rulerH = TL_RULER_H;
     ctx.save();
     ctx.fillStyle = '#131c31';
     ctx.fillRect(0, 0, this.W, rulerH);
@@ -767,6 +891,86 @@ export class MusicTimeline {
     }
     ctx.restore();
   }
+  // ---------- 节奏划分轨（音乐模式专用呈示，§2.2.1；编舞 tag 道走 drawTags 不变） ----------
+  // 段呈示 = 色块（4 色循环，tag.color 覆盖）+ 名称胶囊 + 段界强色线；旗点/×/单击跳转等
+  // tag 交互沿用既有几何（IR-W1-4「现手势不变」）；首 tag 前的区间=未划分灰底。
+  drawSegLane(ctx, p) {
+    const H = SEG_LANE_H_MUSIC;
+    const top = this.rulerH ?? TL_RULER_H;
+    const pps = this.ppsOf(p);
+    this._tagGeom = new Map();
+    this._segGeom = [];
+    const COLORS = MusicTimeline.SEG_COLORS;
+    const { segs } = sectionSegmentsOf(p);
+    ctx.save();
+    ctx.fillStyle = 'rgba(148,163,184,.07)';
+    ctx.fillRect(0, top, this.W, H);
+    ctx.strokeStyle = 'rgba(148,163,184,.22)';
+    ctx.beginPath(); ctx.moveTo(0, top + H + .5); ctx.lineTo(this.W, top + H + .5); ctx.stroke();
+    ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
+    let lastEnd = -1e9; // 前一名称胶囊右缘（防重叠贪心）
+    for (let k = 0; k < segs.length; k++) {
+      const s = segs[k];
+      const x0 = Math.max(0, beatToSec(p, s.start) * pps);
+      const x1 = Math.min(this.W, beatToSec(p, s.end) * pps);
+      if (x1 <= 0 || x0 >= this.W) { this._segGeom.push({ id: s.tag.id, x0, x1 }); continue; }
+      const ci = ((s.tag.color ?? k) % COLORS.length + COLORS.length) % COLORS.length;
+      const color = COLORS[ci];
+      const hovered = this.hoverSegId === s.tag.id;
+      const selected = this.selSegId === s.tag.id;
+      // 色块
+      ctx.fillStyle = hexA(color, hovered ? .30 : .16);
+      ctx.fillRect(x0, top + 1, Math.max(1, x1 - x0), H - 2);
+      // 选中段高亮描边
+      if (selected) {
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+        ctx.strokeRect(x0 + .75, top + 1.75, Math.max(1, x1 - x0) - 1.5, H - 3.5);
+        ctx.lineWidth = 1;
+      }
+      // 段界强色线（粗于普通拍线的 2px 竖线）+ 旗面（打点现旗，IR-W1-4）
+      const bx = Math.max(1, Math.min(this.W - 1, x0));
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(bx, top + 2); ctx.lineTo(bx, top + H - 2); ctx.stroke();
+      ctx.fillStyle = hovered ? '#7dd3fc' : color;
+      ctx.beginPath();
+      ctx.moveTo(bx + 1, top + 3); ctx.lineTo(bx + 8, top + 6.5); ctx.lineTo(bx + 1, top + 10);
+      ctx.closePath(); ctx.fill();
+      ctx.lineWidth = 1;
+      // 名称胶囊（放段内、旗右侧；空间不足/与前一胶囊过近 → 省略，名称走 title/跳转/改名可见）
+      const name = s.tag.name;
+      const nameW = ctx.measureText(name).width;
+      const capX = bx + 10;
+      let delX = bx + 11;
+      if (nameW > 0 && capX - lastEnd >= 4 && capX + nameW + 8 <= x1 - 2 && capX < this.W - 2) {
+        ctx.fillStyle = hexA(color, .22);
+        ctx.fillRect(capX, top + H / 2 - 7, nameW + 8, 14);
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillText(name, capX + 4, top + H / 2 + .5);
+        delX = capX + nameW + 12;
+        lastEnd = capX + nameW + 10;
+      }
+      // 悬停/点选 ×（拖拽中不显，防误删）——同 tag 道语义
+      if ((hovered || this.activeTag === s.tag.id) && this.drag?.kind !== 'tag') {
+        ctx.fillStyle = '#f87171';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('×', delX, top + H / 2 + .5);
+        ctx.font = '10px sans-serif';
+      }
+      this._tagGeom.set(s.tag.id, { x: bx, delX });
+      this._segGeom.push({ id: s.tag.id, x0, x1 });
+    }
+    ctx.restore();
+  }
+  // 段界拖拽的小节线吸附（§2.2.1 拖段边界）：拍位就近吸到 bpb 整数倍（容差=磁吸像素阈值）；
+  // 磁吸关（S）时不吸。返回 [吸附后拍位, 是否吸附]。
+  snapTagBeatToBar(beat) {
+    const p = this.hooks.getProject();
+    if (!p || !this.snapOn) return [beat, false];
+    const bpb = p.audio.beatsPerBar || 4;
+    const tolBeats = SNAP_TOL_PX / (this.ppsOf(p) * spb(p));
+    const snapped = Math.round(beat / bpb) * bpb;
+    return Math.abs(snapped - beat) <= tolBeats ? [Math.max(0, snapped), true] : [beat, false];
+  }
   tagAt(x) { // 旗点命中（±9px，取最近）；y 分区由调用方判定
     const p = this.hooks.getProject();
     if (!p) return null;
@@ -783,7 +987,14 @@ export class MusicTimeline {
     for (const [id, g] of this._tagGeom) if (Math.abs(x - g.delX) <= tol) return id;
     return null;
   }
-  inTagLane(y) { return y > (this.rulerH ?? 22) && y <= (this.rulerH ?? 22) + TAG_LANE_H; }
+  inTagLane(y) { return y > (this.rulerH ?? TL_RULER_H) && y <= (this.rulerH ?? TL_RULER_H) + this.segLaneH(); }
+  segAt(x) { // 段命中（音乐模式）：拍位落在哪个段区间 → 段（含段起点 tag）
+    const p = this.hooks.getProject();
+    if (!p) return null;
+    const beat = this.xToBeat(x);
+    const { segs } = sectionSegmentsOf(p);
+    return segs.find(s => beat >= s.start && beat < s.end) || null;
+  }
   _tagTitle(x, y) { // 原生 title：旗点=名称+拍位；×=删除
     if (!this.inTagLane(y)) { if (this.cv.title) this.cv.title = ''; return; }
     const p = this.hooks.getProject();
@@ -793,7 +1004,9 @@ export class MusicTimeline {
       if (t) { this.cv.title = `删除标记「${t.name}」`; return; }
     }
     const hit = this.tagAt(x);
-    if (hit) this.cv.title = `${hit.tag.name} · ${beatLabel(p, hit.tag.beat)} 小节（${Math.round(hit.tag.beat * 10) / 10} 拍）· 单击跳转 / 双击改名 / 拖动移位`;
+    if (hit) this.cv.title = this.mode === 'music'
+      ? `${hit.tag.name} · ${beatLabel(p, hit.tag.beat)} 小节（${Math.round(hit.tag.beat * 10) / 10} 拍）· 拖动移界（吸小节线）/ 双击改名 / 右键段操作`
+      : `${hit.tag.name} · ${beatLabel(p, hit.tag.beat)} 小节（${Math.round(hit.tag.beat * 10) / 10} 拍）· 单击跳转 / 双击改名 / 拖动移位`;
     else if (this.cv.title) this.cv.title = '';
   }
   // 内联命名输入（打点/改名共用）：Enter/失焦提交、Esc 取消；挂 #tl-inner 随横向滚动
@@ -895,6 +1108,20 @@ export class MusicTimeline {
       if (!p) return;
       const r = this.cv.getBoundingClientRect();
       const x = e.clientX - r.left, y = e.clientY - r.top;
+      // 节奏划分轨段右键（音乐模式，§2.2.1 ②）：于此拆分/合并相邻/删除/换色
+      if (this.mode === 'music' && this.inTagLane(y)) {
+        e.preventDefault();
+        const hit = this.tagAt(x);
+        const seg = hit
+          ? sectionSegmentsOf(p).segs.find(s => s.tag.id === hit.tag.id) || null
+          : this.segAt(x);
+        this.hooks.onSegContextMenu?.({
+          tagId: seg ? seg.tag.id : null,
+          beat: Math.max(0, Math.round(this.xToBeat(x) * 100) / 100),
+          screenX: e.clientX, screenY: e.clientY,
+        });
+        return;
+      }
       if (y < this.audioTop() || y > this.audioBottom(p) || !clipsOf(p).length) return;
       e.preventDefault();
       const hit = this._audioHit(x, y, clipsOf(p));
@@ -907,7 +1134,13 @@ export class MusicTimeline {
     // F-02（UX-02）：浏览器中途接管（滚动接管/来电横幅/系统手势）会发 pointercancel 而后续
     // pointerup 不再来——不置 drag=null 则拖拽状态卡死，之后无按键的鼠标 hover 路过即持续
     // 改写块时长（数据损坏链）。即使 touch-action 已阻断滚动接管，其他接管源仍需此兜底。
-    cv.addEventListener('pointercancel', () => { this.drag = null; });
+    // W3：顺带清拖移跨轨预览高亮（有残留才补绘——node 单测环境 render 不可用，零残留零调用）
+    cv.addEventListener('pointercancel', () => {
+      const hadHover = this.dragHoverLane != null;
+      this.drag = null;
+      this.dragHoverLane = null;
+      if (hadHover) this.render();
+    });
     this.scroll.addEventListener('wheel', e => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
@@ -964,14 +1197,16 @@ export class MusicTimeline {
     if (pl?.countin && pl.cancelCountin) pl.cancelCountin();
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
-    // tag 道：× 命中=删除（一条「删标记」历史）；旗点命中=预备拖动/单击跳转；
-    // 空白=留给双击打点（单击不动作，不 scrub 不选块）。恰在删除后 400ms 内的双击
+    // 划分轨（编舞 tag 道 / 音乐节奏划分轨）：× 命中=删除（一条「删标记」历史）；
+    // 旗点（段界）命中=预备拖动/单击跳转；音乐模式其余区域=单击段（播放头跳段起点+选中段）；
+    // 编舞空白=留给双击打点（单击不动作，不 scrub 不选块）。恰在删除后 400ms 内的双击
     // 不再当「空白打点」（× 双击=删一次，不应删完又原地加回）。
     if (this.inTagLane(y)) {
       const delId = this._tagGeomHit(x, 6);
       if (delId) {
         this.hoverTag = null;
         this.activeTag = null;
+        this.selSegId = null;
         this._delAt = performance.now();
         this.hooks.mutateLabeled?.(p2 => removeTag(p2, delId), '删标记');
         return;
@@ -981,12 +1216,28 @@ export class MusicTimeline {
       if (hit) {
         try { this.cv.setPointerCapture(e.pointerId); } catch {}
         this.drag = { kind: 'tag', id: hit.tag.id, startX: x, moved: false };
+      } else if (this.mode === 'music') {
+        // 单击段=播放头跳段起点 + 选中段高亮（§2.2.1 ②快速索引；不改数据不入历史）
+        const seg = this.segAt(x);
+        if (seg) {
+          this.selSegId = seg.tag.id;
+          this.hooks.seekBeat(seg.start);
+          this.render();
+        }
       }
       return;
     }
-    // ---- v3 音频轨（Audition Lite / 简单态 / 多轨 lane）----
+    // ---- v3 音频轨 ----
+    // W2（修 E-10 混合态）：编舞 26px 简单道只读——点击=seek（拖动沿尺规 scrub 语义延续），
+    // 不再进入拖移/trim/剃刀/时间选区等任何剪辑手势（剪辑编辑全部在音乐模式）。
     const clips = clipsOf(p);
     if (clips.length && y >= this.audioTop() && y <= this.audioBottom(p)) {
+      if (this.mode !== 'music') {
+        try { this.cv.setPointerCapture(e.pointerId); } catch {}
+        this.drag = { kind: 'scrub' };
+        this.hooks.seekBeat(this.xToBeat(x));
+        return;
+      }
       this._audioDown(e, x, y, clips);
       return;
     }
@@ -1163,6 +1414,12 @@ export class MusicTimeline {
   _applyClipMove(drag, x, y = null) {
     const p = this.hooks.getProject();
     const pps = this.ppsOf(p);
+    // W3 拖移跨轨预览：先记指针所指 lane（纯前端高亮；模型变更仍在下方 mutate 内）
+    const hoverLane = (y != null && this.mode === 'music' && this.trackCount(p) > 1)
+      ? this.laneIndexAt(p, y)
+      : null;
+    const hoverChanged = this.dragHoverLane !== hoverLane;
+    this.dragHoverLane = hoverLane;
     let newStart = Math.max(0, x / pps - drag.grabSec);
     // 磁吸：起点/终点就近候选（取距离更小者；不吸自己）
     const snapS = this._snap(newStart, drag.primary.id);
@@ -1179,7 +1436,10 @@ export class MusicTimeline {
       if (t && trackOfClip(p, drag.primary)?.id !== t.id) toTrackId = t.id;
     }
     const delta = newStart - drag.primary.timelineStartSec;
-    if (!delta && !toTrackId) return;
+    if (!delta && !toTrackId) {
+      if (hoverChanged) this.render(); // 纵向挪入/挪出目标 lane 也要即时呈示高亮（横移零位时）
+      return;
+    }
     drag.trackChanged = !!toTrackId;
     this.hooks.mutate(pr => {
       if (toTrackId) for (const id of drag.ids) moveClipToTrack(pr, id, toTrackId);
@@ -1205,14 +1465,30 @@ export class MusicTimeline {
       const edges = p ? this.edgeHits(x) : [];
       let hoverSeg = null;
       let hoverTag = null;
+      let hoverSegId = null;
       this.hoverAudio = false;
       this.hoverClipEdge = null;
       if (p && this.inTagLane(y)) {
         // 旗点或 ×（几何）都算悬停该标记——× 在名称末端，鼠标移过去不能让 × 消失
         const hit = this.tagAt(x);
         hoverTag = hit ? hit.tag.id : this._tagGeomHit(x, 8);
+        if (this.mode === 'music') {
+          // 段悬停高亮：悬停旗点=旗所指段；悬停段身=所在段
+          if (hit) hoverSegId = sectionSegmentsOf(p).segs.find(s => s.tag.id === hit.tag.id)?.tag.id || null;
+          else hoverSegId = this.segAt(x)?.tag.id || null;
+        }
       } else if (p && y >= this.audioTop() && y <= this.audioBottom(p) && clipsOf(p).length) {
-        // v3 音频轨悬停：部件光标（trim/fade/gain/body/剃刀）
+        // v3 音频轨悬停：部件光标（trim/fade/gain/body/剃刀）——音乐模式满血；
+        // W2 编舞模式只读缩影：恒 pointer（呈示/点击 seek），不呈示剪辑部件态、不置 hoverAudio
+        //（S/R 剪辑快捷键的作用域随之归音乐模式）
+        this.hoverAudio = false;
+        if (this.mode !== 'music') {
+          this.hoverClipEdge = null;
+          this.cv.style.cursor = 'pointer';
+          this._tagTitle(x, y);
+          this.render();
+          return;
+        }
         this.hoverAudio = true;
         const clips = clipsOf(p);
         if (!this._xFadeHit(x, y, clips)) {
@@ -1241,11 +1517,12 @@ export class MusicTimeline {
           }
         }
       }
-      this.cv.style.cursor = hoverTag ? 'pointer' : (edges.length ? 'ew-resize' : 'default');
+      this.cv.style.cursor = (hoverTag || hoverSegId) ? 'pointer' : (edges.length ? 'ew-resize' : 'default');
       this._tagTitle(x, y);
-      if (this.hoverSeg !== hoverSeg || this.hoverTag !== hoverTag) {
+      if (this.hoverSeg !== hoverSeg || this.hoverTag !== hoverTag || this.hoverSegId !== hoverSegId) {
         this.hoverSeg = hoverSeg;
         this.hoverTag = hoverTag;
+        this.hoverSegId = hoverSegId;
         this.render();
       }
       return;
@@ -1336,10 +1613,13 @@ export class MusicTimeline {
       return;
     }
     if (drag.kind === 'tag') {
-      // 拖旗移位：实时预览（mutate(fn,null) 不进历史），松手在 _up 提交恰一条「移动标记」
+      // 拖旗移位（=拖段边界，相邻段伸缩）：实时预览（mutate(fn,null) 不进历史），松手在 _up 提交恰一条「移动标记」；
+      // 音乐模式拍位吸附小节线（§2.2.1 拖段边界；磁吸 S 可关）
       drag.moved = drag.moved || Math.abs(x - drag.startX) > 2;
       if (drag.moved) {
-        this.hooks.mutate(proj => { moveTag(proj, drag.id, this.xToBeat(x)); });
+        let beat = this.xToBeat(x);
+        if (this.mode === 'music') [beat] = this.snapTagBeatToBar(beat);
+        this.hooks.mutate(proj => { moveTag(proj, drag.id, beat); });
         this.hoverTag = drag.id;
       }
       return;
@@ -1405,6 +1685,14 @@ export class MusicTimeline {
       }
     }
     this._lastX = null;
+    // W3 顺序约束（DEFECT-W3-D1）：清 hover 与补绘必须相邻（先清零再 render），且 hadHover 时
+    // 无条件补绘、moved 提交路径也不例外——commitEdit(store.commit) 只入历史不触发渲染（无 emit），
+    // 松手前画布上最后一帧仍是拖移中带高亮的画面，跳过补绘则淡蓝残留驻留至下一次任意重渲染
+    //（原注释「moved 时 commitEdit/render 已在上方路径触发」假设恰好反了）。
+    if (this.dragHoverLane != null) {
+      this.dragHoverLane = null;
+      this.render();
+    }
     this.drag = null;
   }
   // ---- v3 clip 原子操作（键盘/右键菜单入口；守卫：编辑锁 + 播放中先自动暂停） ----
@@ -1533,9 +1821,32 @@ export class MusicTimeline {
     this.hooks.onTimeSelection?.(null);
     this.render();
   }
-  setExpanded(v) {
-    this.expanded = !!v;
-    try { localStorage.setItem('wuzhen:audioTrackExpanded', this.expanded ? '1' : '0'); } catch {}
+  // ---- 节奏划分轨段级操作（W1 §2.2.1；右键菜单/拖界入口） ----
+  // 每个操作 mutateLabeled 恰一条历史；tags 不参与播放逻辑，无需暂停/编辑锁（同 tag 道既有口径）。
+  splitSegAt(tagId, beat) {
+    const p = this.hooks.getProject();
+    if (!p || !tagId) return;
+    this.hooks.mutateLabeled?.(pr => { splitSectionAt(pr, tagId, beat); }, '拆分段落');
+    this.render();
+  }
+  mergeSegWithNext(tagId) {
+    const p = this.hooks.getProject();
+    if (!p || !tagId) return;
+    this.hooks.mutateLabeled?.(pr => { mergeSectionWithNext(pr, tagId); }, '合并段落');
+    if (this.selSegId === tagId) this.selSegId = null;
+    this.render();
+  }
+  deleteSeg(tagId) {
+    const p = this.hooks.getProject();
+    if (!p || !tagId) return;
+    this.hooks.mutateLabeled?.(pr => { removeSection(pr, tagId); }, '删除段落');
+    if (this.selSegId === tagId) this.selSegId = null;
+    this.render();
+  }
+  setSegColor(tagId, color) {
+    const p = this.hooks.getProject();
+    if (!p || !tagId) return;
+    this.hooks.mutateLabeled?.(pr => { setSectionColor(pr, tagId, color); }, '段落颜色');
     this.render();
   }
   // 双 UI 模式切换（编舞⇄音乐）：只动呈示/命中面（块区隐藏、几何收口），不清任何编辑态——
@@ -1546,14 +1857,16 @@ export class MusicTimeline {
     if (nv !== this.mode) {
       this.mode = nv;
       try { localStorage.setItem('wuzhen:uiMode', nv); } catch {}
+      // W3 分键：切模式即恢复该模式自己记的刻度（互不串；按钮呈示由 main.syncScaleToggle 刷新）
+      try { this.rulerScale = resolveRulerScaleFor(typeof localStorage !== 'undefined' ? localStorage : null, nv); } catch {}
       this.render();
     }
     return this.mode;
   }
-  // 尺规刻度切换（决策⑥）：'beat'⇄'sec'，localStorage 记忆
+  // 尺规刻度切换（决策⑥）：'beat'⇄'sec'；W3 起写当前模式自己的键（wuzhen:rulerScale.<mode>）
   setRulerScale(v) {
     this.rulerScale = v === 'sec' ? 'sec' : 'beat';
-    try { localStorage.setItem('wuzhen:rulerScale', this.rulerScale); } catch {}
+    try { localStorage.setItem(rulerScaleKeyOf(this.mode), this.rulerScale); } catch {}
     this.render();
     return this.rulerScale;
   }
@@ -1588,6 +1901,8 @@ export class MusicTimeline {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     const clips = clipsOf(p);
     if (clips.length && y >= this.audioTop() && y <= this.audioBottom(p)) {
+      // W2（E-10 只读化）：编舞模式简单道双击不再触发 clip 循环预览/清选（呈示+seek 之外无剪辑交互）
+      if (this.mode !== 'music') return;
       // 双击空白=取消全选；双击 clip=选中并循环预览
       if (!this.previewSelectedClipAt(x, y, clips)) this.clearClipSelection();
       return;

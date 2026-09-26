@@ -719,3 +719,15 @@ P6/P7/P8 三 Phase 全用例驱动收官轮：**P6 7 条 + P7 14 条 + P8 5 条 
 - **✅已有 47 条逐条核对**：断言强度全部达标（R31-C propsKey 穿插说明书页、RI#IR-04 中键 Esc、UF1/UF2 S5/S6/S7、DL 深链组），其中 8 条在本轮追加字节级/直断言增强（TC-P7-03/07/08/17、TC-P6-11/13/14/15 关联行）。
 - 「说明书音乐/播放两图按当前树口径核对」结论：两图与 `scripts/manual-assets.json` 单一事实源逐字节同步、版本徽标运行时=当前 build；但图像摄于 build-28-music 干净基线（tag 特性并入之前），时间轴区域无 tag 道——设计口径见 `docs/music-editing-defects.md` 附表，建议下次干净快照重拍。
 
+
+## round54 / W3 收尾批 附注（2026-09-26，build-35-w3；本节为附注，上方 202 条用例零改动）
+
+W3（整改方案 §6 批次 W3）落地对既有用例口径的影响，供后续用例维护参照：
+
+1. **移动端音乐模式布局（§2.3）**：音乐模式在 <1024px 为「工具条 40（横滚）→ 多轨区 flex（laneH 上限 64）→ preview 条 88px → playbar 44」竖序，`#mobile-tabs` 隐藏；无横向溢出（scrollWidth≤375，C-09a 口径不变）。既有「移动端三 Tab」类用例均在编舞模式口径下不受影响。
+2. **尺规刻度按模式分键**：`wuzhen:rulerScale` 单键退役，改为 `wuzhen:rulerScale.stage` / `.music`（缺省均=拍；旧键一次性播种当前模式后删除）。涉 localStorage 键集合断言的用例（IR-06 A9/B9、TC-P1-15）不受影响——键仅在用户切换刻度时写入，启动只读。
+3. **变速 toast 动作钮**：音乐模式载入变速嫌疑音频的提示 toast 追加「切秒刻度」动作钮（`#toasts .toast .toast-act`，一键 setRulerScale('sec')，时长 6.2s）；编舞模式仍为纯文字。文本包含（includes）口径断言不受动作钮影响。
+4. **拖移跨轨预览**：音乐模式多轨拖 clip 时按指针 y 高亮目标 lane（`musicTl.dragHoverLane`，纯前端）；松手清零。跨轨落轨仍走既有 `moveClipToTrack` 路径。
+5. **数拍 preview 大字**：音乐模式数拍入场大字改呈 `#mp-countin`（preview 条内，修 P12——原 `#countin-overlay` 挂 `#stage-wrap` 在音乐模式不可见）；编舞模式 overlay 路径零变化（TC-P5 数拍族不受影响）。
+6. **仪器改写三项（授权）**：`run-userflows-p7.mjs` TC-P7-03 内嵌音频断言位置 `audio.dataBase64` → `media.assets[0].dataBase64`（v3 多资产设计，导出字节级一致性不变）；TC-P7-B2 前置 audio 表计数 1→2（v3 双键 `pid` + `pid:assetId`；删除双清断言不变）；`run-userflows-p6.mjs` TC-P6-B3 版本徽标断言由硬编码 build 号改为读运行时 `window.__MAIN_BUILD`（round20 遗留③）。
+7. **新增可测项**：`tests/w3-music.test.js` 9 条（移动 laneH 上限 64 / 分键纯函数 / 旧键播种退役）；`lab/w3-verify.mjs` 42 项（IR-W3-1..4 对账 + IR-C 交互抽查 + 移动全动线截图），证据 `lab/out/round54-w3/`。

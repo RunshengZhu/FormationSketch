@@ -315,6 +315,7 @@ export const TAG_NAME_MAX = 20;
 function cleanTagName(name) { return String(name ?? '').trim().slice(0, TAG_NAME_MAX); }
 // 清洗（validateProject/导入入口共用）：丢弃非合法项——beat 非有限或负值、清洗后 name 为空、
 // 重复 id（保首个弃后续）；id 缺失/空则补 uid。返回新数组，不改输入。
+// color（W1 段色板 0..3）：合法整数则透传；无/非法 → 输出不含该键（shape 与既有逐值一致）。
 export function sanitizeTags(raw) {
   const arr = Array.isArray(raw) ? raw : [];
   const seen = new Set();
@@ -328,7 +329,8 @@ export function sanitizeTags(raw) {
     const id = (typeof t.id === 'string' && t.id) ? t.id : uid('tag');
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, beat, name });
+    const colorOk = Number.isInteger(t.color) && t.color >= 0 && t.color < SEG_COLOR_COUNT;
+    out.push(colorOk ? { id, beat, name, color: t.color } : { id, beat, name });
   }
   return out;
 }
@@ -360,6 +362,125 @@ export function moveTag(project, id, beat) {
   const t = tagById(project, id);
   const b = Number(beat);
   if (t && Number.isFinite(b)) t.beat = Math.max(0, Math.round(b * 100) / 100);
+}
+// tag.color（W1 节奏划分轨换色）：0..3 = 段色板索引（呈示层 SEG_COLORS 解释）；缺省=按段序 4 色循环。
+// 可选字段、向后兼容：旧项目无 color → sanitize 原样不含该键（shape 与既有逐值一致，零迁移成本）。
+export const SEG_COLOR_COUNT = 4;
+
+// ---------- 节奏划分轨（W1 §2.2.1）：段 = 相邻 tags 派生区间，落标 = 批量写 timeline.tags ----------
+// 段派生（纯函数）：段 i = [tags[i].beat, tags[i+1].beat)，末段到曲终（totalBeats）；
+// 首个 tag 之前的区间不属任何段（呈示为未划分灰底）。零长段（重复拍位）跳过。
+export function sectionSegmentsOf(project) {
+  const tags = [...(project.timeline.tags || [])].sort((a, b) => a.beat - b.beat || String(a.id).localeCompare(String(b.id)));
+  const { totalBeats } = computeSegments(project);
+  const segs = [];
+  for (let i = 0; i < tags.length; i++) {
+    const start = tags[i].beat;
+    const end = i + 1 < tags.length ? tags[i + 1].beat : Math.max(totalBeats, start);
+    if (end > start) segs.push({ i, tag: tags[i], start, end });
+  }
+  return { segs, totalBeats };
+}
+const r2 = v => Math.round(v * 100) / 100;
+// 来源①均分 N 段：按 totalBeats/N 生成 N 个段起点拍位（含 0）。N 钳制 1..64；totalBeats≤0 → []。
+export function evenSectionBeats(totalBeats, n) {
+  const T = Number(totalBeats), k = Math.round(Number(n));
+  if (!(T > 0) || !(k >= 1) || !(k <= 64)) return [];
+  const out = [];
+  for (let i = 0; i < k; i++) {
+    const b = r2((T * i) / k);
+    if (!out.length || b > out[out.length - 1]) out.push(b); // 舍入产生的重复拍位去重
+  }
+  return out;
+}
+// 来源②按小节规则：规则表循环落标（缺省 主歌16拍→副歌8拍 交替；可后续接 skill DENSITY_RULES）。
+// 重复段名追加序号（主歌1/副歌1/主歌2…）供索引列表区分。返回 [{name, beat}]。
+export function barRuleSections(totalBeats, rules = [{ name: '主歌', beats: 16 }, { name: '副歌', beats: 8 }]) {
+  const T = Number(totalBeats);
+  if (!(T > 0) || !Array.isArray(rules) || !rules.length) return [];
+  const out = [];
+  let b = 0, round = 0;
+  const usedCount = {};
+  while (b < T && out.length < 256) {
+    const rule = rules[round % rules.length];
+    const len = Math.max(0.5, Number(rule.beats) || 0);
+    usedCount[rule.name] = (usedCount[rule.name] || 0) + 1;
+    out.push({ name: rules.length > 1 ? `${rule.name}${usedCount[rule.name]}` : rule.name, beat: r2(b) });
+    b += len;
+    round++;
+  }
+  return out;
+}
+// 来源③导入段落表解析（纯函数）：「前奏8 主歌32 副歌32」/「前奏 8，主歌 32」/换行分隔均可。
+// 每个词条 = 名称+拍数（拍数可带小数）；任一词条不合法 → 整表拒绝（返回 []，调用方 toast）。
+// 名称不含空白/数字开头歧义：以「非数字结尾」切分；上限 256 段。
+export function parseSectionTable(text) {
+  const raw = String(text || '').trim().split(/[\s,，;；、]+/).filter(Boolean);
+  if (!raw.length) return [];
+  // 「名称」与「拍数」被空白拆开（「前奏 8」）时回拼到前一词；纯数字词不独立成段
+  const tokens = [];
+  for (const tok of raw) {
+    if (/^\d+(?:\.\d+)?$/.test(tok) && tokens.length) tokens[tokens.length - 1] += tok;
+    else tokens.push(tok);
+  }
+  const out = [];
+  for (const tok of tokens) {
+    const m = /^(.+?)(\d+(?:\.\d+)?)$/.exec(tok);
+    const name = m ? m[1].trim() : '';
+    const beats = m ? Number(m[2]) : NaN;
+    if (!name || !(beats > 0)) return [];
+    out.push({ name, beats });
+  }
+  return out.length > 256 ? [] : out;
+}
+// 段落表 → 段起点序列（累计拍位，越过曲终即止；末段由派生规则自动延到曲终）
+export function sectionTableToEntries(entries, totalBeats) {
+  const T = Number(totalBeats);
+  if (!(T > 0) || !Array.isArray(entries) || !entries.length) return [];
+  const out = [];
+  let b = 0;
+  for (const e of entries) {
+    if (b >= T || out.length >= 256) break;
+    out.push({ name: e.name, beat: r2(b) });
+    b += Math.max(0.5, Number(e.beats) || 0);
+  }
+  return out;
+}
+// 落标（唯一写入点）：整体替换 timeline.tags（划分=定义全曲结构；undo 一键还原）。
+// entries: [{name, beat}]（color 可选 0..3）。拍位钳非负、保留 2 位小数；名称清洗（空→「段落 k」）。
+export function applySectionEntries(project, entries) {
+  project.timeline.tags = (entries || []).map((e, k) => ({
+    id: uid('tag'),
+    beat: Math.max(0, r2(Number(e.beat) || 0)),
+    name: cleanTagName(e.name) || `段落 ${k + 1}`,
+    ...(Number.isInteger(e.color) && e.color >= 0 && e.color < SEG_COLOR_COUNT ? { color: e.color } : {}),
+  }));
+}
+// 段级操作（右键/边界拖拽共用；均为对 tags 的原子改写，历史条数由调用方 mutateLabeled 保证恰一）：
+// 于此拆分：在 beat 处插入段起点（拍位 ≥0.01 起；新段名=原段名+「·2」截断，色随原段）
+export function splitSectionAt(project, tagId, beat) {
+  const src = tagById(project, tagId);
+  const b = Math.max(0.01, r2(Number(beat) || 0));
+  if (!src) return null;
+  const t = { id: uid('tag'), beat: b, name: cleanTagName(`${src.name}·2`) || nextTagName(project), ...(src.color != null ? { color: src.color } : {}) };
+  project.timeline.tags.push(t);
+  return t;
+}
+// 删除段 = 移除其段起点 tag（该区间并入前段；首段删除后区间呈未划分灰底）
+export function removeSection(project, tagId) { removeTag(project, tagId); }
+// 合并相邻 = 移除「下一段」的段起点（本段延到再下一段/曲终）；末段则并入前段（移除自身起点）
+export function mergeSectionWithNext(project, tagId) {
+  const tags = [...(project.timeline.tags || [])].sort((a, b) => a.beat - b.beat);
+  const idx = tags.findIndex(t => t.id === tagId);
+  if (idx < 0) return;
+  const victim = idx + 1 < tags.length ? tags[idx + 1] : tags[idx - 1]; // 末段→并前段
+  if (victim) removeTag(project, victim.id);
+}
+// 换色（0..3 越界钳制；非法输入不动）
+export function setSectionColor(project, tagId, color) {
+  const t = tagById(project, tagId);
+  if (!t || !Number.isInteger(color) || color < 0 || color >= SEG_COLOR_COUNT) return;
+  t.color = color;
 }
 
 // ---------- 位置插值 ----------

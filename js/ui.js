@@ -26,9 +26,17 @@ export function h(tag, attrs = {}, ...children) {
   }
   return el;
 }
-export function toast(msg, ms = 2200) {
+// toast(msg, ms, action)：action={label, fn} 时在条内追加动作钮（W3 变速 toast「切秒刻度」；
+// 点击即执行并收条）。既有调用方零影响（第 3 参缺省 null，无钮）；
+// 文本读取型仪器（textContent.includes 口径）不受影响——钮文案追加在消息之后。
+export function toast(msg, ms = 2200, action = null) {
   const box = document.getElementById('toasts');
-  const t = h('div', { class: 'toast' }, msg);
+  const t = h('div', { class: 'toast' },
+    h('span', { class: 'toast-msg' }, msg),
+    action ? h('button', {
+      class: 'toast-act',
+      onclick: () => { try { action.fn?.(); } finally { t.remove(); } },
+    }, action.label) : null);
   box.append(t);
   setTimeout(() => t.remove(), ms);
 }

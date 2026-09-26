@@ -5,8 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { selectionMenuSpec, varispeedMismatch } from '../js/main.js';
-import { tlTotalHeight, niceSecStep, fmtSecLabel, TRACKS_OPS_H } from '../js/timeline.js';
-
+import { tlTotalHeight, niceSecStep, fmtSecLabel, TRACKS_OPS_H, musicLaneH, musicContentH } from '../js/timeline.js';
 // ---------- 实现 2：SelectionMenu 条目矩阵（0/1/2/3+ 人 × 构成） ----------
 test('S1 N=1：朝向（无互对）+ 删除（「删除」标签=单人既有文案，仪器口径）', () => {
   const items = selectionMenuSpec({ count: 1 });
@@ -60,10 +59,11 @@ test('G1 编舞模式（stage）总高与既有版本逐值一致：桌面简单
   assert.equal(tlTotalHeight('stage', 112, false), 160);
 });
 
-test('G2 音乐模式（music）块区不占位：总高=音频轨底+12+多轨加轨条 26（汇合轮改值，简单 104 / 展开 150，移动端同式；编舞 G1 三值不动）', () => {
-  assert.equal(tlTotalHeight('music', 66, false), 66 + 12 + TRACKS_OPS_H);
-  assert.equal(tlTotalHeight('music', 112, false), 112 + 12 + TRACKS_OPS_H);
-  assert.equal(tlTotalHeight('music', 66, true), 66 + 12 + TRACKS_OPS_H);
+test('G2 音乐模式（music）几何 W1 改版（整改方案 §6 授权改写）：固定公式退役 → 容器推导（musicLaneH/musicContentH，全矩阵见 tests/w1-music.test.js；编舞 G1 三值不动）', () => {
+  // 旧口径（104/150/104）随 W1 主区化退役：#tl-scroll 不再写死高度，改 flex 撑满 + 容器实测推导
+  assert.equal(musicLaneH(727, 1), 120, '860 高实测容器 727：1 轨封顶 120');
+  assert.equal(musicLaneH(336, 4), 56, '下限托底：4 轨在容器 336 触底 56');
+  assert.equal(musicContentH(120, 1), 22 + 28 + 120 + TRACKS_OPS_H, '内容高=尺规22+划分轨28+lane+加轨条26');
   assert.equal(TRACKS_OPS_H, 26, '加轨条高=26（音乐模式底部 ＋加轨 DOM 条）');
 });
 

@@ -14,8 +14,8 @@ import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHi
 import { renderManual } from './manual.js';
 import { iconHtml } from './icons.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-32-dualmode';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-32-dualmode');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-35-w3';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-35-w3');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
@@ -530,6 +530,8 @@ async function boot() {
   wireStageTools();
   wirePlaybar();
   wireAudioPanel();
+  wireMusicToolbar();   // W1：音乐工具条（资产组/打点/BPM/首拍/尺规组/自动划分）
+  wireMusicPreview();   // W1：队形 mini-preview 栏（只读画布 + 块 ±1 拍步进 + 对齐到播放头）
   wireMobileTabs();
   wireManual();
   wireLibrary();
@@ -594,6 +596,7 @@ function buildPlayer() {
       }
       stageView?.requestDraw();
       musicTl?.drawPlayhead();
+      drawMusicPreview(); // W1：preview 栏随播放头同步（formationIndex 高亮 + 当前块信息，IR-W1-5）
     },
     onPreviewEnd: () => {
       // 预览结束回到编辑视图：播放头归零，舞台显示当前所选队形
@@ -610,13 +613,23 @@ function buildPlayer() {
     },
     onCountin: n => {
       const ov = $('countin-overlay');
+      // W3（C17 修 P12）：音乐模式舞台隐藏（#editor-main display:none），挂在 #stage-wrap 的
+      // overlay 在该模式不可见——数拍入场大字改落音乐 preview 条（#mp-countin，两模式互斥呈示）。
+      // 编舞模式 overlay 行为零变化（既有仪器口径）。
+      const mc = $('mp-countin');
+      const inMusic = musicTl?.mode === 'music';
       if (n > 0) {
         ov.hidden = false; ov.textContent = n;
+        if (mc) {
+          if (inMusic) { mc.hidden = false; mc.textContent = n; }
+          else mc.hidden = true;
+        }
         // 任务#20（P3 cosmetic）：数拍期播放头显示「入场」、播放键呈 ⏸（可点击=取消倒计）
         $('pb-pos').textContent = '入场';
         setPlayBtn(true);
       } else {
         ov.hidden = true;
+        if (mc) mc.hidden = true;
         setPlayBtn(player.playing);
       }
       updateMusicLock();
@@ -654,6 +667,7 @@ function buildStrips() {
       onTimeSelection: applyTimeSelLoop,   // C11：播放限制在选区=临时循环
       previewClip,                          // C12：双击 clip=选中并循环预览
       onClipContextMenu: showClipMenu,      // §4：右键菜单
+      onSegContextMenu: showSegMenu,        // W1 §2.2.1：节奏划分轨段右键（拆分/合并/删除/换色）
     },
   });
 }
@@ -678,10 +692,19 @@ function previewClip(clip) {
   player.play(b0, { countIn: false });
   toast(`循环预览「${clip.name || '音频剪辑'}」——停止后恢复循环设置`);
 }
-// ---- v3：音频剪辑右键菜单（规格 §4） ----
+// ---- v3：音频剪辑右键菜单（规格 §4）----
+// W2（修 E-10）：编舞模式简单道只读——右键不再出满血剪辑菜单（分割/修剪/淡化），
+// 仅留「在音乐模式中编辑」跳转项；满血菜单为音乐模式专属。
 function showClipMenu({ clipId, screenX, screenY }) {
   const p = store.getState().project;
   if (!p) return;
+  if (musicTl.mode !== 'music') {
+    showContextMenu([
+      { label: '在音乐模式中编辑', fn: () => setUiMode('music') },
+      { label: '取消', fn: () => {} },
+    ], { x: screenX, y: screenY });
+    return;
+  }
   if (!clipId) {
     showContextMenu([{ label: '取消选择', fn: () => musicTl.clearClipSelection() }], { x: screenX, y: screenY });
     return;
@@ -743,16 +766,20 @@ function deleteFormation() {
 }
 
 // ---------- 双 UI 模式（round46 Lane A·决策②/③）：编舞（默认）⇄ 音乐 ----------
-// 尺规刻度按钮呈示（拍/秒）：render 与点击路径共用，保证即时与兜底两面一致
+// 尺规刻度按钮呈示（拍/秒）：render 与点击路径共用，保证即时与兜底两面一致。
+// W1：编舞面板与音乐工具条孪生钮（-music）同步同款呈示。
 function syncScaleToggle() {
-  const scaleBtn = $('tl-scale-toggle');
-  if (!scaleBtn || !musicTl) return;
+  if (!musicTl) return;
   const isSec = musicTl.rulerScale === 'sec';
-  scaleBtn.textContent = isSec ? '秒刻度' : '拍刻度';
-  scaleBtn.classList.toggle('toggled-on', isSec);
-  scaleBtn.title = isSec
-    ? '当前：秒刻度（变速曲/无节拍音乐的降级对齐刻度）。点击切回拍刻度'
-    : '尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住';
+  for (const id of ['tl-scale-toggle', 'tl-scale-toggle-music']) {
+    const scaleBtn = $(id);
+    if (!scaleBtn) continue;
+    scaleBtn.textContent = isSec ? '秒刻度' : '拍刻度';
+    scaleBtn.classList.toggle('toggled-on', isSec);
+    scaleBtn.title = isSec
+      ? '当前：秒刻度（变速曲/无节拍音乐的降级对齐刻度）。点击切回拍刻度'
+      : '尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住';
+  }
 }
 // 编舞模式=既有布局零变化；音乐模式：#editor-view[data-uimode="music"]（CSS 收窄舞台、
 // 余量给属性面板）+ #block-ctl[hidden]（块时长栏）+ timeline 画布块区不绘制。
@@ -779,10 +806,16 @@ function setUiMode(mode, { silent = false } = {}) {
   }
   const next = musicTl ? musicTl.setMode(mode) : (mode === 'music' ? 'music' : 'stage');
   applyUiMode(next);
-  // 舞台画布尺寸随收窄变化：复位视图重新适配（舞台平移/缩放不属跨模式保持面；
+  // W3 分键刻度：setMode 已恢复该模式自己的刻度，这里同步两枚刻度钮呈示（拍刻度/秒刻度）
+  syncScaleToggle();
+  // 舞台画布尺寸随布局变化：复位视图重新适配（舞台平移/缩放不属跨模式保持面；
   // 时间轴缩放 pps、选择、播放头、循环均不动）
   stageView?.resetView();
   musicTl?.render();
+  // 修 E-06：切音乐模式立即补建轨头 DOM（此前须任意一次数据变更触发 store render 才补建——
+  // syncTracksHead 唯一挂点在 main render，setUiMode 路径漏调）
+  syncTracksHead(store.getState().project);
+  drawMusicPreview(); // preview 栏切换即呈示（不等下一次 store render）
   return true;
 }
 
@@ -1109,11 +1142,15 @@ let tapTimes = [];
 // + 改变路径（输入 change / 点拍写回）一律拦截，双保险消除播放头跳变与切分点脱钩
 const musicLocked = () => !!(player && (player.playing || player.countin));
 const MUSIC_LOCK_TIP = '暂停后可修改';
-// [元素, 名称, 未锁定时的常态 title]（常态 title 与 index.html 一致，锁定时替换为统一提示）
+// [元素, 名称, 未锁定时的常态 title]（常态 title 与 index.html 一致，锁定时替换为统一提示；
+// W1 起含音乐工具条孪生件 ——music 后缀，同锁同还原）
 const MUSIC_LOCK_TARGETS = [
   ['bpm-input', 'BPM', ''],
   ['offset-input', '首拍', ''],
   ['btn-tap', '点拍', '连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）'],
+  ['bpm-input-music', 'BPM', ''],
+  ['offset-input-music', '首拍', ''],
+  ['btn-tap-music', '点拍', '连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）'],
 ];
 function updateMusicLock() {
   const locked = musicLocked();
@@ -1127,19 +1164,22 @@ function updateMusicLock() {
 function rejectLockedMusicEdit() {
   if (!musicLocked()) return false;
   toast(`播放中不可修改，${MUSIC_LOCK_TIP}`);
-  // 还原输入框显示值（change 事件已把键入值留在框里）
+  // 还原输入框显示值（change 事件已把键入值留在框里；编舞面板与音乐工具条孪生件同还原）
   const p = store.getState().project;
   if (p) {
     $('bpm-input').value = Math.round(p.audio.bpm);
     $('offset-input').value = p.audio.firstBeatSec || 0;
+    $('bpm-input-music').value = Math.round(p.audio.bpm);
+    $('offset-input-music').value = p.audio.firstBeatSec || 0;
   }
   return true;
 }
 function wireAudioPanel() {
   audioPanelBuilt = true;
-  // 移动端默认收起音乐设置面板，节省纵向空间
-  if (window.matchMedia('(max-width: 1023.5px)').matches) $('audio-disc').open = false;
-  $('btn-load-audio').addEventListener('click', () => $('audio-file').click());
+  // ---- W2 C14：编舞摘要条（#music-summary）。旧「🎵 音乐与节拍」面板（C1）退役：
+  //      载入/媒体库/按队形段自动切不入编舞（音乐工具条 mtb-* 孪生件承接）；其余锁定 id 保留
+  //      （#audio-name 文本、#bpm-input/#offset-input 只读输入、#btn-tap/#btn-offset-test、
+  //       #calib-disc 内 #bpb-select/#countin-input）。播放/数拍锁（updateMusicLock）覆盖不变。
   $('audio-file').addEventListener('change', async () => {
     const file = $('audio-file').files[0];
     if (!file) return;
@@ -1149,22 +1189,8 @@ function wireAudioPanel() {
     if (rejectLockedMusicEdit()) return; // 任务#2：播放中拦截（含程序化 change 路径）
     store.mutate(p => { p.audio.bpm = Math.max(30, Math.min(300, +$('bpm-input').value || 120)); }, null);
   });
-  $('btn-tap').addEventListener('click', () => {
-    if (musicLocked()) { toast(`播放中不可点拍，${MUSIC_LOCK_TIP}`); return; } // 任务#2：点拍也是 BPM 改变路径
-    const now = performance.now();
-    if (tapTimes.length && now - tapTimes[tapTimes.length - 1] > 2500) tapTimes = [];
-    tapTimes.push(now);
-    if (tapTimes.length >= 3) {
-      const win = tapTimes.slice(-8);
-      const ivals = [];
-      for (let i = 1; i < win.length; i++) ivals.push(win[i] - win[i - 1]);
-      const avg = ivals.reduce((a, b) => a + b, 0) / ivals.length;
-      const bpm = Math.round(60000 / avg);
-      $('bpm-input').value = bpm;
-      store.mutate(p => { p.audio.bpm = bpm; }, null);
-    }
-    if (tapTimes.length > 10) tapTimes = tapTimes.slice(-8);
-  });
+  // 点拍（编舞摘要条 + 音乐工具条孪生同源）：BPM 改变路径，播放/数拍中禁用（任务#2）
+  $('btn-tap').addEventListener('click', tapTempo);
   $('offset-input').addEventListener('change', () => {
     if (rejectLockedMusicEdit()) return; // 任务#2：播放中拦截
     const v = Math.max(0, +$('offset-input').value || 0);
@@ -1175,45 +1201,17 @@ function wireAudioPanel() {
       toast(`首拍（${v}s）已超出音频时长（${audio.duration.toFixed(1)}s），请确认单位为秒`);
     }
   });
-  $('btn-offset-test').addEventListener('click', () => {
-    if (!audio.ready) { toast('请先载入音乐'); return; }
-    player.pause();
-    const p = store.getState().project;
-    const from = Math.max(0, (p.audio.firstBeatSec || 0) - 2);
-    audio.play(from, 1);
-    setTimeout(() => { if (!player.playing) audio.pause(); }, 4500);
-  });
+  $('btn-offset-test').addEventListener('click', auditionFirstBeat);
   $('bpb-select').addEventListener('change', () => store.mutate(p => { p.audio.beatsPerBar = +$('bpb-select').value; }, null));
   $('countin-input').addEventListener('change', () => store.mutate(p => { p.timeline.countInBeats = Math.max(0, Math.min(32, +$('countin-input').value || 0)); }, null));
-  // 把当前队形块的起点对齐到播放头时间戳（调整前一段过渡时长）
-  $('btn-align-playhead').addEventListener('click', () => {
-    const s = store.getState();
-    if (s.formationIndex === 0) { toast('第一个队形从 0 拍开始，无需对齐'); return; }
-    const target = player.beat;
-    store.mutate(p => { M.alignBlockStart(p, s.formationIndex, target); }, '对齐到播放头');
-    const actual = M.computeSegments(s.project).segments[s.formationIndex].holdStart;
-    if (Math.abs(actual - target) > 0.5) {
-      toast(`目标不可达：起点已尽量前移到 ${M.beatLabel(s.project, actual)}（${actual.toFixed(1)} 拍）`);
-    } else {
-      toast(`队形 ${s.formationIndex + 1} 起点已对齐到 ${M.beatLabel(s.project, actual)}（${actual.toFixed(1)} 拍）`);
-    }
-  });
+  // 把当前队形块的起点对齐到播放头时间戳（调整前一段过渡时长）——W2 起按钮驻块时长栏（编舞域）
+  $('btn-align-playhead').addEventListener('click', () => alignCurrentToPlayhead());
   $('ripple-check').addEventListener('change', () => store.setUI({ ripple: $('ripple-check').checked }));
-  // 块时长快捷步进（±1拍，钳制 0.5–999）
-  const stepBlock = (key, delta) => {
-    const s = store.getState();
-    if (key === 'travelBeats' && s.formationIndex >= s.project.formations.length - 1) return;
-    store.mutate(p => {
-      const b = p.timeline.blocks[s.formationIndex];
-      if (!b) return;
-      b[key] = Math.max(0.5, Math.min(999, (b[key] || 0) + delta));
-    }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
-    syncLoopAfterBlockEdit(); // 步进改时长后循环区间跟随（DEFECT-R26-4）
-  };
-  $('bc-hold-minus').addEventListener('click', () => stepBlock('holdBeats', -1));
-  $('bc-hold-plus').addEventListener('click', () => stepBlock('holdBeats', 1));
-  $('bc-travel-minus').addEventListener('click', () => stepBlock('travelBeats', -1));
-  $('bc-travel-plus').addEventListener('click', () => stepBlock('travelBeats', 1));
+  // 块时长快捷步进（±1拍，钳制 0.5–999）——W1 起编舞块栏（bc-*）与音乐模式 preview 栏（mp-*）共用
+  $('bc-hold-minus').addEventListener('click', () => stepBlockBeats('holdBeats', -1));
+  $('bc-hold-plus').addEventListener('click', () => stepBlockBeats('holdBeats', 1));
+  $('bc-travel-minus').addEventListener('click', () => stepBlockBeats('travelBeats', -1));
+  $('bc-travel-plus').addEventListener('click', () => stepBlockBeats('travelBeats', 1));
   // ⚑ 打点：在当前播放头/scrub 位置打音乐标记（不打断播放；命名 Enter/失焦提交、Esc 取消）
   $('btn-tag-drop').addEventListener('click', () => musicTl?.stampTag());
   // 尺规刻度切换（决策⑥）：拍⇄秒，MusicTimeline 记忆（localStorage）；按钮呈示即时同步
@@ -1224,18 +1222,15 @@ function wireAudioPanel() {
   $('tl-zoom-in').addEventListener('click', () => musicTl.zoom(1.3));
   $('tl-zoom-out').addEventListener('click', () => musicTl.zoom(1 / 1.3));
   $('tl-zoom-fit').addEventListener('click', () => musicTl.zoomFit());
-  // ---- v3 音频轨 ----
-  $('tl-audio-toggle').addEventListener('click', () => musicTl?.setExpanded(!musicTl.expanded));
-  $('tl-empty-load').addEventListener('click', () => $('audio-file').click());
-  $('tl-empty-library').addEventListener('click', openMediaLibrary);
-  $('btn-media-library').addEventListener('click', openMediaLibrary);
-  $('btn-auto-split').addEventListener('click', autoSplitByFormations);
+  // ---- W2 C14 摘要条专属：「编辑音乐 →」显性入口（IR-W2-3，与 M 键等效）+ 段索引列表 + 空态灰字 ----
+  $('ms-edit').addEventListener('click', () => setUiMode('music'));
+  $('ms-tags').addEventListener('click', openSegIndexList);
+  $('tl-audio-empty').addEventListener('click', () => setUiMode('music')); // C12：空态灰字点击跳音乐模式
   $('media-files').addEventListener('change', async () => {
     const files = [...$('media-files').files];
     $('media-files').value = '';
     if (files.length) await importMediaFiles(files);
   });
-  buildAudioHead();
   // C13：拖资产/音频文件到时间轴音轨 = 落点生成 clip
   const tlScroll = $('tl-scroll');
   tlScroll.addEventListener('dragover', e => {
@@ -1258,62 +1253,244 @@ function wireAudioPanel() {
   });
   window.addEventListener('resize', () => { stageView?.requestDraw(); musicTl?.render(); });
 }
-// ---- v3 展开态音轨表头（120px，DOM 层）：资产名/时长/音量滑杆/静音/收起 ----
-let headRefs = null;
-const TRACK_LS_KEY = 'wuzhen:audioTrackMix';
-function trackMix() {
-  try { return JSON.parse(localStorage.getItem(TRACK_LS_KEY)) || {}; } catch { return {}; }
+
+// 点拍（摘要条 #btn-tap 与音乐工具条 #btn-tap-music 孪生同源）：
+// 连点 3 次起算、取最近 8 次平均；播放/数拍中拒绝（任务#2）；结果写回 twin 输入框
+function tapTempo() {
+  if (musicLocked()) { toast(`播放中不可点拍，${MUSIC_LOCK_TIP}`); return; } // 任务#2：点拍也是 BPM 改变路径
+  const now = performance.now();
+  if (tapTimes.length && now - tapTimes[tapTimes.length - 1] > 2500) tapTimes = [];
+  tapTimes.push(now);
+  if (tapTimes.length >= 3) {
+    const win = tapTimes.slice(-8);
+    const ivals = [];
+    for (let i = 1; i < win.length; i++) ivals.push(win[i] - win[i - 1]);
+    const avg = ivals.reduce((a, b) => a + b, 0) / ivals.length;
+    const bpm = Math.round(60000 / avg);
+    $('bpm-input').value = bpm;
+    $('bpm-input-music').value = bpm;
+    store.mutate(p => { p.audio.bpm = bpm; }, null);
+  }
+  if (tapTimes.length > 10) tapTimes = tapTimes.slice(-8);
 }
-function buildAudioHead() {
-  const head = $('tl-head');
-  if (!head || headRefs) return;
-  head.innerHTML = '';
-  const name = h('div', { class: 'tlh-name', title: '配乐资产（点击打开媒体库）' }, '—');
-  name.addEventListener('click', openMediaLibrary);
-  const dur = h('div', { class: 'tlh-dur' }, '');
-  const mix = trackMix();
-  const vol = h('input', { type: 'range', min: '0', max: '1.5', step: '0.01', value: String(mix.gain ?? 1), title: '音轨音量' });
-  vol.addEventListener('input', () => {
-    const g = +vol.value;
-    audio.setTrackGain(g);
-    try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), gain: g })); } catch {}
-  });
-  const muteBtn = h('button', { class: 'btn', title: '音轨静音' });
-  const setMuteUI = m => { muteBtn.classList.toggle('toggled-on', !!m); muteBtn.innerHTML = iconHtml(m ? 'mute' : 'volume'); };
-  muteBtn.addEventListener('click', () => {
-    const m = !trackMix().muted;
-    audio.setTrackMuted(m);
-    setMuteUI(m);
-    try { localStorage.setItem(TRACK_LS_KEY, JSON.stringify({ ...trackMix(), muted: m })); } catch {}
-  });
-  setMuteUI(!!mix.muted);
-  audio.ensureTransport(); // 懒建 transport：滑杆/静音在首次播放前也能即时生效
-  audio.setTrackGain(mix.gain ?? 1);
-  audio.setTrackMuted(!!mix.muted);
-  const collapse = h('button', { class: 'btn', title: '收起音频轨（回到简单态）' }, h('span', { html: iconHtml('chevron-up') }), ' 收起');
-  collapse.addEventListener('click', () => musicTl?.setExpanded(false));
-  head.append(
-    name, dur,
-    h('div', { class: 'tlh-row' }, h('span', { class: 'dim', style: 'font-size:10px' }, '音量'), vol),
-    h('div', { class: 'tlh-row' }, muteBtn, collapse));
-  headRefs = { name, dur };
-}
-function updateAudioHead() {
-  if (!headRefs) return;
+// 试听（摘要条 #btn-offset-test 与音乐工具条 #btn-offset-test-music 孪生同源）：
+// 从首拍前 2s 起播 4.5s 自动停，检查对齐；不占用播放器
+function auditionFirstBeat() {
+  if (!audio.ready) { toast('请先载入音乐'); return; }
+  player.pause();
   const p = store.getState().project;
-  const act = M.activeAssetOf(p);
-  const nm = act?.name || p?.audio?.name || '未载入音乐';
-  if (headRefs.name.textContent !== nm) headRefs.name.textContent = nm;
-  headRefs.name.title = `${nm}（点击打开媒体库）`;
-  const d = act?.durationSec ?? p?.audio?.durationSec ?? 0;
-  headRefs.dur.textContent = d ? `${d.toFixed(1)}s` : '';
+  const from = Math.max(0, (p.audio.firstBeatSec || 0) - 2);
+  audio.play(from, 1);
+  setTimeout(() => { if (!player.playing) audio.pause(); }, 4500);
+}
+// ---- W2 C14 摘要条段索引列表（「tag N 个 · 跳转列表」）：段名·小节·拍位·秒位，点段名跳段起点 ----
+function openSegIndexList() {
+  const p = store.getState().project;
+  if (!p) return;
+  const { segs } = M.sectionSegmentsOf(p);
+  if (!segs.length) return;
+  const items = segs.map(s => ({
+    label: `${s.tag.name} · ${M.beatLabel(p, s.start)} 小节（${Math.round(s.start * 10) / 10} 拍 · ${M.beatToSec(p, s.start).toFixed(1)}s）`,
+    fn: () => { player.seekBeat(s.start); musicTl?.drawPlayhead(); },
+  }));
+  const btn = $('ms-tags');
+  const r = btn.getBoundingClientRect();
+  showContextMenu(items, { x: Math.min(r.left, window.innerWidth - 240), y: r.bottom + 4 });
+}
+
+// ---------- W1 音乐模式主区化：新接线 ----------
+// 块时长 ±1 拍步进（钳制 0.5–999）：编舞块栏（bc-*）与音乐 preview 栏（mp-*）共用；
+// mutate 带标签 = 恰一条历史（IR-W1-5）。播放中允许（循环区间跟随，DEFECT-R26-4 口径不变）。
+function stepBlockBeats(key, delta) {
+  const s = store.getState();
+  if (key === 'travelBeats' && s.formationIndex >= s.project.formations.length - 1) return;
+  store.mutate(p => {
+    const b = p.timeline.blocks[s.formationIndex];
+    if (!b) return;
+    b[key] = Math.max(0.5, Math.min(999, (b[key] || 0) + delta));
+  }, key === 'holdBeats' ? '调整保持时长' : '调整过渡时长');
+  syncLoopAfterBlockEdit(); // 步进改时长后循环区间跟随（DEFECT-R26-4）
+  drawMusicPreview();       // preview 栏步进即时反映（块数据变更 → 画布/标签同步）
+}
+// 对齐到播放头（W1 起 preview 栏镜像同款按钮）
+function alignCurrentToPlayhead() {
+  const s = store.getState();
+  if (s.formationIndex === 0) { toast('第一个队形从 0 拍开始，无需对齐'); return; }
+  const target = player.beat;
+  store.mutate(p => { M.alignBlockStart(p, s.formationIndex, target); }, '对齐到播放头');
+  const actual = M.computeSegments(s.project).segments[s.formationIndex].holdStart;
+  if (Math.abs(actual - target) > 0.5) {
+    toast(`目标不可达：起点已尽量前移到 ${M.beatLabel(s.project, actual)}（${actual.toFixed(1)} 拍）`);
+  } else {
+    toast(`队形 ${s.formationIndex + 1} 起点已对齐到 ${M.beatLabel(s.project, actual)}（${actual.toFixed(1)} 拍）`);
+  }
+  drawMusicPreview();
+}
+// ---- 音乐工具条（40px，音乐模式专属；#audio-disc 在该模式的职责替代，编舞模式不动） ----
+function wireMusicToolbar() {
+  // 资产组（C2 迁移语义：音乐模式入口；底层走同一 audio-file/media-files/媒体库管线）
+  $('mtb-load-audio').addEventListener('click', () => $('audio-file').click());
+  $('mtb-media-library').addEventListener('click', openMediaLibrary);
+  $('mtb-auto-split').addEventListener('click', autoSplitByFormations);
+  // ⚑ 打点（修 E-08：音乐模式打 tag 入口）
+  $('mtb-tag-drop').addEventListener('click', () => musicTl?.stampTag());
+  // BPM/首拍（与块栏同名控件同模型同守卫：播放/数拍中禁改，change 拦截 + 还原显示值）
+  $('bpm-input-music').addEventListener('change', () => {
+    if (rejectLockedMusicEdit()) return;
+    store.mutate(p => { p.audio.bpm = Math.max(30, Math.min(300, +$('bpm-input-music').value || 120)); }, null);
+  });
+  $('offset-input-music').addEventListener('change', () => {
+    if (rejectLockedMusicEdit()) return;
+    const v = Math.max(0, +$('offset-input-music').value || 0);
+    store.mutate(p => { p.audio.firstBeatSec = v; }, null);
+    if (audio.ready && audio.duration && v >= audio.duration) {
+      toast(`首拍（${v}s）已超出音频时长（${audio.duration.toFixed(1)}s），请确认单位为秒`);
+    }
+  });
+  // 节拍组孪生件（W2 C3 收尾：点拍/小节/数拍入场/试听 与编舞摘要条同源同守卫）
+  $('btn-tap-music').addEventListener('click', tapTempo);
+  $('bpb-select-music').addEventListener('change', () => store.mutate(p => { p.audio.beatsPerBar = +$('bpb-select-music').value; }, null));
+  $('countin-input-music').addEventListener('change', () => store.mutate(p => { p.timeline.countInBeats = Math.max(0, Math.min(32, +$('countin-input-music').value || 0)); }, null));
+  $('btn-offset-test-music').addEventListener('click', auditionFirstBeat);
+  // 尺规组（C5 迁移语义）：刻度切换/缩放与 #audio-disc 内同源
+  $('tl-scale-toggle-music').addEventListener('click', () => {
+    musicTl?.setRulerScale(musicTl.rulerScale === 'sec' ? 'beat' : 'sec');
+    syncScaleToggle();
+  });
+  $('tl-zoom-in-music').addEventListener('click', () => musicTl?.zoom(1.3));
+  $('tl-zoom-out-music').addEventListener('click', () => musicTl?.zoom(1 / 1.3));
+  $('tl-zoom-fit-music').addEventListener('click', () => musicTl?.zoomFit());
+  // 自动划分 ▸（节奏划分轨三来源，§2.2.1 ①）：落标=批量写 timeline.tags，恰一条历史
+  const dd = $('auto-seg-dd'), menu = dd.querySelector('.dd-menu');
+  $('btn-auto-segments').addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+  document.addEventListener('click', () => { menu.hidden = true; });
+  $('seg-auto-even').addEventListener('click', () => autoSegmentsEven());
+  $('seg-auto-bars').addEventListener('click', () => autoSegmentsBars());
+  $('seg-auto-import').addEventListener('click', () => autoSegmentsTable());
+}
+// 自动划分来源①：均分 N 段（默认提示 8 的倍数；整表替换现有标记，undo 一键还原）
+function autoSegmentsEven() {
+  const p = store.getState().project;
+  if (!p) return;
+  const { totalBeats } = M.computeSegments(p);
+  if (!(totalBeats > 0)) { toast('曲长为 0，无法划分'); return; }
+  const ans = prompt(`均分 N 段（全曲 ${Math.round(totalBeats * 10) / 10} 拍；建议 8 的倍数，贴合乐段结构）\n将替换现有标记，可撤销`, '8');
+  if (ans == null) return;
+  const beats = M.evenSectionBeats(totalBeats, Number(ans));
+  if (!beats.length) { toast('段数需为 1–64 的整数'); return; }
+  store.mutate(pl => {
+    M.applySectionEntries(pl, beats.map((b, i) => ({ name: `段落 ${i + 1}`, beat: b })));
+  }, '自动划分节奏段');
+  toast(`已均分 ${beats.length} 段（原标记已替换；撤销可还原）`);
+}
+// 自动划分来源②：按小节规则（主歌 16 拍 → 副歌 8 拍 交替循环到曲终；规则表后续接 DENSITY_RULES）
+function autoSegmentsBars() {
+  const p = store.getState().project;
+  if (!p) return;
+  const { totalBeats } = M.computeSegments(p);
+  const entries = M.barRuleSections(totalBeats);
+  if (!entries.length) { toast('曲长为 0，无法划分'); return; }
+  store.mutate(pl => { M.applySectionEntries(pl, entries); }, '自动划分节奏段');
+  toast(`已按小节规则落 ${entries.length} 段（主歌16拍/副歌8拍 交替；撤销可还原）`);
+}
+// 自动划分来源③：导入段落表（「前奏8 主歌32 副歌32…」文本解析；任一项不合法整表拒绝）
+function autoSegmentsTable() {
+  const p = store.getState().project;
+  if (!p) return;
+  const text = prompt('粘贴/输入段落表（每项「名称+拍数」，空格/逗号/换行分隔）\n例：前奏8 主歌32 副歌32 间奏16 尾奏8\n将替换现有标记，可撤销', '');
+  if (text == null) return;
+  const parsed = M.parseSectionTable(text);
+  if (!parsed.length) { toast('段落表无法解析：每项需为「名称+拍数」，如「主歌32」'); return; }
+  const { totalBeats } = M.computeSegments(p);
+  const entries = M.sectionTableToEntries(parsed, totalBeats);
+  if (!entries.length) { toast('曲长为 0，无法划分'); return; }
+  store.mutate(pl => { M.applySectionEntries(pl, entries); }, '自动划分节奏段');
+  toast(`已按段落表落 ${entries.length} 段（超出曲尾的条目自动截断；撤销可还原）`);
+}
+// ---- 节奏划分轨段右键菜单（§2.2.1 ②：于此拆分/合并相邻/删除/换色 4 色） ----
+function showSegMenu({ tagId, beat, screenX, screenY }) {
+  if (!tagId) {
+    showContextMenu([{ label: '未划分区域（划分轨双击空白可打段起点）', fn: () => {} }], { x: screenX, y: screenY });
+    return;
+  }
+  const p = store.getState().project;
+  const t = M.tagById(p, tagId);
+  if (!t) return;
+  // 于此拆分：点击处拍位吸附小节线（与拖界同一吸附口径）
+  const [splitBeat, snapped] = musicTl.snapTagBeatToBar(beat);
+  const splitLabel = `于此拆分（${Math.round(splitBeat * 10) / 10} 拍${snapped ? '，已吸小节线' : ''}）`;
+  const swatches = h('div', { class: 'ctx-swatches' },
+    ...MusicTimeline.SEG_COLORS.map((c, ci) => h('button', {
+      class: 'ctx-sw', style: `background:${c}`, title: '段颜色',
+      onclick: () => { closeContextMenu(); musicTl.setSegColor(tagId, ci); },
+    })));
+  showContextMenu([
+    { label: splitLabel, fn: () => musicTl.splitSegAt(tagId, splitBeat) },
+    { label: '与下一段合并', fn: () => musicTl.mergeSegWithNext(tagId) },
+    { label: '删除本段', danger: true, fn: () => musicTl.deleteSeg(tagId) },
+    { sep: true },
+    { el: swatches },
+  ], { x: screenX, y: screenY });
+}
+// ---- 队形 mini-preview 栏（W1 C15）：只读画布随播放头同步 + 块 ±1 拍步进 + 对齐到播放头 ----
+let mpRefs = null;
+function wireMusicPreview() {
+  if (mpRefs) return;
+  $('mp-hold-minus').addEventListener('click', () => stepBlockBeats('holdBeats', -1));
+  $('mp-hold-plus').addEventListener('click', () => stepBlockBeats('holdBeats', 1));
+  $('mp-travel-minus').addEventListener('click', () => stepBlockBeats('travelBeats', -1));
+  $('mp-travel-plus').addEventListener('click', () => stepBlockBeats('travelBeats', 1));
+  $('mp-align').addEventListener('click', () => alignCurrentToPlayhead());
+  mpRefs = { root: $('music-preview'), cv: $('mp-canvas'), name: $('mp-name'), hold: $('mp-hold'), travel: $('mp-travel') };
+}
+// preview 绘制（复用 drawScene minimal，同 formation-index 缩略图管线；只读，无新渲染管线）。
+// 调用点：render()（编辑态兜底）与 player.onTick（播放中 formationIndex/播放头推进同步，IR-W1-5）。
+function drawMusicPreview() {
+  if (!mpRefs || mpRefs.root.offsetParent === null) return; // 非音乐模式（display:none）不画
+  const s = store.getState();
+  const p = s.project;
+  const f = p?.formations[s.formationIndex];
+  if (!f) return;
+  const cv = mpRefs.cv;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = cv.clientWidth || 258, hgt = cv.clientHeight || 170;
+  const W = Math.round(w * dpr), H = Math.round(hgt * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, hgt);
+  drawScene(ctx, { x: 0, y: 0, w, h: hgt }, p, f.positions, { minimal: true, pad: 10, merges: f.merges || [] });
+  const label = `${s.formationIndex + 1}. ${f.name}`;
+  if (mpRefs.name.textContent !== label) mpRefs.name.textContent = label;
+  const blk = p.timeline.blocks[s.formationIndex];
+  if (blk) {
+    const spbv = M.spb(p);
+    // W3 移动端 preview 条：值拆两段 span（拍数 + 「·秒」），移动端 CSS 隐 .mp-s 防横溢（§2.3）；
+    // 桌面渲染文本与旧 fmt 完全一致（textContent 不变，仪器兼容）。
+    const fmtB = v => `${String(Math.round(v * 10) / 10)}拍`;
+    const fmtS = v => `·${(v * spbv).toFixed(1).replace(/\.0$/, '')}s`;
+    const setVal = (el, v) => {
+      const b = `${fmtB(v)}`, sv = `${fmtS(v)}`;
+      if (el._b !== b || el._s !== sv) {
+        el._b = b; el._s = sv;
+        el.replaceChildren(document.createTextNode(b), Object.assign(document.createElement('span'), { className: 'mp-s', textContent: sv }));
+      }
+    };
+    setVal(mpRefs.hold, blk.holdBeats);
+    setVal(mpRefs.travel, blk.travelBeats);
+    const isLast = s.formationIndex >= p.formations.length - 1;
+    $('mp-travel-minus').disabled = isLast || blk.travelBeats <= 0.5;
+    $('mp-travel-plus').disabled = isLast;
+    $('mp-hold-minus').disabled = blk.holdBeats <= 0.5;
+  }
 }
 // ---- 多轨轨头与轨操作（汇合轮，仅音乐模式呈示；对接 Lane B 引擎 R47 §12.4-12.6） ----
 // 每轨：轨名（双击改名）+ 音量滑杆（setTrackGainById）+ 静音（setTrackMutedById）+ 删轨（仅空轨）；
 // 底部加轨条（TRACK_MAX=4 UI 把守：到限呈禁用态+点击 toast）。四条裁定落地：
 // ①上限 UI 把守；②removeTrack 仅空轨、无删最后一轨入口；③跨轨重叠维持自动交叉淡化（引擎现状）；
-// ④轨静音不参与 ended/effectiveRegions（引擎现状）。旧 setTrackGain/setTrackMuted（master 总控）
-// 保留为编舞模式展开态表头「整体音量」，二者并存不冲突。
+// ④轨静音不参与 ended/effectiveRegions（引擎现状）。
+// W1（C7 退役）：旧展开态单轨表头 #tl-head（master 总控 buildAudioHead/updateAudioHead/
+// wuzhen:audioTrackMix）整体删除——轨头只看音乐模式多轨（C16 简化）。
 let tracksHeadSig = null;
 let tracksHeadDirty = false;
 function tracksSigOf(p) {
@@ -1504,7 +1681,20 @@ function maybeVarispeedHint(durationSec) {
     if (!p) return;
     const { totalBeats } = M.computeSegments(p);
     if (!varispeedMismatch(durationSec, totalBeats, M.spb(p), p.audio.firstBeatSec)) return;
-    toast('音频节奏与拍线可能不一致（变速曲），可用秒刻度对齐');
+    // W3（§4.3②）：音乐模式载入变速嫌疑音频 → toast 追加「切秒刻度」动作钮，一键 setRulerScale('sec')；
+    // 编舞模式只出文字提示（刻度切换入口在摘要条尺规组，不在提示里代劳——仅音乐模式显钮）。
+    // 时长 6200ms 给动作钮留出可点击窗口；文本读取型仪器（includes 口径）不受动作钮影响。
+    const inMusic = musicTl?.mode === 'music';
+    toast('音频节奏与拍线可能不一致（变速曲），可用秒刻度对齐', inMusic ? 6200 : 2200,
+      inMusic ? {
+        label: '切秒刻度',
+        fn: () => {
+          if (!musicTl) return;
+          musicTl.setRulerScale('sec');
+          syncScaleToggle();
+          toast('已切到秒刻度（变速曲按秒对齐；Alt+←/→ 播放头 ±0.5s 步进）');
+        },
+      } : null);
     sessionStorage.setItem(VARISPEED_LS_KEY, '1');
   } catch {} // 隐私模式 storage 不可用：静默跳过（不提示也不记）
 }
@@ -2027,10 +2217,11 @@ function wireKeyboard() {
       if (musicTl.razor) { musicTl.setRazor(false); return; }
       if (musicTl.clipSel.size || musicTl.timeSel) { musicTl.clearClipSelection(); return; }
     }
-    // v3：Ctrl/Cmd+K = 播放头处分割选中 clip（规格 §5/C6）
+    // v3：Ctrl/Cmd+K = 播放头处分割选中 clip（规格 §5/C6）——W2 起剪辑编辑归音乐模式
+    //（编舞简单道只读，同 E-10 口径；编舞按 K 无动作）
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
-      musicTl?.splitAtPlayhead();
+      if (musicTl?.mode === 'music') musicTl.splitAtPlayhead();
       return;
     }
     if (e.key === 'Escape') {
@@ -2072,7 +2263,7 @@ function wireKeyboard() {
     // ---- v3 音频轨快捷键（规格 §5）----
     if (e.key.toLowerCase() === 's' && musicTl?.hoverAudio) { e.preventDefault(); musicTl.toggleSnap(); return; } // S（hover 音轨）=磁吸开关
     if (e.key.toLowerCase() === 'r' && musicTl?.hoverAudio) { e.preventDefault(); musicTl.setRazor(); return; }   // R（hover 音轨）=剃刀
-    if ((e.key === 'Delete' || e.key === 'Backspace') && musicTl?.clipSel?.size && !s.selection.length) {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && musicTl?.clipSel?.size && !s.selection.length && musicTl.mode === 'music') {
       e.preventDefault();
       musicTl.deleteSelected(e.altKey); // Alt+Delete=波纹删除
       return;
@@ -2087,8 +2278,8 @@ function wireKeyboard() {
       }
       return;
     }
-    if (e.key.startsWith('Arrow') && musicTl?.clipSel?.size && !s.selection.length) {
-      e.preventDefault(); // C3：选中 clip 微移（plain=逐帧 10ms；Shift=按网格步进整拍）
+    if (e.key.startsWith('Arrow') && musicTl?.clipSel?.size && !s.selection.length && musicTl.mode === 'music') {
+      e.preventDefault(); // C3：选中 clip 微移（plain=逐帧 10ms；Shift=按网格步进整拍）——剪辑编辑归音乐模式
       const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
       if (dir) musicTl.nudgeSelected(dir, { grid: e.shiftKey });
       return;
@@ -2283,7 +2474,20 @@ function render(state) {
     $('bc-sec').textContent = `（${M.beatLabel(p, 0)} 起 · 共 ${M.totalDurationSec(p).toFixed(1)}s）`;
   }
   $('audio-name').textContent = audio.ready ? `${p.audio.name} (${(p.audio.durationSec || 0).toFixed(1)}s)` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
-  updateAudioHead(); // v3 展开态表头（资产名/时长）跟随
+  // 摘要条只读元（W2 C14）：BPM/小节在编舞呈只读文本（修改进音乐模式——BPM 是节拍划分产物）
+  const msMeta = `BPM${Math.round(p.audio.bpm)} ${p.audio.beatsPerBar || 4}/4`;
+  if ($('ms-meta').textContent !== msMeta) $('ms-meta').textContent = msMeta;
+  const nTags = (p.timeline.tags || []).length;
+  const msTags = nTags ? `tag ${nTags} 个 · 跳转列表` : 'tag 0 个';
+  if ($('ms-tags').textContent !== msTags) $('ms-tags').textContent = msTags;
+  $('ms-tags').disabled = !nTags;
+  // 音乐工具条镜像（音乐模式呈示面；与编舞面板同模型同步）
+  $('mtb-audio-name').textContent = audio.ready ? `${p.audio.name} · ${(p.audio.durationSec || 0).toFixed(1)}s` : (p.audio.name ? `${p.audio.name}（重新选择文件）` : '未载入音乐');
+  if (document.activeElement !== $('bpm-input-music')) $('bpm-input-music').value = Math.round(p.audio.bpm);
+  if (document.activeElement !== $('offset-input-music')) $('offset-input-music').value = p.audio.firstBeatSec || 0;
+  if (document.activeElement !== $('bpb-select-music')) $('bpb-select-music').value = String(p.audio.beatsPerBar || 4);
+  if (document.activeElement !== $('countin-input-music')) $('countin-input-music').value = p.timeline.countInBeats ?? 8;
+  drawMusicPreview(); // W1：preview 栏随渲染同步（队形/块数据变更兜底；播放中另有 onTick 驱动）
   updateMusicLock(); // 任务#2：随渲染同步 BPM/首拍/点拍锁态（暂停/播放切换的兜底刷新面）
   $('pb-formation').textContent = currentFormation() ? `${state.formationIndex + 1}. ${currentFormation().name}` : '';
   // 播放/数拍中按钮态（任务#20：数拍期同样呈 ⏸，点击=取消倒计）
