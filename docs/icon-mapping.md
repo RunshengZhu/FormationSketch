@@ -55,7 +55,7 @@
 | js/ui.js | `showMediaLibraryModal` 标题/活动资产行 | `📚 媒体库…` / `🎵 name` | `iconEl('library',20)` / `iconEl('music')`（DOM 断言通过） |
 | js/ui.js | `renderLibrary` 卡片音乐名/删除钮 | `🎵 name` / `🗑` | `iconEl('music')` / `iconEl('trash')` + aria-label（DOM 断言通过） |
 | js/manual.js | 正文 12 处入口引用（✂✏☰⇋⇅⇤⏮⏭▶↺↻⟳🎵） | emoji 字符 | 「`ic('razor')`+文字」内联 SVG；渲染输出含 17 个 `svg.ic`、A 组字符零残留（DOM 断言通过） |
-| js/manual.js | `LEGACY-CITE` 引用区（注释） | — | 保留五条测试钉死的原文（`✂ 拆开` 等），与 tests/manual.test.js 互锁，汇合点随该测试一并退役 |
+| js/manual.js | `LEGACY-CITE` 引用区（注释） | — | ~~保留五条测试钉死的原文~~ 已退役（2026-09-24 清理轮）：互锁的 manual.test.js 原文断言与 icons.test.js 互锁测试同轮移除、引用区删除（历史原文查 git 历史）；同轮 tests/page-matrix.js 已 git rm（v1 仪器，round14-v3 起废弃，历史在 git） |
 
 **验证**：`node --test tests/icons.test.js`（结构/齐全性/无回流/零漂移/接线约束 6 测）+ tests/manual.test.js 10/10 + tests/lib-menu-esc.test.js、tests/ux-conflict-fixes.test.js 16/16 + `node scripts/build-single.mjs` 冒烟 + 上述 DOM 输出断言。说明书可视提示已加一行「截图摄于图标化改造前，以新截图为准」（汇合重拍后移除）。
 
@@ -71,7 +71,7 @@ API：`iconHtml(name, size=16, label='')` → SVG 字符串（模板串/innerHTM
 
 1. `scripts/build-single.mjs` 的 `ORDER` 增补 `'icons'`（置于 `'ui'` 之前）；
 2. js/ui.js 删除哨兵块，改回 `import { iconHtml, iconEl } from './icons.js'`；
-3. Lane A 完成 index.html/main.js/timeline.js/gesture.js 的 A 组替换（本表「处理方=A」各条），同步受影响仪器（tests/page-r.js、tests/page-matrix.js 的 `✂ 拆开`/`✕` 文本断言）与 tests/manual.test.js 的 `📖 说明书`/原文断言（届时 manual.js 的 LEGACY-CITE 区与本文件第三节对应行一并退役）；
+3. Lane A 完成 index.html/main.js/timeline.js/gesture.js 的 A 组替换（本表「处理方=A」各条），同步受影响仪器（tests/page-r.js、tests/page-matrix.js 的 `✂ 拆开`/`✕` 文本断言）与 tests/manual.test.js 的 `📖 说明书`/原文断言（届时 manual.js 的 LEGACY-CITE 区与本文件第三节对应行一并退役）；〔收口注记 2026-09-24：page-matrix.js 已删除、LEGACY-CITE 区与原文/互锁断言已退役〕
 4. 重拍说明书九图（round31 资产，**本轮不重拍**：截图与 js/manual-assets.js 字幕含历史 emoji，页面已挂「以新截图为准」提示）→ 更新 scripts/manual-assets.json → `node scripts/gen-manual-assets.mjs` 重新生成。
 
 > **汇合轮（2026-09-26）执行完毕**，上述 1–4 全部落地，本节历史口径留档：

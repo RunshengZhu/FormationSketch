@@ -51,10 +51,11 @@ test('G3W4 键名映射：stage/music 各自键名（wuzhen:rulerScale.stage / .
   assert.equal(rulerScaleKeyOf('music'), 'wuzhen:rulerScale.music');
   assert.equal(rulerScaleKeyOf('anything-else'), 'wuzhen:rulerScale.stage', '非 music 一律按 stage 键（缺省分支）');
 });
-test('G3W5 缺省均=拍：无任何记忆时两模式都读出 beat', () => {
+test('G3W5 缺省（M1 决策⑤改写）：stage=拍、music=秒——无任何记忆时按模式取缺省', () => {
   assert.equal(resolveRulerScaleFor(ls(), 'stage'), 'beat');
-  assert.equal(resolveRulerScaleFor(ls(), 'music'), 'beat');
-  assert.equal(resolveRulerScaleFor(null, 'music'), 'beat', 'storage 不可用 → beat 兜底');
+  assert.equal(resolveRulerScaleFor(ls(), 'music'), 'sec', '音乐模式缺省秒刻度（音乐为底层，BPM 未校准拍网格无意义）');
+  assert.equal(resolveRulerScaleFor(null, 'music'), 'sec', 'storage 不可用 → music 缺省秒');
+  assert.equal(resolveRulerScaleFor(null, 'stage'), 'beat', 'storage 不可用 → stage 缺省拍');
 });
 test('G3W6 分键互不串：stage=sec、music=beat 各读各键；一侧改写不影响另一侧', () => {
   const store = ls({ 'wuzhen:rulerScale.stage': 'sec', 'wuzhen:rulerScale.music': 'beat' });

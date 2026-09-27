@@ -125,7 +125,23 @@ export function showLibCardMenu(x, y, p, acts) { // acts: {onOpen, onDuplicate, 
 
 // ---------- 媒体库弹窗（v3 音乐剪辑 · 规格 §3） ----------
 // 多文件导入 / 列表（名称·时长·大小）/ 用作配乐 / 重命名 / 删除（当前配乐删除需 confirm）；
-// 拖音频文件入弹窗=导入；资产行可拖到音轨落点生成 clip（dataTransfer: text/x-wuzhen-asset）。
+// 拖音频文件入弹窗=导入；资产行拖到时间轴音轨=落点生成 clip（dataTransfer:
+// text/x-wuzhen-asset）。
+// GOLD-DEFECT-1 残留修复（方案 b）：资产行只存在于弹窗内，而 .modal-back（fixed inset:0
+// z-index:100）在弹窗打开期间盖满视口——时间轴真正消费端 #tl-scroll 的 drop 永远不可达，
+// 行 tooltip「拖到时间轴…」曾是空头承诺。裁定：遮罩 drop 判定落点（clientX/Y）位于
+// #tl-scroll 矩形内时按落点转发 main.js 既有 sec/lane→createClipFromDrop 换算链（换算不在此
+// 重复造），弹窗保持打开——连拖多资产到不同轨/位置的多轨工作流可达。弃方案 a（dragstart
+// 即关弹窗）：拖拽是探索性手势、关窗出乎意料，且每次拖完须重开弹窗，连续拖多资产断裂。
+// 桥接：ui.js 反向 import main.js 是环，取 window CustomEvent('wuzhen:tl-asset-drop')
+// ——最小可测（判定纯函数 + node 桩断言派发，浏览器全管线由 CDP 真实拖拽探针覆盖）。
+// 纯判定：落点是否位于 #tl-scroll 矩形内（rect 缺失或零宽高=元素不存在/display:none，
+// 如移动端队形页签隐藏时间轴——一律不转发，文件导入等既有路径不受影响）。
+export function isAssetDropOverTimeline(clientX, clientY, tlRect) {
+  if (!tlRect || tlRect.width <= 0 || tlRect.height <= 0) return false;
+  return clientX >= tlRect.left && clientX <= tlRect.right
+    && clientY >= tlRect.top && clientY <= tlRect.bottom;
+}
 export function showMediaLibraryModal({ getProject, acts, toast: t }) {
   // acts: { importFiles(files), setActive(id), rename(id, name), remove(id) }
   const wrap = h('div', {});
@@ -138,13 +154,22 @@ export function showMediaLibraryModal({ getProject, acts, toast: t }) {
     const tb = assets.map(a => {
       const active = p.media.activeAssetId === a.id;
       const missing = !acts.hasBlob?.(a.id);
-      return h('div', { class: 'mlib-row' + (active ? ' mlib-active' : ''), draggable: 'true', title: missing ? '该资产音频数据缺失（重新导入文件可恢复）' : '拖到时间轴音轨可在落点生成剪辑' },
+      // GOLD-DEFECT-1（金动线 1.6 实测）：行 draggable=true 但从未派发 dragstart 写入
+      // text/x-wuzhen-asset——拖到时间轴 drop 处读不到资产 id，静默不生成 clip（契约注释
+      // 在、生产半环缺失）。补 dragstart 生产者：与 main.js tl-scroll drop 消费端配对。
+      const row = h('div', { class: 'mlib-row' + (active ? ' mlib-active' : ''), draggable: 'true', title: missing ? '该资产音频数据缺失（重新导入文件可恢复）' : '拖到时间轴音轨可在落点生成剪辑' },
         h('span', { class: 'mlib-name' }, ...(active ? [iconEl('music'), ' '] : []), a.name),
         h('span', { class: 'dim' }, `${(a.durationSec || 0).toFixed(1)}s · ${fmtSize(a.size)}${missing ? ' · 数据缺失' : ''}`),
         h('span', { class: 'grp-ops' },
           active ? h('span', { class: 'chip chip-on' }, '配乐') : h('button', { class: 'btn small', onclick: () => { acts.setActive(a.id); render(); } }, '用作配乐'),
           h('button', { class: 'btn small', onclick: () => { acts.rename(a.id); } }, '重命名'),
           h('button', { class: 'btn small danger', onclick: () => { acts.remove(a.id); render(); } }, '删除')));
+      row.addEventListener('dragstart', e => {
+        if (!e.dataTransfer) return;
+        e.dataTransfer.setData('text/x-wuzhen-asset', a.id);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      return row;
     });
     wrap.append(
       h('div', { class: 'prop-group' },
@@ -164,10 +189,16 @@ export function showMediaLibraryModal({ getProject, acts, toast: t }) {
   back.addEventListener('drop', e => {
     e.preventDefault();
     dragDepth = 0;
-    const files = [...(e.dataTransfer?.files || [])].filter(f => !f.type || f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
+    // 资产 drop 转发（裁定与桥接见 isAssetDropOverTimeline 上方注释）：
+    // 携带 text/x-wuzhen-asset 且落点在 #tl-scroll 矩形内 → 按落点转发，弹窗保持打开。
+    const dt = e.dataTransfer;
+    const assetId = dt && dt.types.includes('text/x-wuzhen-asset') ? dt.getData('text/x-wuzhen-asset') : '';
+    if (assetId && isAssetDropOverTimeline(e.clientX, e.clientY, document.getElementById('tl-scroll')?.getBoundingClientRect?.() || null)) {
+      window.dispatchEvent(new CustomEvent('wuzhen:tl-asset-drop', { detail: { assetId, clientX: e.clientX, clientY: e.clientY } }));
+      return; // 不走文件导入刷新——clip 创建由 main.js 消费端完成（store 订阅兜底重渲染）
+    }
+    const files = [...(dt?.files || [])].filter(f => !f.type || f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(f.name));
     if (files.length) { acts.importFiles(files); }
-    const assetId = e.dataTransfer?.getData('text/x-wuzhen-asset');
-    void assetId; // 弹窗内落点不生成 clip（落点在时间轴音轨）
     setTimeout(render, 600); // 导入是异步的：稍后刷新列表（订阅更新另有兜底）
   });
   const unsub = subscribe(() => { const np = getProject(); if (np) render(); });

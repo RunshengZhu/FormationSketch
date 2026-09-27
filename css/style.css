@@ -74,7 +74,8 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 #editor-view[data-uimode="music"] #music-strip{flex:1 1 auto;min-width:0;min-height:0}
 #editor-view[data-uimode="music"] #music-summary{display:none} /* 音乐模式职责已由 #music-toolbar 承接 */
 #editor-view[data-uimode="music"] #mobile-tabs{display:none}
-#editor-view[data-uimode="music"] #tl-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden}
+/* M2：纵滚归 #tl-scroll（轨头 sticky 列与 lane 区同滚，DAW 标准行为）；#tl-body 只做外框 */
+#editor-view[data-uimode="music"] #tl-body{flex:1 1 auto;min-height:0;overflow:hidden}
 #editor-view[data-uimode="music"] #tl-scroll{height:100%} /* 容器 flex 撑满；画布高由 render 实测推导 */
 #music-toolbar{display:none}
 #editor-view[data-uimode="music"] #music-toolbar{display:flex}
@@ -129,6 +130,23 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 #music-preview .mp-block{display:flex;flex-direction:column;gap:6px}
 #music-preview .ctl{white-space:nowrap}
 #music-preview .btn.step{padding:0 9px;line-height:20px;font-size:14px}
+/* M5（决策②）：preview 栏可折叠——默认展开，wuzhen:mpCollapsed 记忆（跨会话）。
+   折叠=只留头部窄条（画布/步进/对齐全部收纳，展开钮 ▸ 常驻）；仅桌面形态（≥1024px），
+   移动端 88px 横条不呈示头部（W3 §2.3 无折叠余量，记忆键在移动端不生效） */
+#music-preview .mp-head{display:flex;align-items:center;justify-content:space-between;flex:none;min-width:0}
+#music-preview .mp-title{font-weight:600;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (min-width:1024px){
+  #music-preview.mp-collapsed{flex:0 0 42px;align-items:stretch;padding:8px 5px;overflow:hidden}
+  #music-preview.mp-collapsed .mp-head{justify-content:center}
+  #music-preview.mp-collapsed .mp-title,
+  #music-preview.mp-collapsed #mp-canvas,
+  #music-preview.mp-collapsed .mp-name,
+  #music-preview.mp-collapsed .mp-block,
+  #music-preview.mp-collapsed #mp-align{display:none}
+}
+@media (max-width:1023.5px){
+  #music-preview .mp-head{display:none}
+}
 /* W3 C17（修 P12）：音乐模式数拍入场大字——盖在 preview 条上（桌面=280 纵栏、移动=88 横条皆居中）。
    编舞模式走 #stage-wrap>#countin-overlay 既有路径（该元素随 #editor-main 隐藏，无干扰） */
 #mp-countin{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;
@@ -266,27 +284,39 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 /* C12 空态（W2 合并）：一行灰字浮于音频简单道上，点击跳音乐模式；旧双钮已退役 */
 #tl-audio-empty{position:absolute;left:10px;z-index:7;display:flex;align-items:center;color:var(--dim);font-size:12px;cursor:pointer;user-select:none}
 #tl-audio-empty:hover{color:var(--acc)}
-#tl-scroll{overflow-x:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120/展开160 写入 */
-#tl-inner{position:relative;height:100%}
-#tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
 /* ---- v3 音频轨附属 DOM 层 ----
-   #tl-body 定位上下文：多轨轨头/空态入口绝对定位其上，top 由 timeline.render 按几何写入。
-   W1 退役：#tl-audio-toggle 展开钮与 #tl-head 展开态表头样式随 DOM 一并删除（C6/C7）。 */
-#tl-body{position:relative}
-/* ---- v3 音频轨附属 DOM 层 ----
-   #tl-body 定位上下文：多轨轨头/空态入口绝对定位其上，top 由 timeline.render 按几何写入。
+   M2（轨头 container 化）：#tl-scroll = 唯一滚动容器（横滚=内容宽、纵滚=轨多时），
+   .tl-grid = flex 行容器（width:max-content；轨头列 + lane 区同一行）——
+   轨头 sticky 左缘固定，canvas 从轨头列右缘起绘，物理无重叠（遮挡/错位按构造消失）。
    W1 退役：#tl-audio-toggle 展开钮与 #tl-head 展开态表头样式随 DOM 一并删除（C6/C7）。
    W2（C12）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（样式见 #music-summary 区块）。 */
-#tl-tracks-head{position:absolute;left:0;z-index:7;width:140px;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;row-gap:12px;font-size:11px;overflow:hidden}
-#tl-tracks-head .tl-track{border-top:1px solid var(--line);padding:2px 6px;display:flex;flex-direction:column;justify-content:flex-start;gap:2px;overflow:hidden}
-#tl-tracks-head .tl-track:first-child{border-top:none}
+#tl-body{position:relative}
+#tl-scroll{overflow:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120 写入；music 模式 height:100%+纵横滚 */
+#tl-inner{position:relative;height:100%}
+#tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
+/* 轨头列（sticky 左缘固定，M2）：width 148 桌面；corner/corner2/track 行高与画布同变量对齐。
+   行距只用「track+track 12px」兄弟 margin（不用容器 row-gap）——ops 行紧贴末行，
+   与画布「末 lane 底 + ops 26px」逐像素同构（旧浮层 12px 错位 E58-08 按构造消失） */
+.tl-grid{display:flex;min-width:100%;width:max-content}
+#tl-tracks-head{position:sticky;left:0;z-index:5;width:148px;flex:none;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;font-size:11px;overflow:hidden}
+#tl-tracks-head .tlh-corner{height:22px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 6px;color:var(--dim);font-size:10px}
+#tl-tracks-head .tlh-corner2{height:28px;flex:none;border-bottom:1px solid var(--line)}
+#tl-tracks-head .tlh-track{flex:none;border-bottom:1px solid var(--line);padding:2px 6px;display:flex;flex-direction:column;justify-content:flex-start;gap:2px;overflow:hidden}
+#tl-tracks-head .tlh-track + .tlh-track{margin-top:12px}
 #tl-tracks-head .tlt-row{display:flex;align-items:center;gap:3px;min-width:0}
 #tl-tracks-head .tlt-name{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+#tl-tracks-head .tlt-name input{width:100%;min-width:0;font-size:11px;padding:0 3px;line-height:1.4}
 #tl-tracks-head .tlt-row input[type=range]{width:46px;padding:0;height:14px;flex:1}
 #tl-tracks-head .btn{padding:0 5px;line-height:16px;font-size:11px}
 #tl-tracks-head .btn:disabled{opacity:.35}
 #tl-tracks-head .tlt-mut.toggled-on{color:var(--acc)}
-#tl-tracks-head .tl-tracks-ops{height:26px;display:flex;align-items:center;gap:4px;padding:0 6px;border-top:1px solid var(--line)}
+#tl-tracks-head .tlh-ops{flex:none;height:26px;display:flex;align-items:center;gap:4px;padding:0 6px;border-top:1px solid var(--line)}
+/* 移动端 375：轨头列收窄（仅轨名+静音——音量/信息/删轨/加轨文字收纳） */
+@media (max-width:1023.5px){
+  #tl-tracks-head{width:96px}
+  #tl-tracks-head .tlt-del,#tl-tracks-head .tlt-vol,#tl-tracks-head .tlt-info{display:none}
+  #tl-tracks-head .tlh-ops .btn{font-size:10px;padding:0 3px}
+}
 /* 音频剪辑右键菜单（与 .unit-menu 同风格，固定定位跟光标） */
 #clip-ctx-menu .um-btn{display:block;width:100%;text-align:left}
 #clip-ctx-menu .ctx-swatches{display:flex;gap:4px;padding:4px 6px}

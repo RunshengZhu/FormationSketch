@@ -2,8 +2,8 @@
 // 覆盖四类断言：
 //   1) js/icons.js 结构：注册表齐全（A 组语义图标全收录）、iconHtml/iconEl 产物合规
 //      （stroke=currentColor / fill=none / viewBox / 尺寸两档 / 未知名空串 / aria 语义 / data-icon 标识）；
-//   2) 无 emoji 回流：js/ui.js 全文、js/manual.js（LEGACY-CITE 引用区之外）A 组字符为零，
-//      icons.js 本身零 emoji；引用区与 tests/manual.test.js「实测原文」断言互相锁死；
+//   2) 无 emoji 回流：js/ui.js 全文、js/manual.js 全文 A 组字符为零（LEGACY-CITE 引用区已随
+//      W4 重拍收口退役，互锁的 manual.test.js 原文断言同轮移除），icons.js 本身零 emoji；
 //   3) 接线形态（汇合轮改写，原「零漂移」哨兵约束随哨兵块退役）：ui.js 不得内嵌图标注册表
 //      拷贝（单一事实源回归 icons.js），只经 import + re-export 取用；
 //   4) 打包接线约束（汇合轮翻转）：scripts/build-single.mjs 的 ORDER 已含 'icons' 且置于
@@ -60,33 +60,16 @@ test('iconHtml：线性单色 currentColor / viewBox / 尺寸 / 未知名空串 
   delete globalThis.document;
 });
 
-// ---------- 2) 无 emoji 回流 ----------
-const cutCite = src => {
-  const a = src.indexOf('// —— LEGACY-CITE-BEGIN');
-  const b = src.indexOf('—— LEGACY-CITE-END ——');
-  assert.ok(a >= 0 && b > a, 'manual.js 应保留 LEGACY-CITE 引用区（与 tests/manual.test.js 原文断言互锁）');
-  return src.slice(0, a) + src.slice(b + '—— LEGACY-CITE-END ——'.length);
-};
-
-test('无 emoji 回流：ui.js 全文 / manual.js（引用区外）/ icons.js 的 A 组字符为零', () => {
+// ---------- 2) 无 emoji 回流（LEGACY-CITE 引用区已退役，manual.js 全文检查） ----------
+test('无 emoji 回流：ui.js 全文 / manual.js 全文 / icons.js 的 A 组字符为零', () => {
   const uiSrc = read('js/ui.js');
   for (const ch of A_GROUP) assert.ok(!uiSrc.includes(ch), `js/ui.js 不应再含 A 组字符 ${ch}`);
-  const manSrc = cutCite(read('js/manual.js'));
-  for (const ch of A_GROUP) assert.ok(!manSrc.includes(ch), `js/manual.js（引用区外）不应含 A 组字符 ${ch}`);
+  const manSrc = read('js/manual.js');
+  for (const ch of A_GROUP) assert.ok(!manSrc.includes(ch), `js/manual.js 不应含 A 组字符 ${ch}`);
   const iconsSrc = read('js/icons.js');
   for (const ch of [...A_GROUP, '💃']) assert.ok(!iconsSrc.includes(ch), `js/icons.js 不应含 emoji 字符 ${ch}（→ ← 等文本箭头注释不在此限）`);
   for (const rel of ['js/ui.js', 'js/manual.js', 'js/icons.js']) {
     assert.ok(!read(rel).includes('\uFE0F'), `${rel} 不应含 VS16 变体选择符`);
-  }
-});
-
-test('LEGACY-CITE 引用区与 manual.test.js 原文断言互锁：五条含 emoji 原文在位', () => {
-  const src = read('js/manual.js');
-  const a = src.indexOf('// —— LEGACY-CITE-BEGIN');
-  const b = src.indexOf('—— LEGACY-CITE-END ——');
-  const cite = src.slice(a, b);
-  for (const t of ['「✂ 拆开」', '「✏ 编辑」', '「🎵 音乐与节拍」', '「⇤ 对齐到播放头」', '「☰ 多选」']) {
-    assert.ok(cite.includes(t), `引用区应含 ${t}（tests/manual.test.js「实测原文」断言依赖；两测试须同进退）`);
   }
 });
 

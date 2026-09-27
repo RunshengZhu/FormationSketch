@@ -6,7 +6,7 @@
 import { drawScene } from './stage.js';
 import { computeSegments, spb, beatToSec, secToBeat, beatLabel,
   addTag, removeTag, renameTag, moveTag, tagById, nextTagName, TAG_NAME_MAX,
-  clipsOf, TRACK_MAX, trackOfClip, moveClipToTrack } from './model.js';
+  clipsOf, TRACK_MAX, trackOfClip, moveClipToTrack, musicDomainSec } from './model.js';
 import {
   clipEnd, computeOverlaps, applyAutoCrossfades, pruneAutoCrossfades,
   trimClipLeftAnchored, trimClipLeftBoundary, trimClipRightAnchored, trimClipRightBoundary,
@@ -21,7 +21,8 @@ import {
 export const AUDIO_SIMPLE_H = 26;    // 简单态音轨高（常驻，每条轨 lane）
 export const AUDIO_EXPANDED_H = 72;  // 展开态（Audition Lite）音轨高（保留常量供几何换算；W1 起无展开态入口）
 export const TRACKS_OPS_H = 26;      // 多轨加轨条高（音乐模式底部 DOM 条：＋加轨；轨满时 disabled 提示）
-const TRIM_TOL_PX = 6;               // clip 缘/把手命中半径
+const TRIM_TOL_PX = 10;              // clip 缘/把手命中半径（M3 T2：6→10px 低缩放可命中）
+const TRIM_TOL_TOUCH_PX = 14;        // 触屏指针的 trim 缘命中半径（M3 T7：finger 精度放宽）
 const SNAP_TOL_PX = 8;               // 磁吸阈值（像素，时间域换算）
 const ZC_RADIUS_SEC = 0.004;         // 零交叉吸附半径（消切点咔哒）
 const r6 = v => Math.round(v * 1e6) / 1e6;
@@ -68,7 +69,9 @@ export function resolveInitialUiMode(ls) {
   return 'stage';
 }
 // ---- W3 尺规刻度按模式分键（整改方案 §4.3①）：wuzhen:rulerScale.stage / .music 各自记忆，互不串 ----
-// 缺省均=拍；旧单键 wuzhen:rulerScale 一次性播种到「当前模式」键后退役（读后即删，另一模式保持缺省拍）。
+// 缺省：stage=拍（编舞恒定 BPM 口径不变）；music=秒（M1 决策⑤——音乐为底层，BPM 未校准时
+// 拍网格无意义，秒刻度才是缺省；老用户已选过则各自记忆键兜底，不受缺省变化影响）。
+// 旧单键 wuzhen:rulerScale 一次性播种到「当前模式」键后退役（读后即删，另一模式保持各自缺省）。
 // 纯函数（node 可测）；ls 只需 {getItem,setItem,removeItem}。
 export function rulerScaleKeyOf(mode) {
   return mode === 'music' ? 'wuzhen:rulerScale.music' : 'wuzhen:rulerScale.stage';
@@ -77,13 +80,13 @@ export function resolveRulerScaleFor(ls, mode) {
   let v = null;
   try { v = ls?.getItem?.(rulerScaleKeyOf(mode)) ?? null; } catch {}
   if (v === 'sec' || v === 'beat') return v;
-  // 旧单键迁移：有值 → 播种当前模式键并退役旧键；无值/异常 → 缺省拍
+  // 旧单键迁移：有值 → 播种当前模式键并退役旧键；无值/异常 → 模式缺省（stage=拍、music=秒）
   try { v = ls?.getItem?.('wuzhen:rulerScale') ?? null; } catch {}
   if (v === 'sec' || v === 'beat') {
     try { ls?.setItem?.(rulerScaleKeyOf(mode), v); ls?.removeItem?.('wuzhen:rulerScale'); } catch {}
     return v;
   }
-  return 'beat';
+  return mode === 'music' ? 'sec' : 'beat';
 }
 // 秒刻度（决策⑥降级刻度）：NICE 秒族主刻度步长——取「像素宽 ≥68px」的最小步长。
 // lightmix NICE_STEPS 秒族口径（0.1…3600），供变速曲/无节拍音乐按秒对齐。
@@ -383,11 +386,22 @@ export class MusicTimeline {
   // 保留只读访问器兼容既有仪器快照（window.__fs.snapshot().audioTrack.expanded）。
   get expanded() { return this.mode === 'music'; }
   pxPerSec() { return this.secPerPx ? 1 / this.secPerPx : 0; }
+  // 时间轴域长（秒）：music=音乐域（musicDomainSec——秒制基座，M1）；stage=blocks 域（逐值不动）。
+  domainSecOf(p) {
+    if (this.mode !== 'music') {
+      const { totalBeats } = computeSegments(p);
+      return beatToSec(p, totalBeats) || 10;
+    }
+    return musicDomainSec(p);
+  }
   layoutWidth(p) {
-    const { totalBeats } = computeSegments(p);
-    const totalSec = beatToSec(p, totalBeats) || 10;
     const w0 = this.scroll.clientWidth || 600;
-    return Math.max(w0, this.secPerPx ? totalSec / this.secPerPx : totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
+    if (this.secPerPx) return Math.max(w0, this.domainSecOf(p) / this.secPerPx);
+    // 自适应：music=fit 即地板（域+2s 尾余量铺满容器，缩到底=整曲入画，无「细缝+空底」）；
+    // stage=既有公式逐值不动（红线）。
+    if (this.mode === 'music') return Math.max(w0, musicDomainSec(p) * (w0 / (musicDomainSec(p) + 2)));
+    const totalSec = this.domainSecOf(p);
+    return Math.max(w0, totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
   }
   // ---- v3 几何：音频轨夹在划分轨（tag 道）与队形块区之间，块区改为紧随其后（不再底部锚定） ----
   // 多轨（汇合轮）：编舞模式恒单 lane（既有行为，含多轨数据项目）；音乐模式每轨一条 lane。
@@ -512,21 +526,19 @@ export class MusicTimeline {
     }
     ctx.restore();
   }
-  // 音频轨 DOM 附属（多轨轨头、空态入口）随几何同步。
+  // 音频轨 DOM 附属（轨头显隐、空态入口）随几何同步。
   // W1 退役（C6/C7/C16）：#tl-audio-toggle 展开钮与 #tl-head 编舞展开态表头整体删除，
   // 互斥显示逻辑随之消亡——轨头只看 music 模式。
   // W2（C12 空态合并）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（点击跳音乐模式，
   // main.js 接线），只在编舞模式无音乐时呈示；音乐模式空态由工具条资产组承接（恒可见载入/媒体库）。
+  // M2（轨头 container 化）：轨头浮层定位（top/height 内联写入）整段退役——轨头改为 #tl-scroll
+  // 内 sticky flex 列（与 lane 区同一行容器），行高对齐按构造成立，遮挡与错位按构造消失。
   syncAudioDom(p) {
     if (typeof document === 'undefined') return;
     const media = this.hasMedia(p);
     const multi = this.mode === 'music';
     const th = document.getElementById('tl-tracks-head');
-    if (th) {
-      th.hidden = !multi;
-      th.style.top = this.audioTop() + 'px';
-      th.style.height = (this.audioBottom(p) - this.audioTop()) + TRACKS_OPS_H + 'px';
-    }
+    if (th) th.hidden = !multi;
     const empty = document.getElementById('tl-audio-empty');
     if (empty) {
       empty.hidden = !(this.mode === 'stage' && !media); // 仅编舞模式无音乐时呈示灰字
@@ -664,13 +676,20 @@ export class MusicTimeline {
       };
       if ((c.fadeInSec || 0) > 0.005) drawFh(x0 + c.fadeInSec * pps, !!c.fadeInAuto);
       if ((c.fadeOutSec || 0) > 0.005) drawFh(x1 - c.fadeOutSec * pps, !!c.fadeOutAuto);
-      // trim 缘（红括号光标区）
-      const hotL = this.hoverClipEdge?.id === c.id && this.hoverClipEdge.part === 'trimL';
-      const hotR = this.hoverClipEdge?.id === c.id && this.hoverClipEdge.part === 'trimR';
-      ctx.fillStyle = hotL ? '#f43f5e' : 'rgba(244,63,94,.5)';
-      ctx.fillRect(x0 - 1.5, y0, 3, y1 - y0);
-      ctx.fillStyle = hotR ? '#f43f5e' : 'rgba(244,63,94,.5)';
-      ctx.fillRect(x1 - 1.5, y0, 3, y1 - y0);
+      // trim 缘（M3 T1）：两端把手 glyph 常驻（竖把×2+中缺刻，Audition 式）——hover 增亮至实色
+      // +外描边、选中呈实色；laneH<40 或 clip 宽<24px 降级为既有 3px 半透明线（窄盒防糊）。
+      // 命中热区与 glyph 解耦（_audioHit：10px/触屏 14px），把手只承担「可见」。
+      const hotL = this.hoverClipEdge?.id === c.id && (this.hoverClipEdge.part === 'trimL' || this.hoverClipEdge.part === 'trimLB');
+      const hotR = this.hoverClipEdge?.id === c.id && (this.hoverClipEdge.part === 'trimR' || this.hoverClipEdge.part === 'trimRB');
+      if (lh < 40 || w < 24) {
+        ctx.fillStyle = hotL ? '#f43f5e' : 'rgba(244,63,94,.5)';
+        ctx.fillRect(x0 - 1.5, y0, 3, y1 - y0);
+        ctx.fillStyle = hotR ? '#f43f5e' : 'rgba(244,63,94,.5)';
+        ctx.fillRect(x1 - 1.5, y0, 3, y1 - y0);
+      } else {
+        this._drawTrimGrip(ctx, x0, y0, y1, hotL ? 2 : selected ? 1 : 0);
+        this._drawTrimGrip(ctx, x1, y0, y1, hotR ? 2 : selected ? 1 : 0);
+      }
     }
     // 选中高亮描边
     if (selected) {
@@ -679,6 +698,24 @@ export class MusicTimeline {
       ctx.strokeRect(x0 - 1, y0 - 1, w + 2, y1 - y0 + 2);
     }
     ctx.restore();
+  }
+  // M3 T1：trim 把手 glyph。mode：0=常驻（半透明可见）1=选中 clip（近实色）2=hover（实色+外描边）。
+  // 形态：缘线贯穿全高（细）+ 中线上下两截竖把、中间 3px 缺刻（Audition 修剪把手式样）。
+  _drawTrimGrip(ctx, x, y0, y1, mode) {
+    const mid = (y0 + y1) / 2;
+    const a = mode === 2 ? 1 : mode === 1 ? .95 : .6;
+    ctx.fillStyle = `rgba(244,63,94,${(a * .7).toFixed(3)})`;
+    ctx.fillRect(x - 1, y0, 2, y1 - y0);          // 缘线（全高贯穿）
+    ctx.fillStyle = `rgba(244,63,94,${a})`;
+    ctx.fillRect(x - 2.5, mid - 9.5, 5, 8);       // 上竖把
+    ctx.fillRect(x - 2.5, mid + 1.5, 5, 8);       // 下竖把（中缺刻 3px）
+    if (mode === 2) {                              // hover 强化：外描边
+      ctx.strokeStyle = 'rgba(244,63,94,.95)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x - 3.5, mid - 10.5, 7, 10);
+      ctx.strokeRect(x - 3.5, mid + .5, 7, 10);
+      ctx.lineWidth = 1;
+    }
   }
 
   drawRuler(ctx, p, h) {
@@ -716,8 +753,10 @@ export class MusicTimeline {
     const spbV = spb(p);
     const pxPerBar = bpb * spbV * pps;
     const barStep = pxPerBar < 26 ? 8 : pxPerBar < 60 ? 4 : 1;
-    const { totalBeats } = computeSegments(p);
-    const totalBars = Math.ceil(beatToSec(p, totalBeats) / spbV / bpb) + 2;
+    // 小节线域：music=音乐域秒（拍网格 overlay 覆盖整个秒域——blocks 短于音频时小节线不中途断尾）；
+    // stage=blocks 域（逐值不动）。
+    const barsDomainSec = this.mode === 'music' ? musicDomainSec(p) : beatToSec(p, computeSegments(p).totalBeats);
+    const totalBars = Math.ceil(barsDomainSec / spbV / bpb) + 2;
     ctx.beginPath();
     for (let bar = 0; bar <= totalBars; bar += barStep) {
       const x = beatToSec(p, bar * bpb) * pps;
@@ -903,7 +942,7 @@ export class MusicTimeline {
     this._tagGeom = new Map();
     this._segGeom = [];
     const COLORS = MusicTimeline.SEG_COLORS;
-    const { segs } = sectionSegmentsOf(p);
+    const { segs } = sectionSegmentsOf(p, this.segDomainBeat(p));
     ctx.save();
     ctx.fillStyle = 'rgba(148,163,184,.07)';
     ctx.fillRect(0, top, this.W, H);
@@ -990,11 +1029,17 @@ export class MusicTimeline {
     return null;
   }
   inTagLane(y) { return y > (this.rulerH ?? TL_RULER_H) && y <= (this.rulerH ?? TL_RULER_H) + this.segLaneH(); }
+  // 划分域 override（M1 D4）：music 模式末段终点=音乐域换算拍（划分覆盖到音频末，blocks 短于音频
+  // 时后半也能划分/呈示）；stage 返回 undefined → sectionSegmentsOf 走现状 totalBeats（红线零变化）。
+  segDomainBeat(p) {
+    if (this.mode !== 'music') return undefined;
+    return Math.max(1, secToBeat(p, musicDomainSec(p)));
+  }
   segAt(x) { // 段命中（音乐模式）：拍位落在哪个段区间 → 段（含段起点 tag）
     const p = this.hooks.getProject();
     if (!p) return null;
     const beat = this.xToBeat(x);
-    const { segs } = sectionSegmentsOf(p);
+    const { segs } = sectionSegmentsOf(p, this.segDomainBeat(p));
     return segs.find(s => beat >= s.start && beat < s.end) || null;
   }
   _tagTitle(x, y) { // 原生 title：旗点=名称+拍位；×=删除
@@ -1055,7 +1100,8 @@ export class MusicTimeline {
     const beat = Math.max(0, Math.round((this.hooks.getPlayer?.()?.beat || 0) * 100) / 100);
     const x = beatToSec(p, beat) * this.ppsOf(p);
     const sc = this.scroll;
-    if (x < sc.scrollLeft + 8 || x > sc.scrollLeft + sc.clientWidth - 130) sc.scrollLeft = Math.max(0, x - 80);
+    const headW = this.headWidth(); // M2：可视区右缘扣除轨头列宽
+    if (x < sc.scrollLeft + 8 || x > sc.scrollLeft + sc.clientWidth - headW - 130) sc.scrollLeft = Math.max(0, x - 80);
     this._openTagInput({ beat });
   }
   drawPlayhead() {
@@ -1078,6 +1124,10 @@ export class MusicTimeline {
   }
   ppsOf(p) {
     if (this.secPerPx) return 1 / this.secPerPx;
+    if (this.mode === 'music') {
+      // music：auto pps=fit（域+2s 尾余量，IR-M1-1「auto 画布域=音频时长+2s」）
+      return this.W / (musicDomainSec(p) + 2);
+    }
     const { totalBeats } = computeSegments(p);
     const totalSec = Math.max(beatToSec(p, totalBeats), 5);
     return this.W / (totalSec + 1);
@@ -1091,6 +1141,17 @@ export class MusicTimeline {
   zoom(factor) {
     const p = this.hooks.getProject();
     const cur = this.ppsOf(p);
+    if (this.mode === 'music') {
+      // M1 缩放基座（music）：上限=8192/音乐域（画布像素上限 4096→8192，长曲亦能进）；
+      // 下限=fit 地板（缩到底=整曲入画，根除「左侧细缝+大片空底」E58-12）。
+      const domainSec = musicDomainSec(p);
+      const w0 = this.scroll.clientWidth || 600;
+      const maxPps = 8192 / domainSec;
+      const fitPps = w0 / (domainSec + 2);
+      this.secPerPx = 1 / Math.min(Math.max(cur * factor, fitPps), maxPps);
+      this.render();
+      return;
+    }
     const { totalBeats } = computeSegments(p);
     const totalSec = Math.max(beatToSec(p, totalBeats), 1);
     const maxPps = 4096 / totalSec; // 画布宽度上限，防止超出浏览器 canvas 尺寸限制
@@ -1115,7 +1176,7 @@ export class MusicTimeline {
         e.preventDefault();
         const hit = this.tagAt(x);
         const seg = hit
-          ? sectionSegmentsOf(p).segs.find(s => s.tag.id === hit.tag.id) || null
+          ? sectionSegmentsOf(p, this.segDomainBeat(p)).segs.find(s => s.tag.id === hit.tag.id) || null
           : this.segAt(x);
         this.hooks.onSegContextMenu?.({
           tagId: seg ? seg.tag.id : null,
@@ -1126,7 +1187,7 @@ export class MusicTimeline {
       }
       if (y < this.audioTop() || y > this.audioBottom(p) || !clipsOf(p).length) return;
       e.preventDefault();
-      const hit = this._audioHit(x, y, clipsOf(p));
+      const hit = this._audioHit(x, y, clipsOf(p), e.pointerType === 'touch');
       this.hooks.onClipContextMenu?.({
         clipId: hit ? hit.clip.id : null,
         screenX: e.clientX, screenY: e.clientY,
@@ -1158,22 +1219,35 @@ export class MusicTimeline {
       }
     }, { passive: false });
   }
-  // 锚定缩放：anchorClientX（视口坐标）下的时间点在缩放后保持原屏幕位
+  // 锚定缩放：anchorClientX（视口坐标）下的时间点在缩放后保持原屏幕位。
+  // M2：canvas x=0 在轨头列右缘——时间↔容器坐标换算统一经 headWidth() 偏移（轨头隐藏=0，公式退化为旧式）。
+  headWidth() {
+    const th = typeof document !== 'undefined' ? document.getElementById('tl-tracks-head') : null;
+    return (th && !th.hidden && this.mode === 'music') ? (th.offsetWidth || 0) : 0;
+  }
   zoomAt(factor, anchorClientX) {
     const p = this.hooks.getProject();
     if (!p) return;
     const oldPps = this.ppsOf(p);
     const rect = this.scroll.getBoundingClientRect();
-    const anchorSec = (anchorClientX - rect.left + this.scroll.scrollLeft) / oldPps;
+    const headW = this.headWidth();
+    const anchorSec = Math.max(0, (anchorClientX - rect.left - headW + this.scroll.scrollLeft) / oldPps);
     this.zoom(factor);
     const newPps = this.ppsOf(p);
-    if (newPps > 0) this.scroll.scrollLeft = Math.max(0, anchorSec * newPps - (anchorClientX - rect.left));
+    if (newPps > 0) this.scroll.scrollLeft = Math.max(0, headW + anchorSec * newPps - (anchorClientX - rect.left));
   }
-  // 视口坐标 → 时间线秒（C13 落点换算用）
+  // M4：－/＋ 缩放按钮的中心锚定——以视口（轨头列右侧 lane 区）水平中点为锚，缩放前后
+  // 中心秒不变（现状按钮锚左缘，放大时视野持续向右漂）。复用 zoomAt 的锚定换算。
+  zoomCenter(factor) {
+    const rect = this.scroll.getBoundingClientRect();
+    const headW = this.headWidth();
+    this.zoomAt(factor, rect.left + headW + (rect.width - headW) / 2);
+  }
+  // 视口坐标 → 时间线秒（C13 落点换算用）。M2：经 canvas 实测 rect（自动含轨头列宽与横滚偏移），
+  // 与「画布 x=0 在轨头右缘」的新几何自洽。
   secFromClientX(clientX) {
     const p = this.hooks.getProject();
-    const r = this.scroll.getBoundingClientRect();
-    return Math.max(0, (clientX - r.left + this.scroll.scrollLeft) / this.ppsOf(p));
+    return Math.max(0, (clientX - this.cv.getBoundingClientRect().left) / this.ppsOf(p));
   }
   edgeHits(x) {
     if (this.mode !== 'stage') return []; // 音乐模式：块区隐藏，块边命中/拖边把手一并关闭
@@ -1272,11 +1346,14 @@ export class MusicTimeline {
   // ---- v3 音频轨命中与手势 ----
   // 命中链（展开态）：fade 把手 → trim 缘 → 增益横线 → 盒体；简单态只有盒体（拖移/点击定位）。
   // 多轨（汇合轮）：音乐模式先按 y 定 lane，只命中该轨 clip；编舞模式单 lane 全量（既有）。
-  _audioHit(x, y, clips) {
+  // M3 T2/T7：命中半径 mouse/pen=10px（TRIM_TOL_PX）、touch=14px（TRIM_TOL_TOUCH_PX）；
+  // 「顶部 12px 归淡化」分区维持不变（T2 口径）。
+  _audioHit(x, y, clips, touch = false) {
     const p = this.hooks.getProject();
     const pps = this.ppsOf(p);
     const n = this.trackCount(p);
     const lh = this.audioLaneH();
+    const tol = touch ? TRIM_TOL_TOUCH_PX : TRIM_TOL_PX;
     let laneClips = clips, laneTop = this.audioTop();
     if (n > 1) {
       const li = this.laneIndexAt(p, y);
@@ -1288,12 +1365,12 @@ export class MusicTimeline {
     for (let i = laneClips.length - 1; i >= 0; i--) { // 数组顺序即 z 序，顶层优先
       const c = laneClips[i];
       const x0 = c.timelineStartSec * pps, x1 = clipEnd(c) * pps;
-      if (x < x0 - TRIM_TOL_PX || x > x1 + TRIM_TOL_PX) continue;
+      if (x < x0 - tol || x > x1 + tol) continue;
       if (!this.expanded) return { clip: c, part: 'body' };
-      if ((c.fadeInSec || 0) > 0.005 && Math.abs(x - (x0 + c.fadeInSec * pps)) <= TRIM_TOL_PX && y - laneTop <= 12) return { clip: c, part: 'fadeIn' };
-      if ((c.fadeOutSec || 0) > 0.005 && Math.abs(x - (x1 - c.fadeOutSec * pps)) <= TRIM_TOL_PX && y - laneTop <= 12) return { clip: c, part: 'fadeOut' };
-      if (Math.abs(x - x0) <= TRIM_TOL_PX) return { clip: c, part: 'trimL' };
-      if (Math.abs(x - x1) <= TRIM_TOL_PX) return { clip: c, part: 'trimR' };
+      if ((c.fadeInSec || 0) > 0.005 && Math.abs(x - (x0 + c.fadeInSec * pps)) <= tol && y - laneTop <= 12) return { clip: c, part: 'fadeIn' };
+      if ((c.fadeOutSec || 0) > 0.005 && Math.abs(x - (x1 - c.fadeOutSec * pps)) <= tol && y - laneTop <= 12) return { clip: c, part: 'fadeOut' };
+      if (Math.abs(x - x0) <= tol) return { clip: c, part: 'trimL' };
+      if (Math.abs(x - x1) <= tol) return { clip: c, part: 'trimR' };
       if (Math.abs(y - laneMid) <= 5 && x >= x0 && x <= x1) return { clip: c, part: 'gain' };
       return { clip: c, part: 'body' };
     }
@@ -1366,7 +1443,7 @@ export class MusicTimeline {
     try { this.cv.setPointerCapture(e.pointerId); } catch {}
     // 剃刀：点击 clip 即分割（C6）
     if (this.razor) {
-      const hit = this._audioHit(x, y, clips);
+      const hit = this._audioHit(x, y, clips, e.pointerType === 'touch');
       if (hit && editable) {
         this.hooks.pauseIfPlaying?.();
         this.hooks.mutateLabeled?.(pr => { splitClipAt(pr.timeline.audioClips, hit.clip.id, sec); }, '分割音频剪辑');
@@ -1380,7 +1457,7 @@ export class MusicTimeline {
       this.drag = { kind: 'xFade', a: ov.a, b: ov.b, startX: x, moved: false, ovStart: ov.start, ovEnd: ov.end };
       return;
     }
-    const hit = this._audioHit(x, y, clips);
+    const hit = this._audioHit(x, y, clips, e.pointerType === 'touch');
     if (hit) {
       if (e.ctrlKey || e.metaKey) {
         if (this.clipSel.has(hit.clip.id)) this.clipSel.delete(hit.clip.id);
@@ -1476,7 +1553,7 @@ export class MusicTimeline {
         hoverTag = hit ? hit.tag.id : this._tagGeomHit(x, 8);
         if (this.mode === 'music') {
           // 段悬停高亮：悬停旗点=旗所指段；悬停段身=所在段
-          if (hit) hoverSegId = sectionSegmentsOf(p).segs.find(s => s.tag.id === hit.tag.id)?.tag.id || null;
+          if (hit) hoverSegId = sectionSegmentsOf(p, this.segDomainBeat(p)).segs.find(s => s.tag.id === hit.tag.id)?.tag.id || null;
           else hoverSegId = this.segAt(x)?.tag.id || null;
         }
       } else if (p && y >= this.audioTop() && y <= this.audioBottom(p) && clipsOf(p).length) {
@@ -1494,12 +1571,17 @@ export class MusicTimeline {
         this.hoverAudio = true;
         const clips = clipsOf(p);
         if (!this._xFadeHit(x, y, clips)) {
-          const hit = this._audioHit(x, y, clips);
+          const hit = this._audioHit(x, y, clips, e.pointerType === 'touch');
           if (hit) {
             this.hoverClipEdge = { id: hit.clip.id, part: hit.part };
             const cursors = { trimL: 'ew-resize', trimR: 'ew-resize', trimLB: 'ew-resize', trimRB: 'ew-resize', fadeIn: 'ew-resize', fadeOut: 'ew-resize', gain: 'ns-resize', body: this.razor ? 'crosshair' : 'grab' };
             this.cv.style.cursor = this.razor ? 'crosshair' : (cursors[hit.part] || 'default');
             this._tagTitle(x, y);
+            // M3 T2：trim 把手 tooltip（可发现性）——把手常驻 glyph 的语义提示；非 trim 部件清空
+            //（_tagTitle 已先行清掉 tag 道之外的 title，此处只在 trim 缘覆写）
+            this.cv.title = (hit.part === 'trimL' || hit.part === 'trimR')
+              ? '拖动=修剪（内容跟手）· Shift=只移边界'
+              : '';
             this.render();
             return;
           }
@@ -1794,14 +1876,17 @@ export class MusicTimeline {
     }, '修剪到时间选区');
     this.render();
   }
-  // C3：←/→ 微移（plain=逐帧 10ms；Shift=按网格步进即整拍）
-  nudgeSelected(deltaSec, { grid = false } = {}) {
+  // C3：←/→ 微移（plain=逐帧 10ms；Shift=按网格步进即整拍）。M3 T8：opts.step 显式步长——
+  // Alt+←/→ 选中 clip 微移 0.1s（Alt 步进语义延伸到 clip；设计 T8 原文案 10ms，交付口径取 0.1s，
+  // 与播放头 Alt 秒步进同数量级），两档既有缺省不受影响。
+  nudgeSelected(deltaSec, { grid = false, step: stepSec = null } = {}) {
     if (!this._guard()) return;
     if (!this.clipSel.size) return;
     this._pauseIfPlaying();
     const p = this.hooks.getProject();
     const gridSec = grid ? spb(p) : 0.01;
-    const step = (deltaSec >= 0 ? 1 : -1) * gridSec;
+    const magnitude = (stepSec != null && Number(stepSec) > 0) ? Number(stepSec) : gridSec;
+    const step = (deltaSec >= 0 ? 1 : -1) * magnitude;
     const ids = [...this.clipSel];
     this.hooks.mutate(pr => {
       for (const id of ids) {
@@ -1885,8 +1970,8 @@ export class MusicTimeline {
     return this.razor;
   }
   // C12：双击 clip=选中并循环预览（范围循环至手动停止）
-  previewSelectedClipAt(x, y, clips) {
-    const hit = this._audioHit(x, y, clips);
+  previewSelectedClipAt(x, y, clips, touch = false) {
+    const hit = this._audioHit(x, y, clips, touch);
     if (!hit) return false;
     this.clipSel = new Set([hit.clip.id]);
     this.hooks.previewClip?.(hit.clip);
@@ -1906,7 +1991,7 @@ export class MusicTimeline {
       // W2（E-10 只读化）：编舞模式简单道双击不再触发 clip 循环预览/清选（呈示+seek 之外无剪辑交互）
       if (this.mode !== 'music') return;
       // 双击空白=取消全选；双击 clip=选中并循环预览
-      if (!this.previewSelectedClipAt(x, y, clips)) this.clearClipSelection();
+      if (!this.previewSelectedClipAt(x, y, clips, e.pointerType === 'touch')) this.clearClipSelection();
       return;
     }
     if (!this.inTagLane(y)) return;

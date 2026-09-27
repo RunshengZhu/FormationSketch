@@ -15,7 +15,7 @@ import {
   trackById, trackOfClip, stripTracksForV1,
 } from '../js/model.js';
 import {
-  clipEnd, lastClipEndSec, effectiveRegions, capFades, fadeEnvAt, clipGainAt,
+  clipEnd, lastClipEndSec, clipEdgeStepSec, effectiveRegions, capFades, fadeEnvAt, clipGainAt,
   computeOverlaps, applyAutoCrossfades, pruneAutoCrossfades,
   trimClipLeftAnchored, trimClipLeftBoundary, trimClipRightAnchored, trimClipRightBoundary,
   splitClipAt, rippleDeleteClips, trimClipsToRange,
@@ -786,4 +786,35 @@ test('导出导入往返含 tracks（轨态/clip 归属无损）；stripTracksFo
   assert.equal(v1.timeline.audioClips.every(c => c.trackId === undefined), true);
   assert.equal(r1.project.timeline.tracks.length, 2, 'strip 返回深拷贝，原项目不动');
   assert.equal(r1.project.timeline.audioClips[0].trackId, 'trk1');
+});
+
+// ---------- 14) ⏮⏭ clip 缘步进（音乐模式重定位 M3 · 决策①正式实装） ----------
+test('clipEdgeStepSec：前/后缘步进取严格近邻；恰在缘上跳过自身；无缘=0/域尾；去重不撞重合缘', () => {
+  const clips = [
+    { timelineStartSec: 0, lengthSec: 8 },   // 缘 0 / 8
+    { timelineStartSec: 8, lengthSec: 6 },   // 缘 8 / 14（与前一 clip 终点重合，去重不重复命中）
+    { timelineStartSec: 20, lengthSec: 4 },  // 缘 20 / 24
+  ];
+  const edgesAsc = [0, 8, 14, 20, 24];
+  // ⏭（dir>0）：严格后的最近缘
+  for (const [cur, want] of [[0, 8], [3, 8], [8, 14], [9, 14], [14, 20], [24, 64]]) {
+    assert.equal(clipEdgeStepSec(clips, cur, 64, 1), want, `⏭ @${cur} → ${want}`);
+  }
+  // ⏮（dir<0）：严格前的最近缘；无缘=0
+  for (const [cur, want] of [[0, 0], [3, 0], [8, 0], [9, 8], [14, 8], [15, 14], [21, 20], [30, 24], [64, 24]]) {
+    assert.equal(clipEdgeStepSec(clips, cur, 64, -1), want, `⏮ @${cur} → ${want}`);
+  }
+  // 全部缘序核对（试金石：从域外 -1 起步，⏭ 连跳恰好遍历 0/8/14/20/24）
+  let cur = -1;
+  for (const want of edgesAsc) { cur = clipEdgeStepSec(clips, cur, 64, 1); assert.equal(cur, want); }
+  // 无 clip：⏮=0、⏭=域尾
+  assert.equal(clipEdgeStepSec([], 10, 64, -1), 0);
+  assert.equal(clipEdgeStepSec([], 10, 64, 1), 64);
+  // 单 clip 全长（载入音乐缺省形态）：⏮=0、⏭=域尾（终点已是末缘）
+  const single = [{ timelineStartSec: 0, lengthSec: 64 }];
+  assert.equal(clipEdgeStepSec(single, 30, 64, -1), 0);
+  assert.equal(clipEdgeStepSec(single, 30, 64, 1), 64);
+  // 浮点噪声缘规约：8.100000000001 与 8.1 视为同缘（r6）
+  const noisy = [{ timelineStartSec: 0, lengthSec: 8.1 }, { timelineStartSec: 8.100000000001, lengthSec: 2 }];
+  assert.equal(clipEdgeStepSec(noisy, 8.1000000001, 64, 1), 10.1);
 });

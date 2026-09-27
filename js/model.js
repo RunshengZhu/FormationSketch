@@ -301,6 +301,20 @@ export function totalDurationSec(project) {
   const { totalBeats } = computeSegments(project);
   return beatToSec(project, totalBeats);
 }
+// ---------- 音乐域基座（音乐模式重定位 M1 · D1） ----------
+// 音乐模式时间轴主域上界（秒）：最后 clip 终点与活动资产时长取大，下限 10s 托底。
+// blocks/totalBeats 完全不参与——「音乐为底层」的几何基础：波形全可见、播放头全可达、
+// 缩放/自动划分/⤢ 适配统一以本域为参照。clip 终点就地规约（不 import audio-clips——
+// 该模块反向 import 本模块，避免依赖环）；编舞模式域（computeSegments/totalDurationSec）逐值不动。
+export function musicDomainSec(p) {
+  let clipEnd = 0;
+  for (const c of clipsOf(p)) {
+    const e = (Number(c.timelineStartSec) || 0) + (Number(c.lengthSec) || 0);
+    if (e > clipEnd) clipEnd = e;
+  }
+  const assetDur = Number(activeAssetOf(p)?.durationSec) || 0;
+  return Math.max(clipEnd, assetDur, 10);
+}
 export function segmentAt(segments, beat) {
   if (!segments.length) return null;
   if (beat <= 0) return segments[0];
@@ -368,18 +382,21 @@ export function moveTag(project, id, beat) {
 export const SEG_COLOR_COUNT = 4;
 
 // ---------- 节奏划分轨（W1 §2.2.1）：段 = 相邻 tags 派生区间，落标 = 批量写 timeline.tags ----------
-// 段派生（纯函数）：段 i = [tags[i].beat, tags[i+1].beat)，末段到曲终（totalBeats）；
+// 段派生（纯函数）：段 i = [tags[i].beat, tags[i+1].beat)，末段到曲终；
 // 首个 tag 之前的区间不属任何段（呈示为未划分灰底）。零长段（重复拍位）跳过。
-export function sectionSegmentsOf(project) {
+// endBeatOverride（M1 D4 可选参数）：末段终点拍位——音乐模式调用方传 secToBeat(musicDomainSec)
+// 使划分域覆盖到音频末（blocks 短于音频时后半也能划分）；缺省=现状 totalBeats（编舞调用方零变化）。
+export function sectionSegmentsOf(project, endBeatOverride) {
   const tags = [...(project.timeline.tags || [])].sort((a, b) => a.beat - b.beat || String(a.id).localeCompare(String(b.id)));
   const { totalBeats } = computeSegments(project);
+  const endBeat = (Number.isFinite(endBeatOverride) && endBeatOverride > 0) ? endBeatOverride : totalBeats;
   const segs = [];
   for (let i = 0; i < tags.length; i++) {
     const start = tags[i].beat;
-    const end = i + 1 < tags.length ? tags[i + 1].beat : Math.max(totalBeats, start);
+    const end = i + 1 < tags.length ? tags[i + 1].beat : Math.max(endBeat, start);
     if (end > start) segs.push({ i, tag: tags[i], start, end });
   }
-  return { segs, totalBeats };
+  return { segs, totalBeats: endBeat };
 }
 const r2 = v => Math.round(v * 100) / 100;
 // 来源①均分 N 段：按 totalBeats/N 生成 N 个段起点拍位（含 0）。N 钳制 1..64；totalBeats≤0 → []。

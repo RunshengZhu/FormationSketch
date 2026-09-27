@@ -28,6 +28,29 @@ export function lastClipEndSec(clips) {
   for (const c of clips || []) e = Math.max(e, clipEnd(c));
   return e;
 }
+// ---------- ⏮⏭ clip 缘步进（音乐模式重定位 M3 · 决策①正式实装） ----------
+// 音乐模式 ⏮/⏭ = 前后 clip 缘步进（经典 DAW 语义）：全部 clip 的起点/终点缘升序去重后，
+// 取当前秒位**严格**前/后的最近缘（恰停在缘上时跳过自身）；dir<0 无前缘=0、dir>0 无后缘=
+// 域尾（domainEndSec）。纯函数（node 可测）；秒→拍换算与 seek 由调用方承担。
+export function clipEdgeStepSec(clips, curSec, domainEndSec, dir) {
+  const edges = [];
+  for (const c of clips || []) {
+    const s = r6(Number(c.timelineStartSec) || 0);
+    const e = r6(clipEnd(c) || 0);
+    if (Number.isFinite(s)) edges.push(s);
+    if (Number.isFinite(e)) edges.push(e);
+  }
+  edges.sort((a, b) => a - b);
+  const cur = Number(curSec) || 0;
+  const EPS = 1e-6;
+  if (dir < 0) {
+    let prev = 0;
+    for (const e of edges) if (e < cur - EPS) prev = e; // 升序末个命中=最近前缘；无缘=0
+    return prev;
+  }
+  for (const e of edges) if (e > cur + EPS) return e;   // 升序首个命中=最近后缘
+  return Math.max(0, Number(domainEndSec) || 0);        // 无后缘=域尾
+}
 // 有效音频事件区间（合并重叠后的可听区间；skipMuted=true 时静音 clip 不算事件）——段间静音判定用
 export function effectiveRegions(clips, { skipMuted = true } = {}) {
   const list = (clips || [])
