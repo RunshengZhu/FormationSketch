@@ -737,3 +737,29 @@ W3（整改方案 §6 批次 W3）落地对既有用例口径的影响，供后�
 **E2E 纪律（新增，对全部后续驱动生效）**：**禁 ≥1s 固定盲等（sleep）；一律条件等待——boot 用 `__fs.ready`，渲染用 `__fs.renderSeq`，持久化断言前用 `__fs.flushNow()`；时序采样类（点拍间隔 / D1 取证 / 数拍时间窗内取样等真时间窗断言）除外，须就地注释「合法时序采样」**。共享助手 `lab/lib-wait.mjs`：`waitForBoot(page)` / `waitForRender(page, {fromSeq})`（配 `renderSeqNow(page)` 取基线）/ `waitForFlush(page)` / `waitForExpr(page, fn, arg, {timeoutMs, label})`，全部带超时上限、超时抛错附现场 dump（URL/build/renderSeq/视图/播放态/toast）。
 
 应用侧信号（`window.__fs` 纯加法，见 js/main.js 末尾注释）：`ready`（boot=store init+lastProject 恢复+首帧渲染 完成 Promise）；`renderSeq`（状态驱动重绘计数：MusicTimeline.render 出口与 StageView.requestDraw 出口各 +1；rAF/切帧动效逐帧与 drawPlayhead 局部重绘不计）；`flushNow()`（清 400ms 防抖并立即 putProject，幂等，无项目 no-op）。示范改造 3 处：`w1-verify.mjs` 盲等 1400ms（播放跨段界）→waitForExpr 条件等待、盲等 400ms（视口重绘）→waitForRender；`w3-verify.mjs` 盲等 500ms（变速 toast）→waitForExpr；数拍时间窗 sleep 标注「合法时序采样」保留。单测 `tests/ready-signals.test.js` +4（node --test 总数 308→312，run-l2 红线 pin 已按回填链协议同步）。
+
+## 测试资产管理 附注（2026-09-27，w5-final；本节为附注，上方用例零改动）
+
+**制度（对全部后续批次生效，合并前自检）**：
+
+1. **用例编号登记制**：新增任何 E2E 用例/套件，必须映射本目录编号（TC-Px-yy / 已登记专项前缀），在对应「测试用例目录」或附注登记 id+名称+驱动脚本；无编号的用例不进电池。
+2. **批次随行清理**：合并前，本批产生的 `dbg-*` / 一次性 probe / `*.bak` 一律归档 `lab/archive/<批次>/` + 该批 MANIFEST.md（移动而非删除；恢复=移回）；lab 索引见 `lab/ARCHIVE.md`。电池在册驱动与 lib-\* 共享库不清理。
+3. **废弃标注**：退役仪器/断言必须带「退役条件（命中事实）+ 后继者」，登记于批次 MANIFEST；不确定的进 `lab/ARCHIVE.md` 待审区，下一批随行裁决，不默杀。
+4. **互锁断言登记表**（现存；改动任一角须同步登记）：
+
+   | 互锁 | 位置 | 互锁对象 | 退役条件 |
+   |---|---|---|---|
+   | SW 缓存名随版 | tests/pwa.test.js | js/main.js `__MAIN_BUILD` ↔ dist/sw.js 缓存名 ↔ build-single.mjs 产物 | PWA 策略重构时 |
+   | 就绪信号语义 | tests/ready-signals.test.js | `__fs.ready/renderSeq/flushNow` 观测面 ↔ lib-wait.mjs 消费方 | 观测面重构（须先迁移 lib-wait） |
+   | 构建确定性 | tests/pwa.test.js「连跑两次产物字节一致」 | build-single.mjs ↔ dist 可复现性 | 构建管线更换 |
+   | L0 门禁复跑 | run-l2.mjs §G | run-l0.mjs 20/20 ↔ L2 报告 | 门禁口径变化 |
+
+5. **每批次单测总数对账**：run-l2 红线已动态化（w5-final）——硬红线 `fail=0` 永不变；数量线为下限 `UNIT_MIN=330`（d32303a 实数）。新增/退役单测不再逐轮回填精确等值，但每批报告必须写明「本批单测 N（上批 M，Δ理由）」；跌破下限照旧红线作废。
+
+**首批案例（本制度前身实践 + w5-final 执行记录）**：
+
+- app 侧（commit d32303a）：`tests/page-matrix.js` v1 仪器退役（引用已退役 pairs 语义、全仓零活引用，后继=矩阵化单测）；LEGACY-CITE 三角互锁退役（后继=manual.test.js 10 条入口断言 + icons.test.js 全文 A 组检查）；icon-mapping.md 收口注记。
+- lab 侧（`lab/archive/2026-09-w5-final/`，45 个）：dbg-\*×33、debug-r21\*×10、run-l2 旧版备份×2，逐个登记来源轮次/后继者，见其 MANIFEST.md。
+- 仪器回填三例（改写而非退役，谓词强度不减）：`probe-r57-w3-ir.mjs` ① W3-1.b3/b4/c/d 滚动面测量 `#tl-body`→`#tl-scroll`（M2 轨头 container 化后唯一滚动容器，css/style.css 77-79/288/294）；② W3-2.a2/a3/a4/a7/a8 音乐缺省刻度期望 beat→sec（music-mode-redesign §126 + tests/w3-music.test.js:56 已钉新口径；重构轮串行电池未跑到 ir57 致仪器未回填）；③ 环境步 build 钉死→记录式（钉死在每次版本 bump 必假红）。
+
+**w5-final 基建改造（同批记录）**：全电池改 `lab/battery-parallel.sh`——并行 4 worker（LPT 均衡）+ 串行尾（ir57 真实输入时序套件低负载执行；npm test ×2 双跑口径须串行，并发双跑会竞争读共享文件）；`[RED]` 判定改依据退出码 + 日志末 ok/total 结果行（修 `cut -d/ -f2` 把 total 切成「26 PASS」恒不等致全绿误标 RED 的 bug）+ 逐套件 `results/<name>.json`；p1/p2/p3 驱动尾改 bounded close + 显式退出码（4-worker 负载下事件循环排空可滞留进程 ~178s，par-final 实证）；lib-p1p3.mjs 条件等待推广（lib-wait 接入，落地 7 处：caseRunner boot 与 newPage→waitForBoot、emptyLibrary→库视图 DOM 就绪、openWizard→向导字段就绪、openPanelTab→#props-<tab> 摘 hidden、readToast→出现即读（上限 ms 不变，期望空 toast 口径不变）、dragMouse settle→renderSeq 条件优先（超时按原 settle 兜底等时）；审计回退 2 处：mkProj 180ms 与 wizardCreate 220ms——「进编辑器伴随 renderSeq+1」不成立（build-41-headerfix 下 view=editor 而 renderSeq 冻结，w5-final3 实证 12 用例假红），同一完成信号不存在即保留原盲等并就地注释；openRoster 120ms 与 dragMouse dwell 为微垫/合法时序采样保留）。套件单新增完整性自检：并行组+串行尾必须覆盖全部 17 在册套件（重分组漏 p1/gr/r 事故的防再犯闸）。红线口径不变：断言与检查点未削弱，仅消除假红与挂起。

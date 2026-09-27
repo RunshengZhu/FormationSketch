@@ -292,7 +292,10 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
    W2（C12）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（样式见 #music-summary 区块）。 */
 #tl-body{position:relative}
 #tl-scroll{overflow:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120 写入；music 模式 height:100%+纵横滚 */
-#tl-inner{position:relative;height:100%}
+/* #tl-inner = lane 区 flex 兄弟列（M2 修 build-37-headerfix）：宽由 timeline.render 按 W 显式写入
+   （两 canvas 均 absolute、无内在尺寸，缺省宽 0 → .tl-grid 不含画布、滚动量程靠溢出撑出的旧结构
+   已退役）；flex:none 防伸缩，轨头列 + lane 区并排构成 .tl-grid 的全部内容宽（headW + W 按构造） */
+#tl-inner{position:relative;height:100%;flex:none}
 #tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
 /* 轨头列（sticky 左缘固定，M2）：width 148 桌面；corner/corner2/track 行高与画布同变量对齐。
    行距只用「track+track 12px」兄弟 margin（不用容器 row-gap）——ops 行紧贴末行，

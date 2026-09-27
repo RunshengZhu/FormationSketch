@@ -14,8 +14,8 @@ import { renderLibrary, showNewProjectModal, showRosterModal, toast, h, createHi
 import { renderManual } from './manual.js';
 import { iconHtml } from './icons.js';
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-40-dragfix';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-40-dragfix');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-41-headerfix';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-41-headerfix');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：

@@ -300,7 +300,10 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
    W2（C12）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（样式见 #music-summary 区块）。 */
 #tl-body{position:relative}
 #tl-scroll{overflow:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120 写入；music 模式 height:100%+纵横滚 */
-#tl-inner{position:relative;height:100%}
+/* #tl-inner = lane 区 flex 兄弟列（M2 修 build-37-headerfix）：宽由 timeline.render 按 W 显式写入
+   （两 canvas 均 absolute、无内在尺寸，缺省宽 0 → .tl-grid 不含画布、滚动量程靠溢出撑出的旧结构
+   已退役）；flex:none 防伸缩，轨头列 + lane 区并排构成 .tl-grid 的全部内容宽（headW + W 按构造） */
+#tl-inner{position:relative;height:100%;flex:none}
 #tl-canvas,#tl-overlay{position:absolute;top:0;left:0;height:100%}
 /* 轨头列（sticky 左缘固定，M2）：width 148 桌面；corner/corner2/track 行高与画布同变量对齐。
    行距只用「track+track 12px」兄弟 margin（不用容器 row-gap）——ops 行紧贴末行，
@@ -4979,11 +4982,21 @@ class MusicTimeline {
     }
     return musicDomainSec(p);
   }
+  laneVisibleW() {
+    // M2 修（build-37-headerfix）：画布可视域宽 = 容器宽 − 轨头列宽。轨头是 flex 兄弟列，画布从其
+    // 右缘起绘——可视 lane 区只有 (clientWidth − headW)。旧代码拿整容器宽当地板/fit 基准，画布恒
+    // 比 lane 区宽 headW → fit 态也有 headW 横向溢出，右滚（看曲尾/锚定缩放）即把 clip 前段滑入
+    // sticky 轨头之下（用户实测：轨头卡片盖住 clip 开头不可见）。
+    // stage 模式 headWidth()=0 → 退化为旧值（逐值不动，红线 E-12）。
+    const w0 = this.scroll?.clientWidth || 600;
+    const headW = this.headWidth();
+    return headW > 0 ? Math.max(120, w0 - headW) : w0;
+  }
   layoutWidth(p) {
-    const w0 = this.scroll.clientWidth || 600;
+    const w0 = this.laneVisibleW();
     if (this.secPerPx) return Math.max(w0, this.domainSecOf(p) / this.secPerPx);
-    // 自适应：music=fit 即地板（域+2s 尾余量铺满容器，缩到底=整曲入画，无「细缝+空底」）；
-    // stage=既有公式逐值不动（红线）。
+    // 自适应：music=fit 即地板（域+2s 尾余量铺满 lane 可视区，缩到底=整曲入画，无「细缝+空底」；
+    // 也不再有 headW 的隐藏溢出）。stage=既有公式逐值不动（红线）。
     if (this.mode === 'music') return Math.max(w0, musicDomainSec(p) * (w0 / (musicDomainSec(p) + 2)));
     const totalSec = this.domainSecOf(p);
     return Math.max(w0, totalSec * Math.max(8, w0 / Math.max(totalSec, 30)));
@@ -5043,6 +5056,11 @@ class MusicTimeline {
       this.timeSel = null;
       this.razor = false;
     }
+    // M2 修（build-37-headerfix）：轨头显隐先于几何计算同步——headWidth() 读 #tl-tracks-head.hidden，
+    // 若在 render 末尾才同步，启动即音乐模式/切模式的首个 render 会拿陈旧 hidden（把轨头当 0 宽），
+    // 画布宽多算 headW。syncAudioDom 只动轨头 hidden 与空态灰字定位（audioTop/audioBottom 均为模式
+    // 派生常量，不依赖 W/H），提前到此处安全。
+    this.syncAudioDom(p);
     const dpr = window.devicePixelRatio || 1;
     // 高度：编舞=固定公式（150/120/160，render 写入 scroll 高，既有行为零变化）；
     // 音乐（W1 主区化）=容器实测推导（flex 撑满，不写高），内容不足时画布拉满容器。
@@ -5061,6 +5079,11 @@ class MusicTimeline {
       c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
       c.style.width = W + 'px'; c.style.height = H + 'px';
     }
+    // M2 修（build-37-headerfix）：#tl-inner 显式宽度 = 画布宽——两 canvas 均为 absolute（无内在
+    // 尺寸），旧结构 #tl-inner 宽为 0，.tl-grid（width:max-content）不把画布算进内容宽，滚动量程
+    // 全靠画布溢出撑出、sticky 轨头的 containing block 不覆盖全内容。显式宽后轨头列与 lane 区成为
+    // 真正的 flex 兄弟列：grid 宽 = headW + W 按构造成立（横滚量程精确、sticky 任意滚距不失效）。
+    if (this.inner) this.inner.style.width = W + 'px';
     this.W = W; this.H = H;
     const ctx = this.cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -5077,7 +5100,8 @@ class MusicTimeline {
       this.drawSegEmphasis(ctx, p); // W2 §2.2.1③b：编舞浓缩呈现——段边界强调刻度线（纯绘制层，零交互）
     }
     this.drawPlayhead();
-    this.syncAudioDom(p);
+    // syncAudioDom 已前移至 render 顶部（build-37-headerfix：headWidth() 需在读几何前拿到
+    // 轨头最新 hidden 态——见 render 开头注）
     // E2E 信号：全量渲染出口 +1（drawPlayhead 单独局部重绘不经此处，不计；Node 导入无 window 跳过）
     if (typeof window !== 'undefined' && window.__fs) window.__fs.renderSeq++;
   }
@@ -5729,8 +5753,10 @@ class MusicTimeline {
     if (this.mode === 'music') {
       // M1 缩放基座（music）：上限=8192/音乐域（画布像素上限 4096→8192，长曲亦能进）；
       // 下限=fit 地板（缩到底=整曲入画，根除「左侧细缝+大片空底」E58-12）。
+      // M2 修（build-37-headerfix）：fit 基准=lane 可视宽（容器−轨头列），与 layoutWidth 同源——
+      // 旧值用整容器宽，fit 态画布多出 headW 溢出（clip 前段可被右滚藏进轨头下）。
       const domainSec = musicDomainSec(p);
-      const w0 = this.scroll.clientWidth || 600;
+      const w0 = this.laneVisibleW();
       const maxPps = 8192 / domainSec;
       const fitPps = w0 / (domainSec + 2);
       this.secPerPx = 1 / Math.min(Math.max(cur * factor, fitPps), maxPps);
@@ -7474,8 +7500,8 @@ const { iconHtml } = FS.icons;
 /* import from manual */
 /* import from icons */
 // Node 单测直接 import 本模块（深链纯函数）：window 判存守卫；build-single.mjs 由此行正则解析版本号，勿改形态
-if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-40-dragfix';
-const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-40-dragfix');
+if (typeof window !== 'undefined') window.__MAIN_BUILD = 'build-41-headerfix';
+const BUILD_TAG = (typeof window !== 'undefined' ? window.__MAIN_BUILD : 'build-41-headerfix');
 
 const $ = id => document.getElementById(id);
 // Node 测试环境（tests/app-deeplink.test.js 直接 import 本模块的深链纯函数）没有 Audio 全局：
