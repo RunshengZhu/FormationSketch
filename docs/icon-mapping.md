@@ -34,7 +34,7 @@
 | ⇅ | `flip-v` | 垂直镜像 | index.html `#btn-mirror-v`；manual.js 正文 | C(manual.js)+A |
 | ⇤ | `align-left` | 对齐到播放头 | index.html `#btn-align-playhead`；manual.js 正文 | C(manual.js)+A |
 | ⏮ / ⏭ | `skip-back` / `skip-fwd` | 上/下一队形 | index.html `#pb-prev/#pb-next`；manual.js 正文 | C(manual.js)+A |
-| ⏸ / ▶ | `pause` / `play` | 播放/暂停态 | index.html `#pb-play`；main.js 播放态 `textContent` 切换（播放/数拍/结束多分支） | A |
+| ⏸ / ▶ | `pause` / `play` | 播放/暂停态 | index.html `#pb-play`；main.js 播放态 `textContent` 切换（播放/结束多分支） | A |
 | ⏹ | `stop` | 停止 | index.html `#pb-stop` | A |
 | ✕ | `close` | 关闭 | ui.js 库卡片菜单 `.um-cancel`（已加 aria-label=关闭）；main.js 单元浮窗取消钮（page-r/page-matrix 断言 `['删除','✕']` 构成，须同步）；index.html `#btn-manual-close`「完成 ✕」 | C(ui.js)+A |
 | ↺ / ↻ | `undo` / `redo` | 撤销/重做 | index.html `#btn-undo/#btn-redo`；manual.js 正文 | C(manual.js)+A |

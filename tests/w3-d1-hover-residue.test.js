@@ -78,7 +78,7 @@ function makeEnv() {
     audio: { bpm: 120, beatsPerBar: 4, firstBeatSec: 0, name: '', durationSec: 40 },
     timeline: {
       blocks: [{ holdBeats: 16, travelBeats: 8 }, { holdBeats: 16, travelBeats: 8 }, { holdBeats: 16, travelBeats: 0 }],
-      countInBeats: 8, metronome: false,
+      metronome: false,
       tracks: [{ id: 'trk1', name: '配乐', gain: 1, muted: false }, { id: 'trk2', name: '轨 2', gain: 1, muted: false }],
       audioClips: [],
     },
@@ -153,7 +153,8 @@ test('G3D1-2 非 moved 路径语义保持：hover 清零仍补一帧 render 回�
   e.tl.drag = { kind: 'clipMove', moved: false };
   e.tl._up();
   assert.equal(e.rec.commits, 0, '单击 clip 不提交历史');
-  assert.equal(e.rec.seeks, 1, '单击 clip=定位播放头（既有 C12 语义保持）');
+  // build-46 验收反馈三（有意规格变更）：单击 clip 只选中、不再定位播放头——定位与 clip 点击解耦
+  assert.equal(e.rec.seeks, 0, '单击 clip 不定位播放头（定位语义已与 clip 点击解耦）');
   assert.equal(e.rec.renders, 1, '非 moved 路径仍补一帧 render（既有语义保持）');
   assert.equal(e.tl.dragHoverLane, null);
   assert.deepEqual(e.px(e.S.x, e.S.y1), base, '补绘后目标 lane 回基线');

@@ -1,23 +1,25 @@
-// 回放引擎：音频时钟 / 虚拟时钟、数拍入场、循环、节拍器
+// 回放引擎：音频时钟 / 虚拟时钟、循环、节拍器
+// build-68-nocountin：数拍入场（播放倒计时）整体退役——play 无 countIn 分支/选项，
+// 引擎只有「立即起播」一条路径（暂停/停止/循环/节拍器/回绕语义逐值不动）。
 // v3（exp/audition-lite）：音频通道升级双轨——clip 调度（ClipTransport，WebAudio）为主，
 // <audio> 元素旧通道为回退（buffer 解码失败/无 clip 的边界）。播放语义（规格 §2/§6）：
 // 播放头进 clip → 调度（srcStart+偏移）；出 clip → 段间静音（时间轴时钟继续走）；
 // ended = 越过最后 clip 终点与 totalBeats 取先到（先到者按 #7 混合语义处置：
 // 时间轴未完 → _audioEnded 虚拟接管；已完 → 统一终态 ended）。既有守卫全部继承。
-import { computeSegments, spb, beatToSec, secToBeat, currentFormationIndexAt, musicDomainSec } from './model.js';
+// build-70-formationclips M3：段派生换源 segmentsFromClips（队形即 clip；posAt/
+// currentFormationIndexAt 插值链自动获益——变换段=相邻 clip 间空隙）。
+import { segmentsFromClips, beatToSec, secToBeat, currentFormationIndexAt, musicDomainSec } from './model.js';
 import { lastClipEndSec } from './audio-clips.js';
 
 export class Player {
-  constructor({ audio, getProject, onTick, onStateChange, onCountin, onPreviewEnd, getMode }) {
+  constructor({ audio, getProject, onTick, onStateChange, onPreviewEnd, getMode }) {
     this.audio = audio;           // AudioController
     this.getProject = getProject;
     this.getMode = getMode;       // UI 模式钩子（'stage'|'music'；缺省=stage——编舞语义，M1 模式感知分支隔离）
     this.onTick = onTick;         // ({beat, sec, formationIndex, phase})
     this.onStateChange = onStateChange; // ({playing})
-    this.onCountin = onCountin;   // (n|0) 剩余入场拍，0 隐藏
     this.onPreviewEnd = onPreviewEnd; // (endBeat) 切帧预览结束
     this.playing = false;
-    this.countin = false;
     this.beat = 0;
     this.speed = 1;
     this.loopOn = false;
@@ -25,14 +27,30 @@ export class Player {
     this._virtual = null;         // {baseBeat, t0}
     this._lastIntBeat = null;
     this._stopAt = null;          // 预览过渡时的结束拍
-    this._ciBase = null;          // 数拍起数的基准拍（取消倒计时回到这里）
     this._audioEnded = false;     // 音频先于时间轴自然结束：true=后续播放由虚拟时钟接管（见 useAudio）
     this._clipsActive = false;    // 本次播放是否走 clip 调度通道（起播时定格；中途不切换）
   }
   // 当前 UI 模式（M1 风险 R1 隔离阀）：music=秒域（seek 钳 [0, 音乐域]、ended=域尾、无虚拟接管）；
-  // stage=编舞域逐值不动（钳 [0,totalBeats]、ended 虚拟接管）。钩子缺省/异常一律按 stage（红线兜底）。
+  // stage=编舞域（build-51-stageux 用户指令改语义：项目有音频资产 → 与 music 一致——播放直达
+  // 音乐尾；无音频 → 维持钳 [0,totalBeats]、ended 虚拟接管）。钩子缺省/异常一律按 stage（红线兜底）。
   _isMusic() {
     try { return this.getMode?.() === 'music'; } catch { return false; }
+  }
+  // build-51-stageux F1：项目有音频资产（media.assets 非空——与 timeline.hasMedia / music 域
+  // 判定同源；clip 必引用资产，资产集即音频存在性的唯一事实源）。
+  _hasAudioAssets(p) {
+    p = p || this.getProject();
+    return !!(p?.media?.assets?.length);
+  }
+  // build-51-stageux F1：播放域终点拍（seek 钳制与 ended 共用一处，两模式一个事实源）。
+  // music=音乐域（musicDomainSec——10s 托底，域恒存在）；stage=有音频资产 → 同音乐域
+  // （用户明确指令「默认一直向下播放直到音乐轨道结束（两种模式一致）」；E-12 在此条上被用户
+  // 指令豁免）；无音频 → blocks 域 totalBeats（纯编舞排练语义逐值不动）。
+  _domainEndBeat(p) {
+    p = p || this.getProject();
+    if (!p) return 0;
+    if (this._isMusic() || this._hasAudioAssets(p)) return Math.max(0, secToBeat(p, musicDomainSec(p)));
+    return segmentsFromClips(p.formations).totalBeats;
   }
   get useAudio() {
     if (this._forceVirtual) return false;
@@ -49,16 +67,13 @@ export class Player {
   get previewing() {
     return this._forceVirtual === true && this._stopAt !== null;
   }
-  segments() { return computeSegments(this.getProject() || { timeline: { blocks: [] } }); }
+  segments() { return segmentsFromClips(this.getProject()?.formations || []); }
 
-  play(fromBeat = null, { previewStop = null, countIn = true, forceVirtual = false } = {}) {
+  play(fromBeat = null, { previewStop = null, forceVirtual = false } = {}) {
     if (this.playing) return;
-    // 清理遗留的数拍入场（避免双时钟竞态）
-    this._cancelCountin();
     const p = this.getProject();
     if (!p) return;
-    const fresh = fromBeat !== null;
-    if (fresh) this.beat = fromBeat;
+    if (fromBeat !== null) this.beat = fromBeat;
     this._stopAt = previewStop;
     this._forceVirtual = !!forceVirtual;
     // 预览期间挂起循环，防止循环拉回导致预览永不结束
@@ -88,51 +103,7 @@ export class Player {
       this.onStateChange?.({ playing: true });
       this._tick();
     };
-    const ci = countIn && fresh ? (p.timeline.countInBeats || 0) : 0;
-    if (ci > 0) {
-      // 数拍入场：负拍虚拟时钟，每拍一声（每小节首拍高音）。
-      // DEFECT-R28-1：旧实现 onCountin(n) 画满数后同 tick 立即 clickOne()——首帧数字被覆盖为
-      // n-1，倒计序列只显示 3,2,1（4 拍入场只画 3 个数），与文档「依次 4→1→隐藏」不符。
-      // 现改为：先画完整 n，再进入节拍间隔；每拍一声不变，起播时刻=第 n 拍点击后（总时长仍 n 拍）。
-      this.countin = true;
-      this.playing = false;
-      this._ciBase = this.beat; // 任务#5：取消倒计时回到起数基准拍（回到停止态，不直接起播）
-      let n = ci;
-      const total = ci;
-      const bpb = p.audio.beatsPerBar || 4;
-      const interval = spb(p) * 1000 / this.speed;
-      const clickOne = () => {
-        this.audio.click((total - n) % bpb === 0, 0);
-        n--;
-        this.onCountin?.(n);
-        this.beat = -n; // 负拍显示
-        this._emit();
-        if (n <= 0) { clearInterval(this._ciTimer); this._ciTimer = null; this.countin = false; this._ciBase = null; this.beat = 0; doStart(); }
-      };
-      this.onCountin?.(n);
-      this._ciTimer = setInterval(clickOne, interval);
-    } else {
-      doStart();
-    }
-  }
-  _cancelCountin() {
-    // 任务#5：取消倒计回到停止态——基准拍还原（不再停在负拍），返回是否确有倒计被取消
-    if (this._ciTimer) {
-      clearInterval(this._ciTimer);
-      this._ciTimer = null;
-    }
-    if (!this.countin) return false;
-    this.countin = false;
-    this.beat = this._ciBase ?? 0;
-    this._ciBase = null;
-    this.onCountin?.(0);
-    return true;
-  }
-  // 数拍中 ▶/空格/Esc/scrub 的统一取消入口：只取消倒计，不直接起播
-  cancelCountin() {
-    const had = this._cancelCountin();
-    if (had) this._emit();
-    return had;
+    doStart();
   }
   _restoreLoop() {
     if (this._loopStash) {
@@ -141,7 +112,6 @@ export class Player {
     }
   }
   pause() {
-    this._cancelCountin(); // 任务#5：数拍中暂停=取消倒计并回到基准拍（停止态）
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     if (!this.playing) return;
     this.playing = false;
@@ -157,18 +127,20 @@ export class Player {
     this._audioEnded = false; // 停止=整体复位：下次 ▶ 恢复音频时钟（从头起播）
     this._forceVirtual = false;    this._restoreLoop();
     if (this.audio?.ready) this.audio.seek(0);
-    this.onCountin?.(0);
     this._emit();
   }
   seekBeat(b) {
+    // build-70 r3 加固：非有限入参显式忽略（此前 Math.max(0,Math.min(undefined,…))=NaN 静默
+    // 毒化 this.beat——播放头消失/UI 读 0，失败模式不可见；回归钉 tests/player.test.js）
+    b = Number(b);
+    if (!Number.isFinite(b)) return;
     const p = this.getProject();
     if (p) {
       // 任务#9（报告#9）：scrub/播放头目标一律钳制——越界定位不再触发停播/画出波形外。
       // M1 模式感知（风险 R1）：music 模式域=[0, 音乐域秒换算拍]（播放头可达 blocks 域之外，
-      // 64s 音频在 32s 队形项目中可停可起）；stage 模式保持 [0, totalBeats]（编舞红线逐值不动）。
-      const maxBeat = this._isMusic()
-        ? Math.max(0, secToBeat(p, musicDomainSec(p)))
-        : computeSegments(p).totalBeats;
+      // 64s 音频在 32s 队形项目中可停可起）。build-51-stageux F1（用户指令）：stage 有音频资产
+      // → 同音乐域（播放直达音乐尾）；stage 无音频 → 保持 [0, totalBeats]（纯编舞排练语义）。
+      const maxBeat = this._domainEndBeat(p);
       b = Math.max(0, Math.min(b, maxBeat));
       // 音频结束态下把播放头拖回音频范围内 → 恢复音频时钟（下次起播重新走 audio 通道）
       const audioEndSec = this._clipsEndSec(p);
@@ -194,7 +166,10 @@ export class Player {
   seekFormation(index) {
     const { segments } = this.segments();
     const seg = segments[index];
-    if (seg) this.seekBeat(seg.holdStart);
+    // build-70 r3 修复：段字段换源 segmentsFromClips（{i,formationId,start,end}）——
+    // 旧 holdStart 已随 blocks 模型退役，读到 undefined → seekBeat(NaN) 毒化播放头
+    //（切帧/单击 clip 后播放线丢失/呈 0；回归钉 tests/player.test.js seekFormation 族）。
+    if (seg) this.seekBeat(seg.start);
   }
   setSpeed(s) {
     this.speed = s;
@@ -266,10 +241,10 @@ export class Player {
       this.seekBeat(this.loopStart);
     } else {
       // M1 模式感知（风险 R1）：ended 终点域——music=音乐域尾（secToBeat(musicDomainSec)，
-      // 音频播完/越过域尾才 ended，不再被 blocks 域提前掐断）；stage=totalBeats（逐值不动）。
-      const endBeat = this._isMusic()
-        ? Math.max(0, secToBeat(p, musicDomainSec(p)))
-        : this.segments().totalBeats;
+      // 音频播完/越过域尾才 ended，不再被 blocks 域提前掐断）。
+      // build-51-stageux F1（用户指令）：stage 有音频资产 → 同音乐域（播放直达音乐尾，两种模式
+      // 一致；队形走完后 formationIndex 由 main onTick 钳最后队形）；stage 无音频 → totalBeats。
+      const endBeat = this._domainEndBeat(p);
       if (beat >= endBeat) {
         // 任务#6（报告#6）：终态统一——两套时钟都停在终点并置 ended（不再静默归 0）
         this.pause();
@@ -291,7 +266,10 @@ export class Player {
   // 音频通道结束的收尾：自然放完时把播放头钳在音频末拍（不越过波形）、
   // 时间轴还没走完则置 _audioEnded（下一次 ▶ 由虚拟时钟从当前拍接管至 totalBeats）。
   // M1 模式感知（风险 R1）：music 模式无虚拟接管——音频放完即终态，播放头钳在音乐域内
-  // （末拍=min(音频末拍, 域尾拍)）；stage 分支逐值不动（编舞排练跟队形走完无乐尾段，round30 #7）。
+  // （末拍=min(音频末拍, 域尾拍)）。
+  // build-51-stageux F1（用户指令）：stage 有音频资产 → 与 music 同分支（音频放完=播放整体到
+  // 音乐轨道尾即终态，无虚拟接管——「播放直达音乐尾，两种模式一致」）；stage 无音频维持
+  // totalBeats 分支（编舞排练跟队形走完无乐尾段，round30 #7 语义保留）。
   // endPos：clip 通道=transport 位置（时间线秒）；el 通道缺省读 el.currentTime
   _finish(audioEnded, endPos = null) {
     this.pause();
@@ -299,11 +277,11 @@ export class Player {
     const p = this.getProject();
     if (!p) return;
     const pos = endPos ?? (this._clipsActive ? this.audio.clipsPosition : (this.audio.currentTime || this.audio.duration || 0));
-    if (this._isMusic()) {
+    if (this._isMusic() || this._hasAudioAssets(p)) {
       const domainBeat = Math.max(0, secToBeat(p, musicDomainSec(p)));
       this.beat = Math.min(Math.max(0, secToBeat(p, pos || 0)), domainBeat);
-      // reason:'audio' → main 层「音乐已结束」toast——music 模式下音频放完=音乐真结束，
-      // toast 语义成立（E58-05「队形走完误报音乐结束」随 blocks 域钳制一并消亡）
+      // reason:'audio' → main 层「音乐已结束」toast——音频放完=音乐真结束（两模式同语义；
+      // stage 无音频路径不走此分支，E58-05「队形走完误报音乐结束」不回归）
       this.onStateChange?.({ playing: false, ended: true, reason: 'audio' });
       this._emit();
       return;

@@ -84,12 +84,13 @@ function makeWorld(opts = {}) {
     w.t = end;
   };
   const pid = { n: 0 };
-  w.down = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
-    w.machine.down({ pointerId: pointerId ?? ++pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
-  w.move = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
-    w.machine.move({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
-  w.up = (x, y, { shift = false, touch = false, pointerId, button, space } = {}) =>
-    w.machine.up({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space });
+  // alt=Alt/Option 按住（build-91-varispeed：拖动细粒度吸附临时取反；缺省 undefined=未按）
+  w.down = (x, y, { shift = false, touch = false, pointerId, button, space, alt } = {}) =>
+    w.machine.down({ pointerId: pointerId ?? ++pid.n, px: x * 100, py: y * 100, shift, touch, button, space, alt });
+  w.move = (x, y, { shift = false, touch = false, pointerId, button, space, alt } = {}) =>
+    w.machine.move({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space, alt });
+  w.up = (x, y, { shift = false, touch = false, pointerId, button, space, alt } = {}) =>
+    w.machine.up({ pointerId: pointerId ?? pid.n, px: x * 100, py: y * 100, shift, touch, button, space, alt });
   return w;
 }
 
@@ -193,10 +194,13 @@ test('10 拖动全程经过他人上方：零弹窗', () => {
   w.down(1, 1); w.move(1.4, 1); w.move(5, 5); w.move(5.4, 5); w.move(8, 3); w.up(8, 3);
   assert.deepEqual(w.log.menus, []);
 });
-test('11 松手钳制在舞台+后台范围内', () => {
+test('11 松手不钳制——舞者可自由拖入观众区/后台/侧翼（build-63-stageview2 F3 改写：原钳制退役）', () => {
   const w = makeWorld();
-  w.down(1, 1); w.move(25, 1); w.up(25, 1); // 目标 x=25，钳到 10+1
-  assert.equal(w.positions.A.x, 11);
+  w.down(1, 1); w.move(25, 1); w.up(25, 1); // 目标 x=25（旧版钳到 10+1=11；全域自由后原样落点）
+  assert.equal(w.positions.A.x, 25);
+  const w2 = makeWorld();
+  w2.down(1, 1); w2.move(1, 30); w2.up(1, 30); // y 超观众区方向同样自由（depthM 6）
+  assert.equal(w2.positions.A.y, 30);
 });
 test('12 拖动中 Escape：整单元回滚到按下前快照，零历史', () => {
   const w = makeWorld();
@@ -297,20 +301,23 @@ test('22 转正拖拽后长按定时不再触发', () => {
 });
 
 // ---------- 视图 ----------
-test('23a 鼠标空白拖动=框选；23b 触摸空白拖动=平移且不改选择', () => {
+test('23a 鼠标空白拖动=框选；23b 触摸空白拖动=框选（M4：单指空白不再平移）', () => {
   const w = makeWorld();
   w.down(0.2, 0.2); w.move(2, 2); w.up(2, 2);
   assert.deepEqual(w.selection, ['A', 'B']);
   assert.equal(w.log.boxes.length >= 2, true); // 过程矩形 + 结束 null
 
+  // build-70 M4：触摸空白与鼠标同语义——按下即 BOX、松手结算框内舞者；全程零平移
+  //（平移=两指 PINCH 质心位移或桌面修饰键，单指路径退役）
   const w2 = makeWorld();
   w2.selection = ['E'];
   w2.down(0.2, 0.2, { touch: true, pointerId: 91 });
+  assert.equal(w2.machine.state(), 'BOX', '触摸空白按下即框选（无待定平移）');
   w2.move(2, 2, { touch: true, pointerId: 91 });
   w2.up(2, 2, { touch: true, pointerId: 91 });
-  assert.deepEqual(w2.log.pans.at(-1), [180, 180]);
-  assert.deepEqual(w2.selection, ['E']); // 平移不改选择
-  assert.deepEqual(w2.log.boxes, []);
+  assert.deepEqual(w2.log.pans, [], '触摸空白拖动零平移');
+  assert.deepEqual(w2.selection, ['A', 'B'], '矩形 (0.2..2, 0.2..2)：A、B 入选（E 在外）');
+  assert.equal(w2.log.boxes.at(-1), null, '结束后矩形清除');
 });
 test('24 双指：拖拽回滚→缩放+平移；残留单指不误触发', () => {
   const w = makeWorld();
@@ -477,17 +484,15 @@ test('35 触摸空白点按（无晋升位移）抬起：清空选择且零平�
   assert.deepEqual(w.selection, []);
   assert.deepEqual(w.log.pans, []);
 });
-test('36 触摸空白小抖动（<promoteM）不平移；晋升后补齐平移且全程不碰选择', () => {
+test('36 触摸空白小抖动（<boxMinPx）抬起=点按清空选择；全程零平移（M4：无晋升平移）', () => {
   const w = makeWorld();
   w.selection = ['E'];
   w.down(0.25, 0.25, { touch: true, pointerId: 91 });
-  w.move(0.3, 0.25, { touch: true, pointerId: 91 }); // 5px < 6px（promoteM×100px/m）
+  w.move(0.3, 0.25, { touch: true, pointerId: 91 }); // 5px < 6px（boxMinPx）→ 未成框
   assert.deepEqual(w.log.pans, []);
-  w.move(2.25, 2.25, { touch: true, pointerId: 91 }); // 晋升：一次性补齐自按下起的位移
-  assert.deepEqual(w.log.pans, [[200, 200]]);
-  w.up(2.25, 2.25, { touch: true, pointerId: 91 });
-  assert.deepEqual(w.selection, ['E']);    // 平移不改选择
-  assert.deepEqual(w.log.selects, []);     // select 全程未被调用
+  w.up(0.3, 0.25, { touch: true, pointerId: 91 });
+  assert.deepEqual(w.selection, [], '微小框抬起=点按=清空选择');
+  assert.deepEqual(w.log.pans, [], '全程零平移（平移=两指专属，单指无晋升路径）');
 });
 test('37 左键空白拖动=框选（语义保持：不平移、矩形内全选）', () => {
   const w = makeWorld();
@@ -500,18 +505,16 @@ test('37 左键空白拖动=框选（语义保持：不平移、矩形内全选�
   assert.equal(w.log.boxes.at(-1), null);
 });
 
-// ---------- 触摸/笔长按空白=框选（用户报告 1：移动端长按空白只能平移、混入捏合缩放） ----------
-// 语义：空白触摸先以点按待定（PAN 未晋升）；静止 lpMs（位移<lpCancelPx）→ 转 BOX(lpBox)，
-// 拖动画框、松手复用桌面框选结算；期间忽略新增第二指（不转 PINCH）；笔与触摸同语义
-// （stage.js 以 pointerType!=='mouse' 统一映射为 touch，状态机不区分）。
-test('38 触摸长按空白 500ms：转 BOX 零尺寸矩形出现、零平移；拖动画框松手结算=框内舞者', () => {
+// ---------- 触摸/笔空白=框选（build-70 M4：单指空白改框选） ----------
+// 语义：空白触摸/笔按下即 BOX（与鼠标一致，消除「单指拖动在舞者拖动/平移之间」的混淆源）；
+// 拖动画框、松手复用桌面框选结算；平移=两指专属（PINCH 质心位移）+桌面修饰键；
+// 旧「触摸空白待定平移 + 长按转框选（lpBox）」机制随单指框选退役。
+test('38 触摸空白按下即 BOX：零尺寸矩形出现、零平移；拖动画框松手结算=框内舞者', () => {
   const w = makeWorld();
   w.down(0.2, 0.2, { touch: true, pointerId: 91 });
-  assert.equal(w.machine.state(), 'PAN'); // 触发前维持点按待定
-  w.advance(500);
-  assert.equal(w.machine.state(), 'BOX');
-  assert.deepEqual(w.log.boxes.at(-1), { x0: 20, y0: 20, x1: 20, y1: 20 }); // 触发瞬间零尺寸矩形+起点反馈
-  assert.deepEqual(w.log.pans, []); // 长按不平移
+  assert.equal(w.machine.state(), 'BOX'); // 按下即框选（无 500ms 长按等待）
+  assert.deepEqual(w.log.boxes.at(-1), { x0: 20, y0: 20, x1: 20, y1: 20 }); // 按下瞬间零尺寸矩形+起点反馈
+  assert.deepEqual(w.log.pans, []); // 零平移
   w.move(2, 2, { touch: true, pointerId: 91 });
   assert.deepEqual(w.log.boxes.at(-1), { x0: 20, y0: 20, x1: 200, y1: 200 }); // 矩形跟随手指
   w.up(2, 2, { touch: true, pointerId: 91 });
@@ -520,48 +523,44 @@ test('38 触摸长按空白 500ms：转 BOX 零尺寸矩形出现、零平移；
   assert.equal(w.machine.state(), 'IDLE');
   assert.deepEqual(w.log.commits, []);       // 框选零历史
 });
-test('39 长按框选中第二指按下：不进 PINCH 零缩放；其移动/抬起无效；发起指继续画框', () => {
+test('39 框选中第二指按下：转 PINCH（框选作废矩形清除）；双指缩放平移照常', () => {
   const w = makeWorld();
   w.down(0.2, 0.2, { touch: true, pointerId: 91 });
-  w.advance(500);
-  w.move(2, 2, { touch: true, pointerId: 91 });
-  const nBoxes = w.log.boxes.length;
+  w.move(2, 2, { touch: true, pointerId: 91 }); // 框进行中
+  assert.equal(w.machine.state(), 'BOX');
   w.down(3, 3, { touch: true, pointerId: 92 });       // 第二指按下
-  assert.equal(w.machine.state(), 'BOX');              // 不转 PINCH
-  assert.deepEqual(w.machine.debugPointers(), [91]);   // 第二指不进指针表
-  assert.deepEqual(w.log.zooms, []);                   // 零缩放
-  w.move(4, 4, { touch: true, pointerId: 92 });        // 第二指移动：框不变
-  assert.equal(w.log.boxes.length, nBoxes);
-  w.up(4, 4, { touch: true, pointerId: 92 });          // 第二指抬起：不结算
-  assert.equal(w.machine.state(), 'BOX');
-  w.move(3, 3, { touch: true, pointerId: 91 });        // 发起指继续画框
-  assert.deepEqual(w.log.boxes.at(-1), { x0: 20, y0: 20, x1: 300, y1: 300 });
+  assert.equal(w.machine.state(), 'PINCH', '第二指=双指手势（框选即时作废）');
+  assert.equal(w.log.boxes.at(-1), null, '框选矩形清除');
+  assert.deepEqual(w.machine.debugPointers(), [91, 92]); // 双指均入指针表
+  const z0 = w.log.zooms.length;
+  w.move(3.5, 3, { touch: true, pointerId: 92 });
+  assert.equal(w.log.zooms.length > z0 || w.log.pans.length > 0, true, '双指缩放/平移照常');
+  w.up(3.5, 3, { touch: true, pointerId: 92 });
   w.up(3, 3, { touch: true, pointerId: 91 });
-  assert.deepEqual(w.selection, ['A', 'B']); // 矩形 (0.2..3, 0.2..3)：A、B 入选，C(5,5) 在外
   assert.equal(w.machine.state(), 'IDLE');
+  assert.deepEqual(w.selection, [], '被作废的框选不结算选择');
 });
-test('40 长按前移动超阈值：解除长按维持 PAN（晋升平移），到时也不弹框', () => {
+test('40 触摸空白大位移拖动：矩形跟手、全程零平移（无晋升平移路径）', () => {
   const w = makeWorld();
+  w.selection = ['E'];
   w.down(0.2, 0.2, { touch: true, pointerId: 91 });
-  w.move(0.5, 0.2, { touch: true, pointerId: 91 }); // client 30px > lpCancelPx=12 → 取消长按；>promoteM → 晋升
-  w.advance(500);
-  assert.equal(w.machine.state(), 'PAN');
-  assert.deepEqual(w.log.boxes, []);
-  assert.deepEqual(w.log.pans.at(-1), [30, 0]); // 晋升补齐位移，平移语义不变
-  w.up(0.5, 0.2, { touch: true, pointerId: 91 });
-});
-test('41 长按等待期小抖动（<12px）不取消长按：触发锚=当前指位', () => {
-  const w = makeWorld();
-  w.down(0.2, 0.2, { touch: true, pointerId: 91 });
-  w.move(0.25, 0.22, { touch: true, pointerId: 91 }); // client 5px 抖动，未晋升
-  w.advance(500);
+  w.move(0.5, 0.2, { touch: true, pointerId: 91 }); // client 30px
   assert.equal(w.machine.state(), 'BOX');
-  assert.deepEqual(w.log.boxes.at(-1), { x0: 25, y0: 22, x1: 25, y1: 22 });
+  assert.deepEqual(w.log.boxes.at(-1), { x0: 20, y0: 20, x1: 50, y1: 20 }); // 矩形跟手
+  assert.deepEqual(w.log.pans, [], '零平移（大位移也是框，不是平移）');
+  w.up(0.5, 0.2, { touch: true, pointerId: 91 });
+  assert.deepEqual(w.log.pans, []);
 });
-test('42 长按框选中 cancel（Escape/pointercancel）：矩形清除回 IDLE、零历史', () => {
+test('41 触摸框选等待期小抖动：矩形锚点=按下起点（无长按重锚机制）', () => {
   const w = makeWorld();
   w.down(0.2, 0.2, { touch: true, pointerId: 91 });
-  w.advance(500);
+  w.move(0.25, 0.22, { touch: true, pointerId: 91 }); // client 5px 抖动
+  assert.equal(w.machine.state(), 'BOX');
+  assert.deepEqual(w.log.boxes.at(-1), { x0: 20, y0: 20, x1: 25, y1: 22 }); // x0/y0 恒=按下点
+});
+test('42 触摸框选中 cancel（Escape/pointercancel）：矩形清除回 IDLE、零历史', () => {
+  const w = makeWorld();
+  w.down(0.2, 0.2, { touch: true, pointerId: 91 });
   w.move(2, 2, { touch: true, pointerId: 91 });
   assert.equal(w.machine.cancel(), true);
   assert.equal(w.log.boxes.at(-1), null);
@@ -569,12 +568,11 @@ test('42 长按框选中 cancel（Escape/pointercancel）：矩形清除回 IDLE
   assert.deepEqual(w.log.commits, []);
   assert.deepEqual(w.selection, []); // 框选未结算不改选择
 });
-test('43 长按框选零尺寸松手（<boxMinPx）=点按语义：清空选择', () => {
+test('43 触摸框选零尺寸松手（<boxMinPx）=点按语义：清空选择', () => {
   const w = makeWorld();
   w.selection = ['E'];
   w.down(0.2, 0.2, { touch: true, pointerId: 91 });
-  w.advance(500);
-  w.up(0.2, 0.2, { touch: true, pointerId: 91 }); // 长按后原地抬起
+  w.up(0.2, 0.2, { touch: true, pointerId: 91 }); // 原地抬起（未成框）
   assert.deepEqual(w.selection, []);              // 与桌面框选 <6px=点击 同语义
   assert.equal(w.machine.state(), 'IDLE');
 });
@@ -780,7 +778,8 @@ test('R2 右键命中未合并舞者=删除菜单；空白/进行中手势/只�
   assert.deepEqual(w2.log.menus, []);
 });
 
-// ---------- 「删除」数据一致性（单元菜单/上下文菜单复用 model.removeDancer，node 可测） ----------
+// ---------- 「删除」数据一致性（model.removeDancer 全局语义=名册唯一删除入口；build-69-roster 起
+// 画布浮窗入口已改 removeDancerFromFormation「移出队形」语义，本组仍钉 removeDancer 本身） ----------
 test('R3 删除舞者数据一致性：positions 键===dancers、merges/groups 引用清理、单元=两人都删', () => {
   const mk = () => ({
     dancers: [{ id: 'A' }, { id: 'B' }, { id: 'C' }],
@@ -829,4 +828,43 @@ test('R4 载荷标记与合并状态一致：合并成员两入口=unit 载荷�
     assert.equal(ms.mode, 'context');
     assert.deepEqual(ms.ids, ['E']);
   }
+});
+
+// ---------- build-91-varispeed：细粒度吸附接线（host.snap + host.fineSnap + Alt 取反） ----------
+// host.snap=吸附几何唯一出处（stage.js snapToGrid，W2 接线清单 #5 的防循环 import 方案）；
+// fine = fineSnap 开关 XOR Alt/Option（拖动中临时取反）。stageView 真实 host 在 stage.js
+//（浏览器面），此处用记录型桩验证状态机侧契约：调用形态、开关组合、无 host 宿主回退。
+// 位置断言带 1e-9 容差（snapToGrid 同式浮点尘埃，gridgran S1 同口径）。
+const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}（实际 ${a}）`);
+test('F1 host.snap 存在：fine 口径由 host.fineSnap() 决定（开关开=gridM/5 档），Alt 按住临时取反', () => {
+  const calls = [];
+  const stub = (x, y, fine) => { const s = fine ? 0.1 : 0.5; return { x: Math.round(x / s) * s, y: Math.round(y / s) * s }; };
+  const w = makeWorld({ snap: true });
+  w.host.snap = (x, y, fine) => { calls.push(fine); return stub(x, y, fine); };
+  // 默认（fineSnap 未提供=falsy）：粗档 0.5
+  w.down(1, 1); w.move(1.3, 1); w.up(1.3, 1);
+  near(w.positions.A.x, 1.5, '开关关+无 Alt=粗档 0.5');
+  assert.deepEqual(calls, [false], 'fine 实参=开关 XOR Alt（false）');
+  // fineSnap 开：细档 0.1
+  w.host.fineSnap = () => true;
+  w.down(1.5, 1); w.move(1.64, 1); w.up(1.64, 1);
+  near(w.positions.A.x, 1.6, '开关开=fine 档 0.1（gridM/5）');
+  assert.deepEqual(calls, [false, true]);
+  // Alt 按住（事件层 e.alt）：临时取反 → 细档回粗档
+  w.down(1.6, 1); w.move(1.84, 1, { alt: true }); w.up(1.84, 1, { alt: true });
+  near(w.positions.A.x, 2, '开关开+Alt=取反回粗档 0.5');
+  assert.deepEqual(calls, [false, true, false]);
+  // 开关关+Alt：取反成细档
+  w.host.fineSnap = () => false;
+  w.down(2, 1); w.move(2.13, 1, { alt: true }); w.up(2.13, 1, { alt: true });
+  near(w.positions.A.x, 2.1, '开关关+Alt=取反成细档 0.1');
+  assert.deepEqual(calls, [false, true, false, true]);
+});
+test('F2 host.snap 缺省：落回内联 gridM 粗档同式（旧宿主行为逐值不变，test 15 同路径）', () => {
+  const w = makeWorld({ snap: true });
+  w.down(1, 1); w.move(1.3, 1); w.up(1.3, 1);
+  near(w.positions.A.x, 1.5, '无 host.snap=内联 Math.round(v/gs)*gs');
+  const w2 = makeWorld({ snap: true });
+  w2.down(1, 1); w2.move(1.3, 1, { alt: true }); w2.up(1.3, 1, { alt: true });
+  near(w2.positions.A.x, 1.5, '回退路径 Alt 无效（host 契约外字段，粗档照旧）');
 });

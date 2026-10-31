@@ -7,43 +7,46 @@ import assert from 'node:assert/strict';
 import { selectionMenuSpec, varispeedMismatch } from '../js/main.js';
 import { tlTotalHeight, niceSecStep, fmtSecLabel, TRACKS_OPS_H, musicLaneH, musicContentH } from '../js/timeline.js';
 // ---------- 实现 2：SelectionMenu 条目矩阵（0/1/2/3+ 人 × 构成） ----------
-test('S1 N=1：朝向（无互对）+ 删除（「删除」标签=单人既有文案，仪器口径）', () => {
+// build-69-roster 改写注明：画布删除项收口为「移出队形」（removeDancerFromFormation 语义，
+// 名册保留）——原 'delete' kind（「删除」/「删除所选（N 人）」）退役，末位单项
+// removeFromFormation 携带呈示文案；全局删除唯一入口收归名册。S1-S5 相应改写（S6 不涉标签，原样）。
+test('S1 N=1：朝向（无互对）+ 移出队形（「移出队形」标签，build-69 起画布删除项语义）', () => {
   const items = selectionMenuSpec({ count: 1 });
-  assert.deepEqual(items.map(i => i.kind), ['facing', 'delete']);
+  assert.deepEqual(items.map(i => i.kind), ['facing', 'removeFromFormation']);
   assert.equal(items[0].eachOther, false);
-  assert.equal(items[1].label, '删除'); // page-r R-02/R-04 精确断言 ['删除','✕']（呈示层收口见 main.js 注释）
+  assert.equal(items[1].label, '移出队形'); // page-r R-02/R-04 仪器口径需随 build-69 同步（['移出队形','✕']）
 });
 
 test('S2 N=2 未合并：互相对齐出现、存为编组、合并为单元、移出队形；无均布（<3 人模型无效果）', () => {
   const items = selectionMenuSpec({ count: 2, pairEligible: true, mergedInvolved: false });
-  assert.deepEqual(items.map(i => i.kind), ['facing', 'saveGroup', 'mergeUnit', 'removeFromFormation', 'delete']);
+  assert.deepEqual(items.map(i => i.kind), ['facing', 'saveGroup', 'mergeUnit', 'removeFromFormation']);
   assert.equal(items[0].eachOther, true, '恰 2 人 → 互相对齐');
-  assert.equal(items.at(-1).label, '删除所选（2 人）');
+  assert.equal(items.at(-1).label, '移出队形（2 人）');
 });
 
 test('S3 N=2 涉合并（或已是整单元）：无「合并为单元」；mergedInvolved → 取消合并', () => {
   // 整单元多选会被手势机分流到 unit 载荷（round23 M2），spec 层仍表达「不重复给合并入口」
   const items = selectionMenuSpec({ count: 2, pairEligible: false, mergedInvolved: true });
-  assert.deepEqual(items.map(i => i.kind), ['facing', 'saveGroup', 'unmerge', 'removeFromFormation', 'delete']);
+  assert.deepEqual(items.map(i => i.kind), ['facing', 'saveGroup', 'unmerge', 'removeFromFormation']);
   assert.ok(!items.some(i => i.kind === 'mergeUnit'));
 });
 
-test('S4 N=3 群体：朝向无互对、存编组、取消合并（涉合并时）、均布、移出队形、删除所选（3 人）', () => {
+test('S4 N=3 群体：朝向无互对、存编组、取消合并（涉合并时）、均布、移出队形（3 人）', () => {
   const plain = selectionMenuSpec({ count: 3, pairEligible: false, mergedInvolved: false });
   assert.deepEqual(plain.map(i => i.kind),
-    ['facing', 'saveGroup', 'distribute', 'removeFromFormation', 'delete']);
+    ['facing', 'saveGroup', 'distribute', 'removeFromFormation']);
   assert.equal(plain[0].eachOther, false, '互相对齐仅 N=2');
-  assert.equal(plain.at(-1).label, '删除所选（3 人）');
+  assert.equal(plain.at(-1).label, '移出队形（3 人）');
   const mixed = selectionMenuSpec({ count: 3, pairEligible: false, mergedInvolved: true });
   assert.ok(mixed.some(i => i.kind === 'unmerge'), '涉合并单元 → 取消合并');
   assert.ok(!mixed.some(i => i.kind === 'mergeUnit'));
 });
 
-test('S5 N≥4：同 N=3 骨架（删除标签随 N），合并族按构成显隐', () => {
+test('S5 N≥4：同 N=3 骨架（移出队形标签随 N），合并族按构成显隐', () => {
   const items = selectionMenuSpec({ count: 4 });
   assert.deepEqual(items.map(i => i.kind),
-    ['facing', 'saveGroup', 'distribute', 'removeFromFormation', 'delete']);
-  assert.equal(items.at(-1).label, '删除所选（4 人）');
+    ['facing', 'saveGroup', 'distribute', 'removeFromFormation']);
+  assert.equal(items.at(-1).label, '移出队形（4 人）');
 });
 
 test('S6 恰 2 人未合并但 selection 含第三方（N=3）：不给「合并为单元」（pairEligible 只看整 selection）', () => {
@@ -51,12 +54,14 @@ test('S6 恰 2 人未合并但 selection 含第三方（N=3）：不给「合并
   assert.ok(!items.some(i => i.kind === 'mergeUnit'));
 });
 
-// ---------- 实现 1：双 UI 模式几何（编舞=既有零变化；音乐=块区不占位） ----------
-test('G1 编舞模式（stage）总高与既有版本逐值一致：桌面简单 150 / 移动 120 / 展开桌面 160', () => {
-  // audioBottom：简单态=22(尺规)+18(tag)+26(音轨)=66；展开态=22+18+72=112
-  assert.equal(tlTotalHeight('stage', 66, false), 150);
-  assert.equal(tlTotalHeight('stage', 66, true), 120);
-  assert.equal(tlTotalHeight('stage', 112, false), 160);
+// ---------- 实现 1：双 UI 模式几何（编舞=build-56 F1 起 112 基线；音乐=块区不占位） ----------
+test('G1 编舞模式（stage）总高：桌面 max(112 基线, 内容地板)=114 / 移动 120 / 展开桌面 160（build-56 F1 改写）', () => {
+  // audioBottom：简单态=22(尺规)+18(tag)+26(音轨)=66；展开态=22+18+72=112。
+  // build-56-indextab F1 改写（原 E-12 断言桌面 150）：基线 150→112，内容地板 66+48=114 兜底；
+  // 移动端 120 与富余域（audioBottom 112→160）不变。
+  assert.equal(tlTotalHeight('stage', 66, false), 114, '桌面：max(112, 66+6+36+6)=114');
+  assert.equal(tlTotalHeight('stage', 66, true), 120, '移动端不变');
+  assert.equal(tlTotalHeight('stage', 112, false), 160, '富余域不变');
 });
 
 test('G2 音乐模式（music）几何 W1 改版（整改方案 §6 授权改写）：固定公式退役 → 容器推导（musicLaneH/musicContentH，全矩阵见 tests/w1-music.test.js；编舞 G1 三值不动）', () => {

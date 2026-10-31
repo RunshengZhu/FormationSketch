@@ -1,10 +1,10 @@
-// round23 UX 优化回归：多选上下文菜单载荷 / labelMode 显示字段 / BPM-秒换算与数拍入场。
+// round23 UX 优化回归：多选上下文菜单载荷 / labelMode 显示字段 / BPM-秒换算（数拍入场用例随 build-68-nocountin 退役改写）。
 // 全部 node 可测（纯逻辑 + 桩 ctx），不依赖 DOM/浏览器。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGestureMachine } from '../js/gesture.js';
 import {
-  createProject, validateProject, removeDancer, addMerge, computeSegments,
+  createProject, validateProject, removeDancer, addMerge, segmentsFromClips,
   spb, beatToSec, secToBeat, totalDurationSec, dancerLabel, truncateLabel, labelModeOf,
 } from '../js/model.js';
 import { drawScene } from '../js/stage.js';
@@ -152,7 +152,8 @@ test('M6 只读/空白右键不弹 multi 菜单（编辑锁语义不变）', () 
   assert.deepEqual(w.log.menus, []);
 });
 
-// ---------- 需求 1 佐证：多选删除的模型层一致性（菜单「删除所选（N 人）」走 removeDancer） ----------
+// ---------- 需求 1 佐证：批量删除的模型层一致性（removeDancer 全局语义；build-69-roster 起
+// 画布多选入口改「移出队形」走 removeDancerFromFormation，removeDancer 仅名册唯一入口使用） ----------
 test('M7 批量删除（removeDancer×N）：positions 键===dancers、merges/groups 引用清理', () => {
   const p = createProject({ pairs: 2 });
   const [a, b, c] = p.dancers.map(d => d.id);
@@ -197,7 +198,8 @@ test('L2 dancerLabel：no=序号(1..N) / short=简称 / name=姓名，缺失回�
   assert.equal(truncateLabel(12, 4), '12');
 });
 
-// 桩 2D 上下文：记录 fillText 文本（labelMode 绘制数据的观测面）
+// 桩 2D 上下文：记录 fillText 文本（labelMode 绘制数据的观测面）。
+// build-91-varispeed：重合简称角标走 measureText 量宽——桩补真签名（真 canvas 恒有）。
 function stubCtx() {
   const texts = [];
   const noop = () => {};
@@ -207,7 +209,9 @@ function stubCtx() {
       if (!target[prop]) {
         target[prop] = prop === 'fillText'
           ? (...a) => texts.push(String(a[0]))
-          : noop;
+          : prop === 'measureText'
+            ? (s => ({ width: String(s).length * 10 }))
+            : noop;
       }
       return target[prop];
     },
@@ -246,7 +250,7 @@ test('L3 drawScene 标签跟随 labelMode：单人圆/capsule 双标/single 单�
   assert.ok(texts.includes('3'), '未合并舞者仍按序号呈示');
 });
 
-// ---------- 需求 4 佐证：BPM-秒换算 / 数拍入场 / 持久字段 ----------
+// ---------- 需求 4 佐证：BPM-秒换算 / 持久字段（数拍入场已退役，退役断言见 nocountin.test.js） ----------
 test('B1 spb/beatToSec/secToBeat 换算：BPM 修改联动时间轴秒长（含首拍偏移）', () => {
   const p = createProject({ pairs: 1 });
   createProject; // noop 防止 tree-shake 误判（保持 import 稳定）
@@ -257,50 +261,37 @@ test('B1 spb/beatToSec/secToBeat 换算：BPM 修改联动时间轴秒长（含�
   p.audio.firstBeatSec = 1.5;
   assert.equal(beatToSec(p, 8), 9.5);
   assert.equal(secToBeat(p, 9.5), 8);
-  const { totalBeats } = computeSegments(p);
+  const { totalBeats } = segmentsFromClips(p.formations); // build-70 换源：clip 域尾
   const d120 = totalDurationSec({ ...p, audio: { ...p.audio, bpm: 120, firstBeatSec: 0 } });
   const d60 = totalDurationSec({ ...p, audio: { ...p.audio, bpm: 60, firstBeatSec: 0 } });
   assert.equal(Math.round(d60 / d120), 2);   // BPM 减半 → 总秒长翻倍
 });
 
-test('B2 数拍入场：countInBeats 生效（负拍推进 → 入场毕转播放），节拍器开关为项目持久字段', () => {
+test('B2 节拍器开关为项目持久字段（validateProject 往返；数拍入场已随 build-68-nocountin 退役）', () => {
   const p = createProject({ pairs: 1 });
-  p.audio.bpm = 600; // spb=0.1s：真实定时器下 4 拍 ≈ 0.4s
-  p.timeline.countInBeats = 4;
-  const counts = [];
+  p.audio.bpm = 600; // spb=0.1s
   const player = new Player({
     audio: { ready: false, click: () => {}, duration: 0 },
     getProject: () => p,
     onTick: () => {},
     onStateChange: () => {},
-    onCountin: n => counts.push(n),
     onPreviewEnd: () => {},
   });
   player.play(0);
-  assert.equal(player.countin, true);
-  assert.equal(counts[0], 4, '启动即上报总入场拍（overlay 先画满 4）');
-  // DEFECT-R28-1 语义修正：首拍不再同 tick 立即计数（旧实现首帧数字被覆盖为 3，
-  // 倒计序列只显示 3,2,1）；改为先画满 n，随节拍间隔逐拍递减（4,3,2,1,0）。
-  assert.deepEqual(counts, [4], '启动仅上报总拍，递减随节拍间隔到来');
-  return new Promise(resolve => {
-    setTimeout(() => {
-      assert.deepEqual(counts, [4, 3, 2, 1, 0], '逐拍递减序列完整（含收尾 0=隐藏）');
-      assert.equal(player.countin, false);
-      assert.equal(player.playing, true);
-      assert.ok(player.beat >= 0);
-      player.stop();
-      // 节拍器/入场拍随 validateProject 持久（旧项目补默认值）
-      p.timeline.metronome = true;
-      const v = validateProject(JSON.parse(JSON.stringify(p))).project;
-      assert.equal(v.timeline.metronome, true);
-      assert.equal(v.timeline.countInBeats, 4);
-      resolve();
-    }, 700);
-  });
+  assert.equal(player.playing, true, '▶ 按下即起播（无倒计分支）');
+  player.pause();
+  // 节拍器随 validateProject 持久（旧项目补默认值）；旧 JSON 里的 countInBeats 载入即剥离
+  p.timeline.metronome = true;
+  const v = validateProject(JSON.parse(JSON.stringify(p))).project;
+  assert.equal(v.timeline.metronome, true);
+  assert.equal(v.timeline.countInBeats, undefined, '退役字段不再保留');
 });
 
-test('B3 validateProject：metronome/countInBeats 缺省补默认（旧项目零迁移）', () => {
+test('B3 validateProject：metronome 缺省补默认（旧项目零迁移）；countInBeats 退役剥离', () => {
   const v = validateProject({ version: 1, dancers: [], formations: [{ id: 'f', positions: {} }] }).project;
   assert.equal(v.timeline.metronome, false);
-  assert.equal(v.timeline.countInBeats, 8);
+  assert.equal(v.timeline.countInBeats, undefined);
+  // 旧 JSON 显式带 countInBeats（如 4）：载入零报错、字段被容忍剥离
+  const old = validateProject({ version: 1, dancers: [], formations: [{ id: 'f', positions: {} }], timeline: { countInBeats: 4 } }).project;
+  assert.equal(old.timeline.countInBeats, undefined);
 });

@@ -12,9 +12,9 @@
 //   分离呈示不可经拖拽产生）；仅当整单元已在多选中时才随整组选择一起拖（组拖路径）。
 //   Escape/双指中断=整单元回滚。
 //   IDLE  --down(空白·鼠标左键)--> BOX  --up--> 框内全选（<最小边长视为点击=清空；命中单元成员=整单元入选）
-//   IDLE  --down(空白·触摸)--> PAN  --位移>晋升阈值--> panBy；未晋升抬起=清空选择（点按）
-//                                    --静止 lpMs（位移<lpCancelPx）--> BOX(长按框选 lpBox)：拖动画框、
-//                                     松手复用桌面框选结算；期间忽略新增手指（不转 PINCH，直到松手）
+//   build-70-formationclips M4（需求 1）：触屏/笔空白拖动语义纠正——单指空白=框选（与鼠标一致，
+//   消除「单指拖动在舞者拖动/平移之间」的混淆源）；平移=两指专属（PINCH 质心位移）+桌面修饰键
+//   （中键/空格+左键）路径不变；旧「触摸空白待定平移 + 长按转框选（lpBox）」机制随单指框选退役。
 //   IDLE  --down(空白·中键/空格+左键)--> PAN --move--> panBy（桌面平移；全程不改选择/数据/历史）
 //   IDLE  --contextmenu(右键·stage 层翻译进来)--> MENU（多选中命中=整 selection 菜单（恰一单元=
 //            单元浮窗）；命中者不在多选中=先选中再弹（合并=单元菜单/未合并=删除菜单）；仅 IDLE 响应）
@@ -38,9 +38,12 @@ export function createGestureMachine(host) {
   // host 查询：readOnly() hitHandle(px,py) hitDancer(x,y) toStage(px,py)
   //            selection():string[] multiSelect():bool
   //            formation():{positions,merges}|null stage() fmtIndex():number now():ms
+  //            fineSnap?():bool（细粒度吸附偏好，build-77-expux；缺省=false）
   // host 命令：select(ids,{add,toggleOff}) applyPositions({id:{x,y,facing?}})
   //            rollback({id:{x,y}}) commit(label) showMenu({mode,ids,style,at,formationIndex})
   //            hideMenu() box(rect|null) panBy(dx,dy) zoomAt(cx,cy,f) requestDraw()
+  //            snap?(x,y,fine):{x,y}（吸附几何唯一出处=stage.js snapToGrid——避免本文件与
+  //            stage.js 循环 import 的既定方案；host 未提供时 computeTargets 落回内联粗档同式）
   const setT = host.setTimeout || ((fn, ms) => setTimeout(fn, ms));
   const clearT = host.clearTimeout || (id => clearTimeout(id));
 
@@ -117,25 +120,8 @@ export function createGestureMachine(host) {
     }, TH.lpMs);
   }
   function disarmLP() { if (lpTimer) { clearT(lpTimer); lpTimer = null; } }
-
-  // 触摸/笔空白长按：静止 lpMs 且未晋升平移 → 转 BOX（长按框选，lpBox 标记）。
-  // 与舞者长按菜单（armLP）共用 lpTimer 槽位——同一时刻至多一个待决长按。
-  // 锚点取触发时指位（非按下点）：容忍长按等待期内的手部微漂，反馈点落在指下。
-  function armLPBox() {
-    clearT(lpTimer); lpTimer = null;
-    lpTimer = setT(() => {
-      lpTimer = null;
-      if (state !== 'PAN' || !g || !g.touch || g.promoted) return; // 已晋升平移/手势已断=放弃
-      // 锚点=当前指位（pointers 表由 move 持续更新；未晋升的抖动也反映在此）
-      const p = pointers.get(g.pointerId) || { x: g.lastX, y: g.lastY };
-      g.kind = 'BOX';
-      g.lpBox = true; // 长按框选标记：期间忽略新增手指、抬起只认发起指
-      g.x0 = p.x; g.y0 = p.y; g.x1 = p.x; g.y1 = p.y;
-      g.lastX = p.x; g.lastY = p.y;
-      state = 'BOX';
-      host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 }, { origin: true }); // 零尺寸矩形+起点反馈
-    }, TH.lpMs);
-  }
+  // build-70 M4：旧「触摸空白长按转框选（lpBox）」机制退役——单指空白按下即框选，长按不再
+  // 承担框选入口（舞者长按菜单 armLP 语义不变，见需求核对「舞台长按=单元浮窗」）。
 
   function enterMenu(payload) {
     state = 'MENU'; g = null;
@@ -145,25 +131,35 @@ export function createGestureMachine(host) {
   function exitMenu() { host.hideMenu(); state = 'IDLE'; g = null; }
   function endGesture() { state = 'IDLE'; g = null; }
 
-  // 拖拽中按 snap 网格计算整组目标位置（含舞台+后台钳制）
-  function computeTargets(start, dx, dy) {
+  // 拖拽中按 snap 网格计算整组目标位置。
+  // build-63-stageview2 F3：舞台+后台钳制退役——舞者可自由拖入观众区/后台/侧翼任意位置
+  //（编舞自由度：如从一侧后台下场、沿后台通道走到另一侧）；生成槽位 genSlots 的域内
+  // clamp 不受影响（生成算法仍钳舞台域内，手动拖动自由）。
+  // build-77-expux（W2 接线清单 #5）：吸附几何收口到 host.snap（stage.js snapToGrid——
+  // 细粒度吸附接线，避免 stage.js↔gesture.js 循环 import 的首选方案）：
+  // fine = host.fineSnap()（UI 开关，scene.fineSnap 透传）XOR alt（桌面拖动中按住
+  // Alt/Option 临时取反，e.alt 由 stage.js 事件翻译层透传）=gridM/5 档（与次级网格线同频）。
+  // host.snap 缺省（旧宿主/单测桩）→ 内联 gridM 粗档同式，行为与旧版逐值一致。
+  function computeTargets(start, dx, dy, alt = false) {
     const stg = host.stage();
-    const bs = stg.backstageM ?? 0;
     let ddx = dx, ddy = dy;
     if (stg.snap) {
-      const gs = stg.gridM;
       const base = start[Object.keys(start)[0]];
       if (base) {
-        ddx = Math.round((base.x + dx) / gs) * gs - base.x;
-        ddy = Math.round((base.y + dy) / gs) * gs - base.y;
+        if (typeof host.snap === 'function') {
+          const fine = !!host.fineSnap?.() !== !!alt; // 开关 XOR Alt=临时取反
+          const t = host.snap(base.x + dx, base.y + dy, fine);
+          ddx = t.x - base.x; ddy = t.y - base.y;
+        } else {
+          const gs = stg.gridM;
+          ddx = Math.round((base.x + dx) / gs) * gs - base.x;
+          ddy = Math.round((base.y + dy) / gs) * gs - base.y;
+        }
       }
     }
     const out = {};
     for (const [id, s0] of Object.entries(start)) {
-      out[id] = {
-        x: Math.min(stg.widthM + bs, Math.max(-bs, s0.x + ddx)),
-        y: Math.min(stg.depthM + bs, Math.max(-bs, s0.y + ddy)),
-      };
+      out[id] = { x: s0.x + ddx, y: s0.y + ddy };
     }
     return out;
   }
@@ -191,12 +187,12 @@ export function createGestureMachine(host) {
     g = null; state = 'PINCH';
   }
 
-  // e = { pointerId, px, py, shift, touch, button, space }（px/py 为 client 坐标；
-  //      button=按下时的 PointerEvent.button，space=宿主跟踪的空格按住状态——桌面平移修饰键）
+  // e = { pointerId, px, py, shift, touch, button, space, alt? }（px/py 为 client 坐标；
+  //      button=按下时的 PointerEvent.button，space=宿主跟踪的空格按住状态——桌面平移修饰键，
+  //      alt=Alt/Option 按住（build-77-expux：拖动细粒度吸附临时取反；缺省=未按））
   function down(e) {
     if (state === 'MENU') { exitMenu(); return; } // 点外部=取消，并吞掉这次按下
     if (e.button === 2) return; // 右键：交给 contextmenu 事件（仅 IDLE 响应），不启动任何手势
-    if (state === 'BOX' && g && g.lpBox) return; // 长按框选进行中：忽略新增手指（不转 PINCH/缩放），其抬起同样无效
     pointers.set(e.pointerId, { x: e.px, y: e.py });
     if (pointers.size === 2) {
       // DEFECT-R26-1：查看模式（readOnly）下手势全禁——双指不得转入 PINCH（缩放/双指平移），
@@ -241,23 +237,18 @@ export function createGestureMachine(host) {
     } else if (panMod) {
       g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: false, promoted: true };
       state = 'PAN';
-    } else if (!e.touch) {
+    } else {
+      // build-70 M4：空白（鼠标/触摸/笔一致）=框选——单指空白拖动不再平移（平移=两指 PINCH
+      // 或桌面修饰键）。未拖出的微小框（<boxMinPx）抬起=点按语义（清空选择）。
       g = { kind: 'BOX', x0: e.px, y0: e.py, x1: e.px, y1: e.py };
       state = 'BOX';
       host.box({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 });
-    } else {
-      // 触摸/笔空白：先以点按待定；位移超晋升阈值→转平移；静止达 lpMs→长按框选（lpBox）。
-      // 未晋升抬起=清空选择（点按语义不变）。
-      g = { kind: 'PAN', lastX: e.px, lastY: e.py, touch: true, promoted: false, startS: s, startPx: { x: e.px, y: e.py }, pointerId: e.pointerId };
-      state = 'PAN';
-      armLPBox();
     }
   }
 
   function move(e) {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.px, y: e.py });
     if (state === 'MENU') return;
-    if (g && g.lpBox && e.pointerId !== g.pointerId) return; // 长按框选中：非发起指的移动不画框
     if (state === 'PINCH') {
       if (pointers.size < 2 || !pinch) return;
       const [a, b] = firstTwo();
@@ -278,7 +269,7 @@ export function createGestureMachine(host) {
     }
     if (g.kind === 'DRAG') {
       const sNow = host.toStage(e.px, e.py);
-      host.applyPositions(computeTargets(g.start, sNow.x - g.startS.x, sNow.y - g.startS.y));
+      host.applyPositions(computeTargets(g.start, sNow.x - g.startS.x, sNow.y - g.startS.y, !!e.alt)); // alt=桌面细粒度临时取反（build-77-expux）
       // 重叠驻留：拖到他人身上停住 dwellMs 即弹合并确认（无需松手）
       const fmt = host.formation();
       const other = fmt ? overlapOther(fmt, g.id) : null;
@@ -302,15 +293,7 @@ export function createGestureMachine(host) {
       return;
     }
     if (g.kind === 'PAN') {
-      if (!g.promoted) {
-        // 长按框选意图：位移超取消阈值即解除长按（维持平移语义）
-        if (Math.hypot(e.px - g.startPx.x, e.py - g.startPx.y) > TH.lpCancelPx) disarmLP();
-        // 触摸空白：位移超过晋升阈值才转平移（阈值与拖拽晋升一致）
-        const sNow = host.toStage(e.px, e.py);
-        if (Math.hypot(sNow.x - g.startS.x, sNow.y - g.startS.y) <= TH.promoteM) return;
-        disarmLP();
-        g.promoted = true; // 晋升当次即补齐自按下起的全部位移（平移量=手指位移，无滞后）
-      }
+      // build-70 M4：PAN 仅剩桌面修饰键路径（中键/空格+左键）——恒已晋升，直接平移
       host.panBy(e.px - g.lastX, e.py - g.lastY);
       g.lastX = e.px; g.lastY = e.py;
       return;
@@ -322,7 +305,6 @@ export function createGestureMachine(host) {
   }
 
   function up(e) {
-    if (state === 'BOX' && g && g.lpBox && e.pointerId !== g.pointerId) return; // 长按框选中：非发起指抬起不结算
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
     disarmLP();
@@ -395,8 +377,8 @@ export function createGestureMachine(host) {
       return;
     }
     if (state === 'PAN') {
-      // 触摸空白未晋升抬起 = 点按语义：清空选择（平移本身永不改选择）
-      if (g && g.touch && !g.promoted) host.select([]);
+      // build-70 M4：PAN 仅桌面修饰键路径——平移本身永不改选择（触摸点按清选语义由
+      // 空白框选的微小框路径承担：BOX 未达最小边长=点按=清空选择）。
       endGesture();
       return;
     }

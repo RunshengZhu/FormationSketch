@@ -22,7 +22,8 @@ for (const k of keys) {
 }
 
 const banner = `// 自动生成：由 scripts/gen-manual-assets.mjs 从 scripts/manual-assets.json 生成，勿手改。
-// 说明书截图（真实拍摄 + JPEG q60 压缩），js/manual.js 经 import 使用；node 单测直接 import 校验。
+// 说明书截图（真实拍摄 + JPEG 压缩；build-59-manual4 起 lab manual-shots-v4.mjs DPR2 高清重拍），
+// js/manual.js 经 import 使用；node 单测直接 import 校验。
 export const MANUAL_META = ${JSON.stringify(json.meta, null, 2)};
 export const MANUAL_IMAGES = {
 ${keys.map(k => `  ${JSON.stringify(k)}: ${JSON.stringify(json.images[k])},`).join('\n')}

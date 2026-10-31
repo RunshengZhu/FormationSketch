@@ -224,6 +224,15 @@ function afterProjectSwap() {
   if (!cur) state.formationIndex = Math.max(0, ids.length - 1);
 }
 
+// 拖拽过程专用（性能修复）：与 mutate(fn,null) 同效但不 emit——拖拽中每次指针移动若走
+// emit，会触发全 App render 订阅链（DOM+时间轴两画布全量重绘）×2 次/事件，放大态画布
+// 巨大时是移动端卡顿主因。拖拽视觉由 timeline 自绘承担，结束时 commit(label) 统一 emit 一次。
+export function mutateQuiet(fn) {
+  if (!state.project) return;
+  fn(state.project);
+  state.project.meta.updatedAt = new Date().toISOString();
+  scheduleSave();
+}
 // 变更入口：mutate(fn, label) 即时提交历史；拖拽过程用 mutate(fn, null) + 结束时 commit(label)
 export function mutate(fn, label = null) {
   if (!state.project) return;
@@ -334,6 +343,7 @@ export async function deleteProjectById(id) {
   if (state.projectId === id) { state.project = null; state.view = 'library'; }
   await refreshLibrary();
 }
+
 export async function duplicateProject(id) {
   const p = await storage.getProject(id);
   if (!p) return;

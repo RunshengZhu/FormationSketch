@@ -1,11 +1,11 @@
 // 时间轴标记（timeline.tags）单元测试 —— 音乐时间轴 tag 道（主歌/副歌/间奏等分段记号）。
 // 覆盖：模型 CRUD/默认命名/超长截断、validateProject 清洗与导出导入往返、undo 语义
 // （打/改/移/删各恰一条历史、拖拽预览 mutate(null)+commit 一条）、beat 换算随 BPM/首拍、
-// tags 纯标记不影响播放/队形逻辑（computeSegments/posAt 零变化）。
+// tags 纯标记不影响播放/队形逻辑（segmentsFromClips/posAt 零变化）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createProject, computeSegments, posAt, totalDurationSec, spb, beatToSec,
+  createProject, segmentsFromClips, posAt, totalDurationSec, spb, beatToSec,
   validateProject, addTag, removeTag, renameTag, moveTag, tagById, nextTagName,
   sanitizeTags, TAG_NAME_MAX,
 } from '../js/model.js';
@@ -94,7 +94,9 @@ test('sanitizeTags：非数组→[]；非对象项/beat 非有限/负值/空名/
     { id: 't5', beat: 16, name: '一二三四五六七八九十一二三四五六七八九十一二三四五' }, // 截断
   ]);
   assert.equal(out.length, 3);
-  assert.deepEqual(out[0], { id: 't1', beat: 4, name: '主歌' });
+  // build-49 F1 改写：sanitize 统一过 resolveTagRegions——旧点 tag 迁移为区域块。
+  // 首点 tag 的 endBeat=下一个同层 tag.beat（无缝衔接，12）；shape 新增 endBeat 键（区域必填）。
+  assert.deepEqual(out[0], { id: 't1', beat: 4, name: '主歌', endBeat: 12 });
   assert.ok(out[1].id.startsWith('tag_'), '缺 id 应补 uid');
   assert.equal(out[1].beat, 12);
   assert.equal(out[2].name.length, TAG_NAME_MAX);
@@ -103,7 +105,7 @@ test('sanitizeTags：非数组→[]；非对象项/beat 非有限/负值/空名/
 });
 
 test('validateProject：旧项目无 tags → 补 []；垃圾 tags 全丢 → []；ok 不受影响', () => {
-  const base = { version: 1, dancers: [], formations: [{ id: 'f1', name: 'F', positions: {} }], timeline: { blocks: [] } };
+  const base = { version: 1, dancers: [], formations: [{ id: 'f1', name: 'F', positions: {} }], timeline: {} }; // build-70：blocks 退役（旧字段写入即被剥离，夹具不再携带）
   const r1 = validateProject(JSON.parse(JSON.stringify(base)));
   assert.equal(r1.ok, true);
   assert.deepEqual(r1.project.timeline.tags, []);
@@ -127,16 +129,16 @@ test('validateProject：导出→导入自然往返（id/beat/name 逐字段保�
   assert.deepEqual(r.project.timeline.tags, p.timeline.tags);
 });
 
-test('tags 纯标记：增删改不改 computeSegments/posAt/totalDurationSec（不影响播放与队形逻辑）', () => {
+test('tags 纯标记：增删改不改 segmentsFromClips/posAt/totalDurationSec（不影响播放与队形逻辑）', () => {
   const p = createProject({ title: 'T', pairs: 2 });
-  const segs0 = computeSegments(p);
+  const segs0 = segmentsFromClips(p.formations);
   const total0 = totalDurationSec(p);
   const pos0 = posAt(p, 20);
   addTag(p, 20, '标记');
   moveTag(p, p.timeline.tags[0].id, 30);
   removeTag(p, p.timeline.tags[0].id);
   addTag(p, 20, '再打');
-  const segs1 = computeSegments(p);
+  const segs1 = segmentsFromClips(p.formations);
   const total1 = totalDurationSec(p);
   const pos1 = posAt(p, 20);
   assert.deepEqual(segs1.segments.map(s => ({ ...s })), segs0.segments.map(s => ({ ...s })));
@@ -219,9 +221,9 @@ test('undo：标签操作与队形操作混用互不干扰（undo 逐条回退�
   store.createNewProject({ title: 'U4', pairs: 2 });
   store.mutate(p => { addTag(p, 8, '主歌'); }, '打标记');
   const n0 = store.getState().project.formations.length;
-  store.mutate(p => { p.timeline.blocks[0].holdBeats = 20; }, '调整保持时长');
+  store.mutate(p => { p.formations[0].lenBeats = 20; }, '调整保持时长');
   store.undo(); // 回退时长
-  assert.equal(store.getState().project.timeline.blocks[0].holdBeats, 16);
+  assert.equal(store.getState().project.formations[0].lenBeats, 16);
   assert.equal(store.getState().project.timeline.tags.length, 1, '标记不受影响');
   store.undo(); // 回退打标记
   assert.equal(store.getState().project.timeline.tags.length, 0);

@@ -14,7 +14,7 @@ import * as shapesNS from '../js/shapes.js';
 import * as extraNS from '../js/choreo-extra.js';
 import {
   createProject, validateProject, addMerge, removeMerge, findMerge, collapseUnit,
-  expandUnits, syncTimeline, ensureFormationComplete, clone,
+  expandUnits, ensureFormationComplete, clone,
 } from '../js/model.js';
 import { genSlots, applySlots, mirrorH, SHAPE_KINDS } from '../js/shapes.js';
 import { toSVG, diffFormations, feasibility } from '../js/choreo-extra.js';
@@ -39,8 +39,9 @@ test('createProject：12 人 6 单元（presetMerged 演练种子形态）', () 
     const a = f.positions[m.a], b = f.positions[m.b];
     assert.equal(a.x, b.x); assert.equal(a.y, b.y);
   }
-  syncTimeline(p);
-  assert.equal(p.timeline.blocks.length, 1);
+  // build-70：syncTimeline 退役——clip 字段驻队形（createProject 即 [0,16) 缺省，无独立同步步）
+  assert.equal(p.formations[0].startBeat, 0);
+  assert.equal(p.formations[0].lenBeats, 16);
 });
 
 test('genSlots/applySlots/mirrorH：与 app 同源的基础行为', () => {

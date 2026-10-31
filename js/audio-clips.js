@@ -6,15 +6,20 @@
 //     每个 clip 只调度一次完整剩余区间（不是切片），停止统一 stop()；
 //     增益自动化走 setValueCurveAtTime 分段（常量段 setValueAtTime 首尾相接，无曲线重叠）。
 // 交叉淡化：等功率（sin/cos 互补，功率和恒 1）——重叠区两 clip 同时出声，波形按包络收窄。
+//   build-45 起淡化曲线可调（fadeInCurve/fadeOutCurve ∈ [-1,1]，0=等功率缺省，见 fadeEnvAt）；
+//   自动交叉淡化只发生在**同轨**重叠对之间（computeOverlaps 同轨过滤，F1 规格变更）。
 // 多轨（R47）：数据模型在 model.js（timeline.tracks + clip.trackId）；引擎侧每轨一条持久
 // Gain 子链挂既有 master 入口（syncTracks/setTrackGainById/setTrackMutedById），未激活时
 // 链路与旧版逐字节一致（audio.js 与 main.js 均零改动）。
-import { uid, MIN_CLIP_DUR } from './model.js';
+import { uid, MIN_CLIP_DUR, DEFAULT_TRACK_ID, clampCurve } from './model.js';
+// clip 变速（保音高 TSM）+ 变调（半音）processed 消费（语义契约归 clip-process.js · 并行交付）：
+// needsProcess(clip)=speed≠1||semi≠0；processed buffer 时长=源/speed（已烘焙变速），1:1 播放/混音。
+import { needsProcess, clipProcessKey } from './clip-process.js';
 
 export { MIN_CLIP_DUR };
 export const TICK_MS = 25;           // 调度轮询间隔
 export const LOOKAHEAD = 0.12;       // 调度前瞻（秒）
-export const START_DELAY = 0.06;     // 起播延迟（ctx 时钟锚定的提前量）
+export const START_DELAY = 0.06;     // 起播延迟（秒）
 export const GAIN_MAX = 4;           // clip 增益上限（线性）
 export const CLIP_COLORS = ['#38bdf8', '#0ea5e9', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'];
 export const CLIP_DEFAULT_COLOR = '#38bdf8';
@@ -26,6 +31,17 @@ export function clipEnd(c) { return c.timelineStartSec + c.lengthSec; }
 export function lastClipEndSec(clips) {
   let e = 0;
   for (const c of clips || []) e = Math.max(e, clipEnd(c));
+  return e;
+}
+// 指定轨最后 clip 的终点秒（该轨无 clip=0）——媒体库「＋ 添加」点击快速放置的落点计算
+//（build-42-sidebar）：新增 clip 追在第一轨末尾，不依赖拖拽精度。clip.trackId 缺失按
+// DEFAULT_TRACK_ID 归一（与 model.trackOfClip / 引擎 _trackIdOf 同口径），纯函数 node 可测。
+export function trackEndSec(clips, trackId) {
+  let e = 0;
+  for (const c of clips || []) {
+    if ((c.trackId || DEFAULT_TRACK_ID) !== trackId) continue;
+    e = Math.max(e, clipEnd(c));
+  }
   return e;
 }
 // ---------- ⏮⏭ clip 缘步进（音乐模式重定位 M3 · 决策①正式实装） ----------
@@ -75,14 +91,40 @@ export function capFades(c) {
     c.fadeOutSec = r6(c.fadeOutSec * k);
   }
 }
-// 淡化包络（等功率；clip 相对时刻 t）：升= sin(x·π/2)，降 = sin(x'·π/2) —— 重叠区互补
+// ---------- 淡化曲线（build-45-fadecurve） ----------
+// 曲线参数 k ∈ [-1,1] 存于 clip.fadeInCurve / clip.fadeOutCurve，缺省 0 = 既有等功率 sin
+//（旧项目/旧 JSON 无该字段 → 读作 0，零迁移成本）。实现为「相位弯曲」：
+//   p = 2^k ∈ [0.5, 2]；淡入 v = sin(θ^p · π/2)（θ = t/fadeInSec），
+//   淡出 v = sin(θ'^p · π/2)（θ' = fromEnd/fadeOutSec）。
+// k=0 → p=1 → θ^1 逐位等于 θ（此处显式走 p===1 快路，不经 Math.pow，保证与旧公式逐位一致）。
+// 听感方向（以公式实际行为为准）：
+//   淡入：k>0（p>1）→ θ^p<θ，前段增益更低 —— 渐强「起步更慢」，末段快速补齐（慢进快出型）；
+//         k<0（p<1）→ θ^p>θ，前段增益更快爬起 —— 渐强「起步更快」，后段趋缓（快进型）。
+//   淡出：θ' 自 1 递减到 0，k>0 → θ'^p<θ'，衰减起点即快速下坠 —— 渐弱「起步更急」；
+//         k<0 → 前段维持较久、末段才快速归零 —— 渐弱「拖尾更缓」。
+// 等功率互补性：k=0 时 sin²+cos²=1（重叠区两 clip 功率和恒 1，既有保证）；k≠0 时为风格化
+// 曲线，功率和不再恒 1（用户显式调曲线即接受此听感）。
+export function fadePow(k) {
+  const kc = Math.max(-1, Math.min(1, Number(k) || 0));
+  return Math.pow(2, kc);
+}
+// 单缘相位弯曲包络：th ∈ [0,1]（淡入=已进行比例 / 淡出=距终点比例），k=缘曲线参数。
+// th 先钳 [0,1] 再弯曲（p===1 时钳制对域内值恒等，不破坏 k=0 逐位兼容）。
+// 抽成纯函数供 fadeEnvAt 与时间线曲线绘制（视觉与听感同源）共用。
+export function fadeEdgeEnv(th, k) {
+  const p = fadePow(k);
+  const tc = Math.max(0, Math.min(1, th));
+  const bent = p === 1 ? tc : Math.pow(tc, p);
+  return Math.sin(bent * Math.PI / 2);
+}
+// 淡化包络（clip 相对时刻 t）：升= sin(θ^p·π/2)，降 = sin(θ'^p·π/2) —— 重叠区 k=0 时互补
 export function fadeEnvAt(clip, t) {
   let v = 1;
   const fi = clip.fadeInSec || 0, fo = clip.fadeOutSec || 0;
-  if (fi > 1e-4 && t < fi) v *= Math.sin((Math.max(0, t) / fi) * Math.PI / 2);
+  if (fi > 1e-4 && t < fi) v *= fadeEdgeEnv(Math.max(0, t) / fi, clip.fadeInCurve);
   if (fo > 1e-4) {
     const fromEnd = clip.lengthSec - t;
-    if (fromEnd < fo) v *= Math.sin((Math.max(0, fromEnd) / fo) * Math.PI / 2);
+    if (fromEnd < fo) v *= fadeEdgeEnv(Math.max(0, fromEnd) / fo, clip.fadeOutCurve);
   }
   return v;
 }
@@ -93,13 +135,19 @@ export function clipGainAt(clip, t) {
 }
 
 // ---------- 重叠 / 自动交叉淡化 ----------
-// 重叠对（a 在前）：start/end 为时间线秒
+// 重叠对（a 在前）：start/end 为时间线秒。
+// build-45 规格变更（F1）：只配对**同轨**重叠（trackId 归一口径与 trackOfClip/_trackIdOf 一致：
+// 缺失/未设回落 DEFAULT_TRACK_ID）。跨轨重叠是多轨叠层的正当用法（如整曲垫底+点缀音效），
+// 自动淡化干预反而破坏分层混音——旧实现（裁定③「不加轨过滤」）自本版起退役：跨轨重叠零
+// 自动干预，亦不画交叉淡化手柄/曲线。纯函数 node 可测。
+const trackIdOf = c => (c && c.trackId) || DEFAULT_TRACK_ID;
 export function computeOverlaps(clips) {
   const out = [];
   const list = [...(clips || [])].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
       const a = list[i], b = list[j];
+      if (trackIdOf(a) !== trackIdOf(b)) continue;   // 同轨限定（build-45 F1）
       const s = Math.max(a.timelineStartSec, b.timelineStartSec);
       const e = Math.min(clipEnd(a), clipEnd(b));
       if (e - s > MIN_CLIP_DUR) out.push({ a, b, start: s, end: e });
@@ -112,14 +160,16 @@ export function computeOverlaps(clips) {
 // 对端较晚）、autoPairIn=淡入缘对端（本 clip 较晚、对端较早）——链式三 clip（A-B、B-C 共享 B）
 // 下 B 的两条缘各自独立记录，单字段 autoPair（已废弃但保留为兼容镜像，语义=末次写入的对端）
 // 会互相覆写导致拖 C 误清 A-B 对；prune 据双缘精确匹配，只清真正构成对的那条缘。
+// build-45（F5）：重建对只写淡化**时长**（=重叠时长，交叉时间继续自动跟随），不动
+// fadeInCurve/fadeOutCurve——接缝曲线是用户可调的风格参数，重排/重配对不该悄悄抹掉。
 export function applyAutoCrossfades(clips, targetIds) {
   const touched = new Set();
   const ids = targetIds instanceof Set ? targetIds : new Set(targetIds || []);
   for (const ov of computeOverlaps(clips)) {
     if (!(ids.has(ov.a.id) || ids.has(ov.b.id))) continue;
-    // 既有 auto 对与本对同缘匹配 → 先还原（先后序翻转的陈旧反向缘；按缘精确匹配）
-    if (ov.a.fadeInAuto && ov.a.autoPairIn === ov.b.id) { ov.a.fadeInSec = 0; ov.a.fadeInAuto = false; }
-    if (ov.b.fadeOutAuto && ov.b.autoPairOut === ov.a.id) { ov.b.fadeOutSec = 0; ov.b.fadeOutAuto = false; }
+    // 既有 auto 对与本对同缘匹配 → 先还原（先后序翻转的陈旧反向缘；按缘精确匹配；曲线随缘还原）
+    if (ov.a.fadeInAuto && ov.a.autoPairIn === ov.b.id) { ov.a.fadeInSec = 0; ov.a.fadeInAuto = false; ov.a.fadeInCurve = 0; }
+    if (ov.b.fadeOutAuto && ov.b.autoPairOut === ov.a.id) { ov.b.fadeOutSec = 0; ov.b.fadeOutAuto = false; ov.b.fadeOutCurve = 0; }
     const dur = r6(ov.end - ov.start);
     ov.a.fadeOutSec = dur; ov.a.fadeOutAuto = true; ov.a.autoPairOut = ov.b.id; ov.a.autoPair = ov.b.id;
     ov.b.fadeInSec = dur; ov.b.fadeInAuto = true; ov.b.autoPairIn = ov.a.id; ov.b.autoPair = ov.a.id;
@@ -133,24 +183,28 @@ export function applyAutoCrossfades(clips, targetIds) {
 // 对方的那条缘，链式共享中段 clip（同时持有 in/out 两条缘）的另一对不受扰；仅当两侧
 // 均无双缘记录（旧数据未过 validate 迁移）才回退旧「互补 auto 标记」启发式（R41-D1：
 // 与 target 无关的既有对一律不动；R41-D2：半边污染的陈旧 auto 淡化整体还原）。
+// 按缘清除 auto 淡化（build-45 起模块级共享：pruneAutoCrossfades 与 resetClipFades 同路，
+// 保证「淡化归零」与拖开还原的簿记逐字节一致）。只清 x 上指向 partner 的那条 auto 缘
+//（out=淡出缘、in=淡入缘）；曲线随缘一并归 0（时长已 0 的曲线是惰性字段，不留陈旧形状）；
+// 兼容镜像 autoPair 同步。
+function clearAutoEdge(x, edge, partnerId, cleared) {
+  if (edge === 'out' && x.fadeOutAuto && x.autoPairOut === partnerId) {
+    x.fadeOutSec = 0; x.fadeOutAuto = false; x.fadeOutCurve = 0; x.autoPairOut = null;
+    if (x.autoPair === partnerId) x.autoPair = null;
+    cleared.add(x.id);
+  }
+  if (edge === 'in' && x.fadeInAuto && x.autoPairIn === partnerId) {
+    x.fadeInSec = 0; x.fadeInAuto = false; x.fadeInCurve = 0; x.autoPairIn = null;
+    if (x.autoPair === partnerId) x.autoPair = null;
+    cleared.add(x.id);
+  }
+}
 export function pruneAutoCrossfades(clips, targetId) {
   const cleared = new Set();
   const list = clips || [];
   const target = list.find(c => c.id === targetId);
   if (!target) return cleared;
-  // 按缘清除：只清 x 上指向 partner 的那条 auto 缘（out=淡出缘、in=淡入缘）；兼容镜像 autoPair 同步
-  const clearEdge = (x, edge, partnerId) => {
-    if (edge === 'out' && x.fadeOutAuto && x.autoPairOut === partnerId) {
-      x.fadeOutSec = 0; x.fadeOutAuto = false; x.autoPairOut = null;
-      if (x.autoPair === partnerId) x.autoPair = null;
-      cleared.add(x.id);
-    }
-    if (edge === 'in' && x.fadeInAuto && x.autoPairIn === partnerId) {
-      x.fadeInSec = 0; x.fadeInAuto = false; x.autoPairIn = null;
-      if (x.autoPair === partnerId) x.autoPair = null;
-      cleared.add(x.id);
-    }
-  };
+  const clearEdge = (x, edge, partnerId) => clearAutoEdge(x, edge, partnerId, cleared);
   const hasDual = x => x.autoPairOut != null || x.autoPairIn != null;
   for (const other of list) {
     if (other.id === target.id) continue;
@@ -187,6 +241,45 @@ export function pruneAutoCrossfades(clips, targetId) {
     if (target.fadeInAuto && target.autoPairIn == null) { target.fadeInSec = 0; target.fadeInAuto = false; cleared.add(target.id); }
     target.autoPair = null;
   }
+  return cleared;
+}
+
+// ---------- 接缝曲线 / 淡化归零（build-45-fadecurve · 纯函数 node 可测） ----------
+// 接缝把手（同轨 auto 交叉对）纵向拖：前 clip fadeOutCurve 与后 clip fadeInCurve **同调**写
+// 同一 k（[-1,1] 外收界）——交叉时长（fadeOutSec/fadeInSec=重叠时长）不动、auto 标志不解除
+// （曲线调整不改交叉时间，时长仍由 applyAutoCrossfades 随重叠自动联动）。a=前（淡出缘）、
+// b=后（淡入缘）；返回收界后的 k（调用方可回写 UI 态）。
+export function setSeamCurves(a, b, k) {
+  const kc = clampCurve(k);
+  if (a) a.fadeOutCurve = kc;
+  if (b) b.fadeInCurve = kc;
+  return kc;
+}
+// 「淡化归零」（F6 菜单）：targetId 的 fadeIn/fadeOut 长度与曲线全清零。auto 配对缘不走
+// 直接抹字段——复用 prune 同款 clearAutoEdge（双缘记录/兼容镜像一并清理），且对端回指缘
+//（a.autoPairOut=b ⇔ b.autoPairIn=a）同步还原，整对干净解绑；手动缘直接清零。
+// 返回被清理的 clip id 集合（含对端），与 prune 的 cleared 同口径。
+export function resetClipFades(clips, targetId) {
+  const cleared = new Set();
+  const list = clips || [];
+  const target = list.find(c => c.id === targetId);
+  if (!target) return cleared;
+  const byId = new Map(list.map(c => [c.id, c]));
+  // 先还原对端回指缘（须在清 target 双缘记录之前查，否则对端 id 已不可考）
+  const outPartner = target.fadeOutAuto ? byId.get(target.autoPairOut) : null;
+  const inPartner = target.fadeInAuto ? byId.get(target.autoPairIn) : null;
+  if (outPartner) clearAutoEdge(outPartner, 'in', target.id, cleared);
+  if (inPartner) clearAutoEdge(inPartner, 'out', target.id, cleared);
+  clearAutoEdge(target, 'out', target.autoPairOut, cleared);
+  clearAutoEdge(target, 'in', target.autoPairIn, cleared);
+  // 对记录无条件收口：缘已清/转手动后残留的 autoPairOut/autoPairIn/autoPair 一并抹掉
+  //（含「手动缘挂陈旧对记录」的污染形态；幽灵对端上方 clearAutoEdge 已按记录匹配清除）
+  target.autoPairOut = null; target.autoPairIn = null; target.autoPair = null;
+  // 手动缘与曲线：无条件全清零（auto 缘已被 clearAutoEdge 清过，此处幂等收口）
+  target.fadeInSec = 0; target.fadeOutSec = 0;
+  target.fadeInCurve = 0; target.fadeOutCurve = 0;
+  target.fadeInAuto = false; target.fadeOutAuto = false;
+  cleared.add(target.id);
   return cleared;
 }
 
@@ -333,7 +426,9 @@ export function nearestZeroCrossing(data, pos, radiusSamples) {
 }
 
 // ---------- 波形包络（一次性计算，绘制代价与缩放无关） ----------
-// bucket 样本/桶的 min/max 双数组，幅值按资产峰值归一化到 1 —— 任意缩放直接取样绘制
+// bucket 样本/桶的 min/max 双数组，幅值按资产峰值归一化到 1 —— 任意缩放直接取样绘制。
+// peak 一并返回（build-52-wavezoom F4）：深放大的样本直读路径用同一峰值归一化，与 env 聚合
+// 路径幅度同域——任一时间点幅度在不同缩放下固定（不重算峰值，O(1) 取用）。
 export function computeWaveEnvelope(buffer, bucket = 512) {
   if (!buffer || !buffer.getChannelData) return null;
   const ch0 = buffer.getChannelData(0);
@@ -356,7 +451,7 @@ export function computeWaveEnvelope(buffer, bucket = 512) {
     if (a > peak) peak = a;
   }
   if (peak > 1e-6) for (let b = 0; b < n; b++) { min[b] /= peak; max[b] /= peak; }
-  return { bucket, count: n, sampleRate: buffer.sampleRate, durationSec: buffer.duration, min, max };
+  return { bucket, count: n, sampleRate: buffer.sampleRate, durationSec: buffer.duration, min, max, peak };
 }
 // 任意 [srcStart, srcStart+len] 秒区间在 x 像素列的包络取样（envelope + 区间 → 列值）
 export function envAt(env, srcSec) {
@@ -365,6 +460,71 @@ export function envAt(env, srcSec) {
   if (!Number.isFinite(i)) return 0;
   const k = Math.max(0, Math.min(env.count - 1, i));
   return Math.max(Math.abs(env.min[k]), Math.abs(env.max[k]));
+}
+
+// ---------- build-52-wavezoom F4：逐列真 min/max（波形稳定幅度 + 深放大变细） ----------
+// 列宽扫描上限（任务裁定）：env 桶聚合路径每列 ≤64 桶、样本直读路径每列 ≤64 样本——
+// 单帧总扫描量 = 可视列数 × 64，有界（低倍粗粒度退化为桶 stride 采样聚合，视觉等价）。
+export const WAVE_COL_MAX_STRIDE = 64;
+// 单列 [t0,t1) 秒区间的真实 [min,max]（归一化幅值域，与 env 同一口径）：
+//  - env 存在且列宽 ≥ 桶时长：聚合覆盖的 env 桶 k0..k1（min of min / max of max）；
+//    桶数 > 上限时按桶 stride 采样聚合（≤64 桶/列）。
+//  - env 存在且列宽 < 桶时长（深放大）：直读 data 对应样本区间（stride=max(1, floor(n/64))，
+//    含末样本）取真 min/max，再按 env.peak 归一化——亚桶粒度仍有真实细节，与粗粒度同域。
+//  - env 缺失 + data 存在：样本路径（peak=1 原值域，无归一化基准）。
+//  - env 存在 + data 缺失：亚桶列回退为所在单桶（envAt 同口径，桶定幅度=稳定）。
+//  - 两者皆缺：null（调用方画 0.14 兜底平线）。
+// 边界：t0<0 钳 0、t1>时长钳时长、零宽/逆序列=[0,0]；sr 缺省取 env.sampleRate。
+// 纯函数（node 可测）：同输入恒同输出——同一时间点的列幅度只由其覆盖区间决定，与缩放历次
+// 状态无关（旧实现单点 envAt 取样随缩放漂移的根因即在此）。
+export function columnMinMax(env, data, t0, t1, sr) {
+  if (!(sr > 0)) sr = env?.sampleRate || 44100;
+  const dur = env?.durationSec;
+  let a = Number(t0), b = Number(t1);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return env || data ? [0, 0] : null;
+  if (Number.isFinite(dur)) b = Math.min(b, dur);
+  if (a < 0) a = 0;
+  if (!(b > a)) return [0, 0];
+  if (env && (b - a) >= env.bucket / (env.sampleRate || sr)) {
+    const esr = env.sampleRate || sr;
+    let k0 = Math.floor(a * esr / env.bucket);
+    let k1 = Math.ceil(b * esr / env.bucket);      // 右开（首尾跨桶各计一次）
+    k0 = Math.max(0, Math.min(env.count - 1, k0));
+    k1 = Math.max(0, Math.min(env.count, k1));
+    if (k1 <= k0) k1 = k0 + 1;
+    const stride = Math.max(1, Math.ceil((k1 - k0) / WAVE_COL_MAX_STRIDE));
+    let mn = 1, mx = -1;
+    for (let k = k0; k < k1; k += stride) {
+      if (env.min[k] < mn) mn = env.min[k];
+      if (env.max[k] > mx) mx = env.max[k];
+    }
+    if (mn === 1) mn = 0;
+    if (mx === -1) mx = 0;
+    return [mn, mx];
+  }
+  if (data && data.length) {
+    const i0 = Math.max(0, Math.floor(a * sr));
+    const i1 = Math.min(data.length, Math.ceil(b * sr));
+    const n = i1 - i0;
+    if (n <= 0) return [0, 0];
+    const stride = Math.max(1, Math.floor(n / WAVE_COL_MAX_STRIDE));
+    let mn = 1, mx = -1;
+    for (let i = i0; i < i1; i += stride) {
+      const v = data[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    const vl = data[i1 - 1]; // stride 跳过的末样本补一次（区间右缘真值）
+    if (vl < mn) mn = vl;
+    if (vl > mx) mx = vl;
+    const peak = env && Number.isFinite(env.peak) && env.peak > 1e-6 ? env.peak : 1;
+    return [mn / peak, mx / peak];
+  }
+  if (env) { // 亚桶列且无原始数据：所在单桶（桶定幅度，缩放间稳定）
+    const k = Math.max(0, Math.min(env.count - 1, Math.floor(a * (env.sampleRate || sr) / env.bucket)));
+    return [env.min[k], env.max[k]];
+  }
+  return null;
 }
 
 // ---------- ClipTransport：双时钟调度器 ----------
@@ -377,7 +537,9 @@ export function envAt(env, srcSec) {
 //   未激活（_tracks=null，既止单轨调用面）保持 clipGain 直连 master 的原链路，逐字节兼容。
 //   旧 setTrackGain/setTrackMuted（C15 单轨总控）不动：作用在 master 上，多轨下为全局微调。
 export class ClipTransport {
-  constructor({ getContext, destination }) {
+  // resolveProcessed（可选）：(clip) → processed buffer | Promise<buffer> | null——clip.speed/
+  //   pitchSemi 的 TSM 产物供给方（缺省 null=全走既有 raw 路径，行为零变化）。
+  constructor({ getContext, destination, resolveProcessed = null }) {
     this.getContext = getContext;   // () => AudioContext（懒建）
     this.destination = destination; // 恒为 ctx.destination
     this.playing = false;
@@ -387,6 +549,9 @@ export class ClipTransport {
     this._scheduled = new Set();
     this._clips = [];
     this._resolveBuffer = () => null; // assetId → AudioBuffer | null
+    this.resolveProcessed = resolveProcessed;         // (clip) → processed | Promise | null
+    this._processedCache = new Map();                 // assetId|processKey → processed buffer（同步命中免重复处理）
+    this._pendingProcessed = new Set();               // 处理中的 key（防同键重复挂 Promise/重复重调度）
     this.trackGainVal = 1;            // 轨音量（0..1 线性，C15；多轨下=master 总控）
     this.trackMuted = false;
     this.master = null;
@@ -477,12 +642,13 @@ export class ClipTransport {
     // 否则 seek/循环回卷后 beat 瞬时归 0 → 队形跟随/循环区间被改写；S3-06/M6 回归）
     return Math.max(0, this.startPos + (this.master.context.currentTime - this._clockCtxTime));
   }
-  play(clips, { from = 0, rate = 1, resolveBuffer = this._resolveBuffer, tracks } = {}) {
+  play(clips, { from = 0, rate = 1, resolveBuffer = this._resolveBuffer, resolveProcessed, tracks } = {}) {
     const ctx = this.getContext();
     if (!ctx) return false;
     this.stopInternal();
     this._clips = clips || [];
     this._resolveBuffer = resolveBuffer || this._resolveBuffer;
+    if (resolveProcessed !== undefined) this.resolveProcessed = resolveProcessed || null; // 缺省保留实例值
     this.rate = Math.max(0.25, Math.min(4, rate || 1));
     this.startPos = Math.max(0, from || 0);
     if (tracks !== undefined) this.syncTracks(tracks); // 多轨：起播即同步轨态（跨轨同 tick 调度）
@@ -536,23 +702,102 @@ export class ClipTransport {
       this.scheduleClip(ctx, clip, buffer, tlStart, end);
     }
   }
-  // 调度一个 clip 的剩余区间：源偏移 + 分段增益自动化（fade 段 setValueCurveAtTime）
+  // 调度一个 clip 的剩余区间：源偏移 + 分段增益自动化（fade 段 setValueCurveAtTime）。
+  // 滑动变速（varispeed）：组合速率 = (clip.rate||1) × this.rate（clip 级×传输级）——
+  // playbackRate=组合速率、源消耗=slot 时长×组合速率（播放墙钟时长仍=slot 时长）；时间轴
+  // slot 恒定（淡化/结束全在时间轴域）；源提前耗尽 → WebAudio 到源尾自然停止，slot 剩余=静音
+  //（磁带放完语义，不做循环）。
+  // processed 消费（clip.speed/pitchSemi）：needsProcess 且 resolveProcessed 在场时优先用
+  // processed buffer（变速已烘焙、1:1 消费，见 _scheduleProcessed）；Promise 未就绪先以 raw
+  // buffer 按 speed 磁带式应急起播（音高暂变，秒级），到位后 reschedule 一次无缝换入
+  //（决策②，_pendingProcessed 防同键重复挂接；processed 缺失/null → raw 路径原样）。
   scheduleClip(ctx, clip, buffer, tlStart, tlEnd) {
+    if (this.resolveProcessed && needsProcess(clip)) {
+      const key = `${clip.assetId}|${clipProcessKey(clip)}`; // 前缀资产 id：异资产同参数不串缓存
+      const cached = this._processedCache.get(key);
+      if (cached) { this._scheduleProcessed(ctx, clip, cached, tlStart, tlEnd); return; }
+      let pb = null;
+      try { pb = this.resolveProcessed(clip) || null; } catch { pb = null; }
+      if (pb && typeof pb.then === 'function') {
+        this._scheduleRawStopgap(ctx, clip, buffer, tlStart, tlEnd);
+        if (!this._pendingProcessed.has(key)) {
+          this._pendingProcessed.add(key);
+          Promise.resolve(pb).then(proc => {
+            this._pendingProcessed.delete(key);
+            if (!proc) return;
+            this._processedCache.set(key, proc);
+            // 仍在播放同一 clip（未停、本 tick 已调度、窗口未走完）才重调度换入 processed
+            if (this.playing && this._scheduled.has(clip.id) && clipEnd(clip) > this.position + 1e-3) {
+              this.reschedule();
+            }
+          }).catch(() => { this._pendingProcessed.delete(key); }); // 处理失败=应急 raw 播完本 slot
+        }
+        return;
+      }
+      if (pb) { this._processedCache.set(key, pb); this._scheduleProcessed(ctx, clip, pb, tlStart, tlEnd); return; }
+      // resolveProcessed 返回 null → 落回既有 raw 路径（speed/semi 不消费，行为与无 processed 供给一致）
+    }
     const when = Math.max(this.ctxTimeOf(tlStart), ctx.currentTime + 0.005);
     const skip = Math.max(0, tlStart - clip.timelineStartSec);
     const durTl = tlEnd - tlStart;
     if (durTl <= 1e-3) return;
-    const srcOffset = clip.srcStartSec + skip * this.rate;
+    const clipRate = (clip.rate || 1) * this.rate;
+    const srcOffset = clip.srcStartSec + skip * clipRate;
     if (buffer.duration - srcOffset <= 1e-4) return;
     const src = ctx.createBufferSource();
     src.buffer = buffer;
-    if (this.rate !== 1) src.playbackRate.value = this.rate;
+    if (clipRate !== 1) src.playbackRate.value = clipRate;
     const gain = ctx.createGain();
     src.connect(gain);
     // 多轨激活 → 挂轨子链（轨 gain×muted）；legacy 单链 → 直连 master（原链路）
     gain.connect(this._tracks ? this._ensureTrackGain(ctx, this._trackIdOf(clip)) : this.master);
     this.applyGainAutomation(gain.gain, clip, skip, skip + durTl, ct => when + (ct - skip));
-    src.start(when, srcOffset, durTl * this.rate);
+    src.start(when, srcOffset, durTl * clipRate);
+    this._sources.push(src); this._gains.push(gain);
+  }
+  // processed buffer 1:1 消费：变速/变调已烘焙进 buffer（时长=源/speed），playbackRate 不再乘
+  // speed——只余 clip.rate（旧 varispeed）× this.rate（传输级）作磁带因子叠乘；processed 域=
+  // 源域÷speed → 入点=srcStartSec/speed，skip/durTl 1:1 直映射。buffer 比slot 短（源提前耗尽）
+  // → 截断调度时长，slot 剩余静音（磁带放完同语义）。静音/淡化/增益自动化与 raw 同链不变。
+  _scheduleProcessed(ctx, clip, pbuf, tlStart, tlEnd) {
+    const when = Math.max(this.ctxTimeOf(tlStart), ctx.currentTime + 0.005);
+    const skip = Math.max(0, tlStart - clip.timelineStartSec);
+    const durTl = tlEnd - tlStart;
+    if (durTl <= 1e-3) return;
+    const speed = Math.max(0.25, Math.min(4, Number(clip.speed) || 1));
+    const tapeRate = (clip.rate || 1) * this.rate;
+    const srcOffset = clip.srcStartSec / speed + skip * tapeRate;
+    const avail = (pbuf.duration || 0) - srcOffset;
+    if (avail <= 1e-4) return;
+    const src = ctx.createBufferSource();
+    src.buffer = pbuf;
+    if (tapeRate !== 1) src.playbackRate.value = tapeRate;
+    const gain = ctx.createGain();
+    src.connect(gain);
+    gain.connect(this._tracks ? this._ensureTrackGain(ctx, this._trackIdOf(clip)) : this.master);
+    this.applyGainAutomation(gain.gain, clip, skip, skip + durTl, ct => when + (ct - skip));
+    src.start(when, srcOffset, Math.min(durTl * tapeRate, avail));
+    this._sources.push(src); this._gains.push(gain);
+  }
+  // 应急起播（processed 为 Promise 未就绪）：raw buffer 按 speed 磁带式先响（playbackRate=
+  // speed×clip.rate×this.rate，音高随速度变），processed 到位后整体 reschedule 无缝换入。
+  _scheduleRawStopgap(ctx, clip, buffer, tlStart, tlEnd) {
+    const when = Math.max(this.ctxTimeOf(tlStart), ctx.currentTime + 0.005);
+    const skip = Math.max(0, tlStart - clip.timelineStartSec);
+    const durTl = tlEnd - tlStart;
+    if (durTl <= 1e-3) return;
+    const speed = Math.max(0.25, Math.min(4, Number(clip.speed) || 1));
+    const r = speed * (clip.rate || 1) * this.rate;
+    const srcOffset = clip.srcStartSec + skip * r;
+    if (buffer.duration - srcOffset <= 1e-4) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    if (r !== 1) src.playbackRate.value = r;
+    const gain = ctx.createGain();
+    src.connect(gain);
+    gain.connect(this._tracks ? this._ensureTrackGain(ctx, this._trackIdOf(clip)) : this.master);
+    this.applyGainAutomation(gain.gain, clip, skip, skip + durTl, ct => when + (ct - skip));
+    src.start(when, srcOffset, durTl * r);
     this._sources.push(src); this._gains.push(gain);
   }
   // 分段增益自动化：常量段 setValueAtTime、淡化段 setValueCurveAtTime(96 点)，首尾相接无重叠
@@ -607,6 +852,7 @@ export function autoSplitAtBoundaries(clips, times, assetDurOf = () => Infinity)
       // 新右段继承的 fadeIn 来自边界左侧上下文（与本边界无关）→ 清零，交由本边界新建交叉淡化
       rightNew.fadeInSec = 0;
       rightNew.fadeInAuto = false;
+      rightNew.fadeInCurve = 0; // 曲线随缘归 0（build-45：时长清零不留陈旧形状）
       splits++;
     }
     left = clips.find(c => Math.abs(clipEnd(c) - t) < 1e-3 + 0.05) || null; // 淡化中点=边界：左段缘=边界±f/2

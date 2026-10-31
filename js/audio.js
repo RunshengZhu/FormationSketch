@@ -11,6 +11,7 @@ export class AudioController {
     this.el.preload = 'auto';
     this.ctx = null;
     this.peaks = null;        // 活动资产波形（Float32Array，值 0..1，旧 drawWave 用）
+    this.resolveProcessed = null; // build-92-stretch：(clip)→processed AudioBuffer|Promise|null（main 接线）
     this.duration = 0;
     this.url = null;
     this.name = '';
@@ -104,14 +105,46 @@ export class AudioController {
     const a = this.assets.get(assetId);
     return a?.buffer || null;
   }
+  // 导出兜底（视频导出混音前用）：确保资产解出 AudioBuffer。
+  // 缓存命中直接返回；未命中且 blob 存在 → 新建 OfflineAudioContext 重解码（不依赖手势/
+  // AudioContext 运行态，iPad Safari 上 addAsset 时 decodeAudioData 偶发失败的场景成功率
+  // 更高）。成功回填 asset.buffer 并尽力同步 durationSec/peaks/env（活动资产同步旧通道字段）；
+  // 失败返回 null（调用方决定报错或静音跳过）。纯加法——不动既有播放路径。
+  async ensureAssetBuffer(assetId) {
+    const a = this.assets.get(assetId);
+    if (!a) return null;
+    if (a.buffer) return a.buffer;
+    if (!a.blob) return null;
+    try {
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OAC) return null;
+      const ab = await a.blob.arrayBuffer();
+      const off = new OAC(2, 1, 48000);
+      // 兼容新旧实现：promise 型直接用；回调型（老 Safari）走 success/error 回调（双路 settle 幂等）
+      const buf = await new Promise((res, rej) => {
+        const p = off.decodeAudioData(ab, res, rej);
+        if (p && typeof p.then === 'function') p.then(res, rej);
+      });
+      a.buffer = buf;
+      if (buf?.duration) a.durationSec = buf.duration;
+      try {
+        a.peaks = computePeaks(buf, 1800);
+        a.env = computeWaveEnvelope(buf, 512);
+      } catch { /* 波形刷新失败不回滚解码成功 */ }
+      if (this.activeId === assetId) { this.peaks = a.peaks; this.duration = a.durationSec; }
+      return a.buffer;
+    } catch {
+      return null;
+    }
+  }
   playClips(clips, fromSec, rate = 1) {
     const t = this.ensureTransport();
-    return t.play(clips, { from: fromSec, rate, resolveBuffer: id => this.resolveAssetBuffer(id) });
+    return t.play(clips, { from: fromSec, rate, resolveBuffer: id => this.resolveAssetBuffer(id), resolveProcessed: this.resolveProcessed });
   }
   seekClips(sec, rate = this.transport?.rate ?? 1) {
     if (!this.transport?.playing) return;
     const clipsRef = this.transport._clips;
-    this.transport.play(clipsRef, { from: sec, rate, resolveBuffer: id => this.resolveAssetBuffer(id) });
+    this.transport.play(clipsRef, { from: sec, rate, resolveBuffer: id => this.resolveAssetBuffer(id), resolveProcessed: this.resolveProcessed });
   }
   stopClips() { this.transport?.stopInternal(); }
   get clipsPlaying() { return !!(this.transport?.playing); }

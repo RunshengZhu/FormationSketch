@@ -11,11 +11,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createProject, addDancer, removeDancer, orderedDancers,
-  createFormationFrom, deleteFormation, moveFormation, syncTimeline,
-  computeSegments, posAt, spb, beatToSec, secToBeat, beatLabel,
+  createFormationFrom, deleteFormation, moveFormation,
+  segmentsFromClips, clipStartOf, clipLenOf, clipEndOf,
+  FORM_CLIP_LEN_DEFAULT, posAt, spb, beatToSec, secToBeat, beatLabel,
   lerpAngle, validateProject, renumberShorts, ensureFormationComplete, uid, clone,
   addMerge, removeMerge, setMergeStyle, findMerge, collapseUnit, UNIT_STYLES,
   createGroup, removeGroup, renameGroup, setGroupMembers, nextGroupName, groupById, expandUnits,
+  sanitizeAudioClips,
 } from '../js/model.js';
 
 test('createProject：舞者数量与编号（无 pairs，默认男士/女士编组）', () => {
@@ -158,52 +160,67 @@ test('removeDancer 清理编组成员、位置与合并引用', () => {
   assert.equal(p.dancers.length, 3);
 });
 
-test('createFormationFrom / deleteFormation / moveFormation 与时间轴同步', () => {
+test('createFormationFrom / deleteFormation / moveFormation（build-70 clip 语义：追加在末、删除留空位、换序换槽）', () => {
   const p = createProject({ pairs: 2 });
-  p.timeline.blocks[0].holdBeats = 20;
-  createFormationFrom(p, 0);
-  createFormationFrom(p, 1);
+  p.formations[0].lenBeats = 20; // clip0 [0,20)
+  createFormationFrom(p, 0);     // 追加在末 clip.end 之后 → [20,36)
+  createFormationFrom(p, 1);     // [36,52)
   assert.equal(p.formations.length, 3);
-  assert.equal(p.timeline.blocks.length, 3);
-  assert.equal(p.timeline.blocks[0].holdBeats, 20, '时长保留');
-  assert.equal(p.timeline.blocks[1].holdBeats, 16, '新块默认时长');
+  assert.equal(clipStartOf(p.formations[0]), 0);
+  assert.equal(clipLenOf(p.formations[0]), 20, '时长保留');
+  assert.equal(clipStartOf(p.formations[1]), 20, '新 clip 追加在末 clip.end 之后');
+  assert.equal(clipLenOf(p.formations[1]), FORM_CLIP_LEN_DEFAULT, '新 clip 缺省 16 拍');
+  const slotsBefore = p.formations.map(f => [f.startBeat, f.lenBeats]);
+  // 删除=移除 formation+clip，空位保留：后续 clip 的 startBeat/lenBeats 一个字节不动
   deleteFormation(p, 0);
-  assert.equal(p.timeline.blocks.length, 2);
-  assert.equal(p.timeline.blocks[0].holdBeats, 16);
+  assert.equal(p.formations.length, 2);
+  assert.deepEqual(p.formations.map(f => [f.startBeat, f.lenBeats]),
+    slotsBefore.slice(1), '被删 clip 的空位保留（后续 clip 时域零触碰）');
+  // 调整顺序：clip 槽位留在原地、内容按新序换槽（旧 syncTimeline「时长保序、内容换位」对应）
+  const ids = p.formations.map(f => f.id);
   moveFormation(p, 1, 0);
-  assert.equal(p.timeline.blocks[0].formationId, p.formations[0].id);
+  assert.deepEqual(p.formations.map(f => [f.startBeat, f.lenBeats]), slotsBefore.slice(1), '槽位集合不变');
+  assert.deepEqual(p.formations.map(f => f.id), [ids[1], ids[0]], '内容按新序换槽');
 });
 
-test('computeSegments / posAt：hold 与 travel 阶段', () => {
+test('segmentsFromClips / posAt：clip 保持与空隙变换段（build-70 M3 同链换源）', () => {
   const p = createProject({ pairs: 1 });
   const a = { x: 2, y: 2, facing: 0 };
   const b = { x: 6, y: 2, facing: 90 };
   p.formations[0].positions[p.dancers[0].id] = a;
   createFormationFrom(p, 0);
   p.formations[1].positions[p.dancers[0].id] = b;
-  p.timeline.blocks[0].holdBeats = 8;
-  p.timeline.blocks[0].travelBeats = 8;
-  p.timeline.blocks[1].holdBeats = 4;
-  const { segments, totalBeats } = computeSegments(p);
-  assert.equal(totalBeats, 8 + 8 + 4);
-  assert.deepEqual([segments[0].holdStart, segments[0].holdEnd, segments[0].travelEnd], [0, 8, 16]);
-  // hold 起点：原位
+  // 旧夹具（hold8+travel8 / hold4）→ clip 等价域：f0 [0,8)、空隙 8、f1 [16,20)
+  p.formations[0].lenBeats = 8;
+  p.formations[1].startBeat = 16;
+  p.formations[1].lenBeats = 4;
+  const { segments, totalBeats } = segmentsFromClips(p.formations);
+  assert.equal(totalBeats, 8 + 8 + 4, '域尾=末 clip.end（空隙计入域）');
+  assert.deepEqual([segments[0].start, segments[0].end, segments[1].start, segments[1].end], [0, 8, 16, 20]);
+  // clip 内：原位保持
   const r0 = posAt(p, 0);
   assert.equal(r0.phase, 'hold');
   assert.equal(r0.positions[p.dancers[0].id].x, 2);
-  // travel 中点：插值 + 缓动（easeInOut(0.5)=0.5）
+  // 空隙中点：变换段（prev→next 插值 + 缓动 easeInOut(0.5)=0.5）
   const rm = posAt(p, 12);
   assert.equal(rm.phase, 'travel');
   assert.ok(Math.abs(rm.positions[p.dancers[0].id].x - 4) < 1e-9);
-  // travel 前段：缓动慢于线性
-  const rq = posAt(p, 10); // t=0.25 → ease=4*0.25^3=0.0625
+  // 空隙前段：缓动慢于线性
+  const rq = posAt(p, 10); // t=(10−8)/(16−8)=0.25 → ease=4*0.25^3=0.0625
   assert.ok(Math.abs(rq.positions[p.dancers[0].id].x - (2 + 4 * 0.0625)) < 1e-9);
   // 超出末尾：最后队形
   const re = posAt(p, 999);
   assert.equal(re.phase, 'hold');
   assert.equal(re.positions[p.dancers[0].id].x, 6);
-  // 负拍：第 0 队形
+  // 负拍（候场）：第 0 队形
   assert.equal(posAt(p, -5).positions[p.dancers[0].id].x, 2);
+  // 空隙 0：瞬时切换（travel 分支不可达）
+  const p2 = createProject({ pairs: 1 });
+  p2.formations[0].positions[p2.dancers[0].id] = a;
+  createFormationFrom(p2, 0);
+  p2.formations[1].positions[p2.dancers[0].id] = b;
+  assert.equal(posAt(p2, 16).phase, 'hold', 'clip1 起点=hold（空隙 0 无变换段）');
+  assert.equal(posAt(p2, 16).positions[p2.dancers[0].id].x, 6);
 });
 
 test('lerpAngle 走最短路径', () => {
@@ -249,7 +266,12 @@ test('validateProject：pairs 清除、groups 悬挂清理、坏位置修复与�
   assert.ok(!('ghost' in fixed.formations[0].positions));
   const facing = Object.values(fixed.formations[0].positions)[0].facing;
   assert.ok(facing >= 0 && facing < 360);
-  assert.equal(fixed.timeline.blocks.length, fixed.formations.length);
+  // build-70：clip 不变式收口（旧 blocks 断言换源）——数组序=时间序、lenBeats ≥ 1、逐 clip 有域
+  const clips = fixed.formations.map(f => [clipStartOf(f), clipLenOf(f)]);
+  for (let k = 0; k + 1 < clips.length; k++) {
+    assert.ok(clips[k][0] + clips[k][1] <= clips[k + 1][0] + 1e-9, '交叉禁止：clip.end ≤ 右邻.start');
+  }
+  assert.ok(clips.every(([s, l]) => s >= 0 && l >= 1), 'startBeat ≥ 0、lenBeats ≥ 1');
   // 再校验一次往返
   const again = validateProject(clone(fixed));
   assert.equal(again.ok, true);
@@ -349,4 +371,111 @@ test('载入迁移：含 diamond/twin 旧样式的项目归一为 capsule', () =
   assert.equal(r.ok, true);
   const styles = r.project.formations[0].merges.map(m => m.style);
   assert.deepEqual(styles, ['capsule', 'capsule']);
+});
+
+// ---------- 滑动变速（varispeed · clip.rate 清洗五态） ----------
+test('sanitizeAudioClips rate 五态：缺省/1/非法删键、合法保留两位小数、越界钳 [0.25,4]；清洗幂等', () => {
+  const assets = [{ id: 'a1', durationSec: 60 }];
+  const mk = (id, rate) => (rate === undefined
+    ? { id, assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5 }
+    : { id, assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5, rate });
+  const clips = sanitizeAudioClips([
+    mk('r0'),               // ① 缺省 → 删键（不补键，读侧 clip.rate || 1）
+    mk('r1', 1),            // ② 1 → 删键（JSON 往返零漂移）
+    mk('r2', 1.234),        // ③ 合法 → 两位小数 1.23
+    mk('r3', 12),           // ④ 越上界 → 钳 4
+    mk('r4', 0.01),         // ④' 越下界 → 钳 0.25
+    mk('r5', 'abc'),        // ⑤ 非法（非数值）→ 删键
+    mk('r6', NaN),          // ⑤' 非法（NaN）→ 删键
+  ], assets);
+  assert.equal(clips.length, 7);
+  assert.equal('rate' in clips[0], false, '缺省不补键');
+  assert.equal('rate' in clips[1], false, 'rate=1 删键');
+  assert.equal(clips[2].rate, 1.23, '保留两位小数（1% 粒度）');
+  assert.equal(clips[3].rate, 4, '越上界钳 4');
+  assert.equal(clips[4].rate, 0.25, '越下界钳 0.25');
+  assert.equal('rate' in clips[5], false, '非数值删键');
+  assert.equal('rate' in clips[6], false, 'NaN 删键');
+  // 时间轴 slot 域不受 rate 影响；清洗幂等（含 rate 键形态二次清洗逐字节一致）
+  assert.deepEqual(
+    clips.map(c => [c.timelineStartSec, c.srcStartSec, c.lengthSec]),
+    clips.map(() => [0, 0, 5]),
+  );
+  const again = sanitizeAudioClips(JSON.parse(JSON.stringify(clips)), assets);
+  assert.deepEqual(again, clips, 'rate 清洗幂等（JSON 往返零漂移）');
+});
+
+// ---------- 离线变速/变调（TSM · clip.speed + clip.pitchSemi 清洗五态） ----------
+test('sanitizeAudioClips speed 五态：缺省/1/≈1/非法删键、合法保留两位小数、越界钳 [0.25,4]；清洗幂等', () => {
+  const assets = [{ id: 'a1', durationSec: 60 }];
+  const mk = (id, speed) => (speed === undefined
+    ? { id, assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5 }
+    : { id, assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5, speed });
+  const clips = sanitizeAudioClips([
+    mk('s0'),               // ① 缺省 → 删键（不补键，读侧 clip.speed || 1）
+    mk('s1', 1),            // ② 1 → 删键（JSON 往返零漂移）
+    mk('s1b', 1.002),       // ②' ≈1（两位小数后=1.00）→ 删键
+    mk('s2', 1.234),        // ③ 合法 → 两位小数 1.23
+    mk('s3', 12),           // ④ 越上界 → 钳 4
+    mk('s4', 0.01),         // ④' 越下界 → 钳 0.25
+    mk('s5', 'abc'),        // ⑤ 非法（非数值）→ 删键
+    mk('s6', NaN),          // ⑤' 非法（NaN）→ 删键
+  ], assets);
+  assert.equal(clips.length, 8);
+  assert.equal('speed' in clips[0], false, '缺省不补键');
+  assert.equal('speed' in clips[1], false, 'speed=1 删键');
+  assert.equal('speed' in clips[2], false, 'speed≈1（1.002→1.00）删键');
+  assert.equal(clips[3].speed, 1.23, '保留两位小数（1% 粒度）');
+  assert.equal(clips[4].speed, 4, '越上界钳 4');
+  assert.equal(clips[5].speed, 0.25, '越下界钳 0.25');
+  assert.equal('speed' in clips[6], false, '非数值删键');
+  assert.equal('speed' in clips[7], false, 'NaN 删键');
+  // 时间轴 slot 域不受 speed 影响；清洗幂等（JSON 往返零漂移）
+  assert.deepEqual(
+    clips.map(c => [c.timelineStartSec, c.srcStartSec, c.lengthSec]),
+    clips.map(() => [0, 0, 5]),
+  );
+  const again = sanitizeAudioClips(JSON.parse(JSON.stringify(clips)), assets);
+  assert.deepEqual(again, clips, 'speed 清洗幂等');
+});
+
+test('sanitizeAudioClips pitchSemi 五态：缺省/0/非法删键、整数保留、越界钳 [-12,12]；清洗幂等', () => {
+  const assets = [{ id: 'a1', durationSec: 60 }];
+  const mk = (id, pitchSemi) => (pitchSemi === undefined
+    ? { id, assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5 }
+    : { id, assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5, pitchSemi });
+  const clips = sanitizeAudioClips([
+    mk('p0'),               // ① 缺省 → 删键（读侧 clip.pitchSemi || 0）
+    mk('p1', 0),            // ② 0 → 删键（JSON 往返零漂移）
+    mk('p2', 3),            // ③ 合法整数 → 保留
+    mk('p2b', '5'),         // ③' 数值字符串整值 → 保留 5
+    mk('p3', 20),           // ④ 越上界 → 钳 12
+    mk('p4', -20),          // ④' 越下界 → 钳 -12
+    mk('p5', 2.5),          // ⑤ 非法（非整值）→ 删键
+    mk('p6', 'abc'),        // ⑤' 非法（非数值）→ 删键
+    mk('p7', NaN),          // ⑤'' 非法（NaN）→ 删键
+  ], assets);
+  assert.equal(clips.length, 9);
+  assert.equal('pitchSemi' in clips[0], false, '缺省不补键');
+  assert.equal('pitchSemi' in clips[1], false, 'pitchSemi=0 删键');
+  assert.equal(clips[2].pitchSemi, 3, '合法整数保留');
+  assert.equal(clips[3].pitchSemi, 5, '数值字符串整值保留');
+  assert.equal(clips[4].pitchSemi, 12, '越上界钳 12');
+  assert.equal(clips[5].pitchSemi, -12, '越下界钳 -12');
+  assert.equal('pitchSemi' in clips[6], false, '非整值删键');
+  assert.equal('pitchSemi' in clips[7], false, '非数值删键');
+  assert.equal('pitchSemi' in clips[8], false, 'NaN 删键');
+  const again = sanitizeAudioClips(JSON.parse(JSON.stringify(clips)), assets);
+  assert.deepEqual(again, clips, 'pitchSemi 清洗幂等');
+});
+
+test('sanitizeAudioClips speed/pitchSemi 与 rate 同 clip 并存：各自独立落键、联合清洗幂等', () => {
+  const assets = [{ id: 'a1', durationSec: 60 }];
+  const clips = sanitizeAudioClips([
+    { id: 'm1', assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 5, rate: 1.5, speed: 0.5, pitchSemi: -2 },
+  ], assets);
+  assert.deepEqual({ rate: clips[0].rate, speed: clips[0].speed, pitchSemi: clips[0].pitchSemi },
+    { rate: 1.5, speed: 0.5, pitchSemi: -2 }, '三字段独立保留');
+  const again = sanitizeAudioClips(JSON.parse(JSON.stringify(clips)), assets);
+  assert.deepEqual(again, clips, '联合清洗幂等（JSON 往返零漂移）');
 });

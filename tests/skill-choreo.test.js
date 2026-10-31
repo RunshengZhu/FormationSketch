@@ -263,6 +263,35 @@ test('check/apply 加固③：自报 props 偏差 >5% → warning；精确 props
 test('propose-timeline 样例歌：总拍数对齐 / 密度块数一致 / 全变换 feasible / 逐段 apply 后往返无损', t => {
   const dir = tmp();
   run('state.mjs', ['init', '--pairs', '6', '--preset-merged', '--bpm', '120', '--title', '样例歌'], { dir });
+  // build-61-stageaspect 改写注明：createProject 缺省场地改 16×12（4:3 横向）后，样例歌圆阵在更宽
+  // 场地上的段间位移超出 6 拍可行 cap（8.04m>7.2m，可行性检查按设计正确报错）。本测试验证的是
+  // 编排流水线本身（总拍数/密度块/apply 往返），与场地缺省解耦——显式钉住旧缺省 12×16，断言语义不变。
+  // 注意：init 时开场队形已按 16m 宽生成，钉场地后须按 model.genDefaultRows 同式重排开场行，
+  // 否则开场队形横向越界、回场变换超程（与 build-60 基线几何完全一致）。
+  const pjPath = join(dir, 'project.wuzhen.json');
+  const pj = JSON.parse(readFileSync(pjPath, 'utf8'));
+  pj.stage.widthM = 12; pj.stage.depthM = 16;
+  {
+    const ids = pj.dancers.map(d => d.id);
+    const n = ids.length, rows = n <= 4 ? 1 : 2, m = 1.5;
+    const per = Math.ceil(n / rows), spacing = (pj.stage.widthM - 2 * m) / (per - 1);
+    ids.forEach((id, i) => {
+      const r = Math.floor(i / per), c = i % per;
+      const rowCount = Math.min(per, n - r * per);
+      const off = (per - rowCount) * spacing / 2;
+      pj.formations[0].positions[id] = {
+        x: m + off + c * spacing, y: pj.stage.depthM / 2 + (r - (rows - 1) / 2) * 1.6, facing: 180,
+      };
+    });
+    // presetMerged 基线：merge 单元两人收拢到中点（model.collapseUnit 同式，2 位小数）
+    for (const mg of (pj.formations[0].merges || [])) {
+      const a = pj.formations[0].positions[mg.a], b = pj.formations[0].positions[mg.b];
+      if (!a || !b) continue;
+      const mx = Math.round(((a.x + b.x) / 2) * 100) / 100, my = Math.round(((a.y + b.y) / 2) * 100) / 100;
+      a.x = b.x = mx; a.y = b.y = my;
+    }
+  }
+  writeFileSync(pjPath, JSON.stringify(pj, null, 2) + '\n');
   const sectionsFile = join(dir, 'sections.json');
   writeFileSync(sectionsFile, JSON.stringify(SAMPLE_SECTIONS));
   run('analyze-music.mjs', ['--bpm', '120', '--sections', sectionsFile], { dir });
@@ -302,18 +331,21 @@ test('propose-timeline 样例歌：总拍数对齐 / 密度块数一致 / 全变
     run('check.mjs', ['--candidate', s.candidatesFile, '--beats', String(prop.blocks[s.formations[0]].travelBeats || 4)], { dir, expect: 0 });
     run('apply.mjs', [s.candidatesFile, '--all', '--yes'], { dir });
   });
-  // 应用后：队形/块/总拍数与提案一致，全部变换 feasible
+  // 应用后：队形/clip/总拍数与提案一致，全部变换 feasible
+  //（build-70 clip 模型换源：blocks 退役——hold=clip.lenBeats、travel=相邻 clip 空隙，逐值等价）
   const project = JSON.parse(readFileSync(join(dir, 'project.wuzhen.json'), 'utf8'));
   assert.equal(project.formations.length, 13);
-  assert.equal(project.timeline.blocks.length, 13);
-  const { totalBeats } = core.computeSegments(project);
-  assert.equal(totalBeats, 120, 'computeSegments 总拍数=120');
+  assert.equal(project.timeline.blocks, undefined, 'blocks 字段已退役（clip 字段驻队形）');
+  const { totalBeats } = core.segmentsFromClips(project.formations);
+  assert.equal(totalBeats, 120, 'segmentsFromClips 总拍数=120');
+  const gapOf = i => Math.round((project.formations[i + 1].startBeat
+    - (project.formations[i].startBeat + project.formations[i].lenBeats)) * 100) / 100;
   prop.blocks.forEach((b, i) => {
-    assert.equal(project.timeline.blocks[i].holdBeats, b.holdBeats, `块 ${i} hold 一致`);
-    assert.equal(project.timeline.blocks[i].travelBeats, b.travelBeats, `块 ${i} travel 一致`);
+    assert.equal(project.formations[i].lenBeats, b.holdBeats, `clip ${i} hold 一致`);
+    assert.equal(i < 12 ? gapOf(i) : 0, b.travelBeats, `clip ${i} travel（空隙）一致`);
   });
   for (let i = 0; i < 12; i++) {
-    const f = core.feasibility(project.formations[i], project.formations[i + 1], project.timeline.blocks[i].travelBeats, project.audio.bpm, 1.2);
+    const f = core.feasibility(project.formations[i], project.formations[i + 1], gapOf(i), project.audio.bpm, 1.2);
     assert.ok(f.ok, `应用后变换 ${i}→${i+1} 可行（需 ${f.maxNeededDist}m / ${f.availableDist}m）`);
   }
   // 每段一快照（v1..v6）

@@ -17,8 +17,21 @@
       <button id="offline-note-close" class="offline-note-x" aria-label="关闭提示" title="关闭提示">×</button>
     </div>
     <header class="lib-header">
-      <div class="lib-brand">舞阵 <span class="lib-sub">WuZhen · 队形编排</span></div>
-      <button id="btn-new-project" class="btn primary">＋ 新建项目</button>
+      <div class="lib-brand">舞阵 <span class="lib-sub hide-mobile">WuZhen · 队形编排</span></div>
+      <!-- build-58-manual3 F2：项目库首页显著说明书入口（文字+book 图标，accent 边框；首次访问脉冲高亮
+           wuzhen:manualSeen，见 main.js wireManualFirstRun）。与编辑器顶栏钮共用 #manual-overlay，打开即回开场 -->
+      <div class="lib-actions">
+        <!-- build-71-iomenu F1：项目库同款「导入/导出」入口——与编辑器顶栏 #btn-export 共用
+             #app 级 #io-menu（单组件，非复制菜单）；项目库无保存覆盖语境（无打开项目），
+             保存覆盖条目由 main.js syncSaveBackItem 自然隐藏 -->
+        <button id="btn-lib-io" class="btn ghost">导入/导出 ▾</button>
+        <!-- build-72-checkupdate F1：项目库同款「检查更新」入口（首页随时可见）——与编辑器顶栏
+             #btn-check-update 同走 main.js forceReloadToLatest（单实现非复制）；移动端收纯图标
+             （标签 hide-mobile，title 兜底语义），.lib-header 本就 flex-wrap 兜底不横溢 -->
+        <button id="btn-lib-check-update" class="btn ghost" title="强制刷新页面到最新版本"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="rotate" aria-hidden="true" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg><span class="hide-mobile"> 检查更新</span></button>
+        <button id="btn-library-manual" class="btn lib-manual" title="使用说明书（图文逐步：五幕工作流 / 附录 A·功能模块详解 / 附录 B·手势与快捷键速查 / 数据与限制）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="book" aria-hidden="true" style="vertical-align:-2px"><path d="M2.5 5H8a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2.5zM21.5 5H16a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h6.5z"/></svg> 使用说明书</button>
+        <button id="btn-new-project" class="btn primary">＋ 新建项目</button>
+      </div>
     </header>
     <div id="library-grid" class="lib-grid"></div>
     <div id="library-empty" class="lib-empty" hidden>
@@ -30,26 +43,41 @@
   <!-- ===== 编辑器视图 ===== -->
   <section id="editor-view" class="view" hidden>
     <header id="topbar">
+      <!-- build-66-mobileux F2：顶栏两段结构——固定段 #ui-mode-seg（编舞/音乐切换）flex:none
+           恒可见（不再被 ≤1023.5px 顶栏横滚挤出首屏，375 不滚动即可点）；滚动段 #topbar-scroll
+           包住其余工具（overflow-x:auto 只挂滚动段，C-09a 口径照旧；#export-dd 入口（菜单本体
+           build-71 起为 #app 级共享 #io-menu）的 fixed 摆位/横滚收起监听随容器搬家）。桌面 ≥1024 无 overflow，内部布局与旧直挂同构单行 -->
+      <div id="topbar-scroll">
       <button id="btn-back" class="btn ghost" title="返回项目库">‹ 项目库</button><span id="build-tag" class="build-tag"></span>
       <input id="proj-title" class="title-input" spellcheck="false" title="项目名称">
       <span class="spacer"></span>
       <button id="btn-theme" class="btn ghost" title="切换深色/浅色主题"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="moon" aria-hidden="true" style="vertical-align:-2px"><path d="M12 3a6.3 6.3 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg></button>
+      <!-- build-72-checkupdate F1：「检查更新」钮（随时可见，名册旁）——一键强制刷新到最新版，
+           克服浏览器缓存滞留。语义极简（无网络探测/版本比对）：SW（HTTPS）场景先注销全部
+           Service Worker + 删尽 Cache Storage 壳再 location.reload()；HTTP no-cache+etag 下
+           reload 即拉最新。实现与项目库 #btn-lib-check-update 同走 main.js forceReloadToLatest。
+           移动端收纯图标（标签 hide-mobile，title 兜底语义，C-09a；刷新图标=图标库 rotate ⟳） -->
+      <button id="btn-check-update" class="btn ghost" title="强制刷新页面到最新版本"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="rotate" aria-hidden="true" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg><span class="hide-mobile"> 检查更新</span></button>
       <button id="btn-roster" class="btn ghost" title="舞者与编组名单">名册</button>
+      <!-- build-55-uiclean P2：说明书入口自右面板页签迁顶栏（名册旁）——打开 #manual-overlay 全屏浮层，
+           内容仍走 renderManual；id=btn-manual-open 不变（wireManual 接线/仪器兼容）。
+           build-58-manual3 F3：两模式（编舞/音乐）恒显「图标+文字」并强化样式（accent 描边）；
+           移动端用短字「说明」（.only-mobile），不再收成纯图标。取舍：编舞右面板页签区（.panel-tabs）
+           与音乐模式 rsb 区（#right-sidebar）不加说明书入口——顶栏入口两模式恒在，重复入口徒增拥挤 -->
+      <button id="btn-manual-open" class="btn ghost" title="使用说明书（全屏阅读：典型使用动线 / 附录 A·功能模块详解 / 附录 B·手势与快捷键速查 / 数据与限制）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="book" aria-hidden="true" style="vertical-align:-2px"><path d="M2.5 5H8a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2.5zM21.5 5H16a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h6.5z"/></svg><span class="man-lbl-full"> 说明书</span><span class="man-lbl-short only-mobile"> 说明</span></button>
       <button id="btn-undo" class="btn ghost" title="撤销 (Ctrl+Z)"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="undo" aria-hidden="true" style="vertical-align:-2px"><path d="M8 5L4 9l4 4"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H9"/></svg></button>
       <button id="btn-redo" class="btn ghost" title="重做 (Ctrl+Shift+Z)"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="redo" aria-hidden="true" style="vertical-align:-2px"><path d="M16 5l4 4-4 4"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H15"/></svg></button>
+      <!-- build-71-iomenu F1：「导出 ▾」改名「导入/导出 ▾」——项目文件交互统一入口。
+           菜单本体迁出为 #app 级共享 #io-menu（两视图共用，见页尾）；
+           旧 #export-dd/#btn-export id 与接线保留（改名文案即可，减少接线搬迁） -->
       <div class="dropdown" id="export-dd">
-        <button id="btn-export" class="btn ghost">导出 ▾</button>
-        <div class="dd-menu" hidden>
-          <button id="exp-png">当前队形 PNG</button>
-          <button id="exp-print">打印 / PDF（全部队形）</button>
-          <button id="exp-json-audio">导出项目文件（含音乐）</button>
-          <button id="exp-json">导出项目文件（不含音乐）</button>
-          <button id="imp-json">导入项目文件…</button>
-        </div>
+        <button id="btn-export" class="btn ghost">导入/导出 ▾</button>
       </div>
+      </div><!-- /#topbar-scroll -->
       <!-- 双 UI 模式（round46 Lane A）：编舞=默认（舞台+队形块区，几何与既有版本零变化）；
            音乐=隐藏块区与块时长栏、专注音频剪辑，舞台保留画面但收窄。快捷键 M；
-           播放/数拍中禁止切换（toast「暂停后可切换」）。说明书入口不动（manual 归并行线） -->
+           播放中禁止切换（toast「暂停后可切换」）。说明书入口在顶栏（build-55-uiclean P2 迁入）。
+           build-66-mobileux F2：本段自滚动流移出为固定段（flex:none），移动端首屏恒可见 -->
       <div class="seg" id="ui-mode-seg" role="group" aria-label="编辑器模式（编舞/音乐，快捷键 M）">
         <button id="ui-mode-stage" class="seg-btn active" aria-pressed="true"
           title="编舞模式（默认）：舞台编辑 + 队形块区/块时长栏齐全。按 M 切到音乐模式"><span class="seg-full">编舞</span><span class="seg-short">编</span></button>
@@ -61,12 +89,19 @@
     <div id="editor-main">
       <!-- 左：队形列表 -->
       <aside id="left-panel">
-        <div class="panel-head">队形 <span id="formation-count" class="dim"></span></div>
+        <div class="panel-head">队形 <span id="formation-count" class="dim"></span>
+          <!-- build-51-stageux F3：列头折叠钮（桌面编舞模式呈示；⇄ 38px 竖排细条，记忆 wuzhen:stageLeft） -->
+          <button id="lp-collapse" class="col-fold" aria-expanded="true" title="收起队形列表（记忆）">«</button>
+        </div>
         <div id="formation-list"></div>
         <div class="panel-foot">
           <button id="btn-add-formation" class="btn primary small">＋ 新队形</button>
           <button id="btn-del-formation" class="btn small">删除</button>
         </div>
+        <button id="lp-strip" class="col-strip" title="展开队形列表（记忆）" aria-label="展开队形列表"><svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>队形</button>
+        <!-- build-73-syncui F2：左列内缘拖宽 grip（桌面编舞模式呈示；宽 [120,400]，记忆
+             wuzhen:stageLeftW，双击复位；折叠/移动端自动失效——折叠逻辑不变） -->
+        <div id="lp-grip" class="stage-grip grip-v" title="拖动调宽（双击复位）" aria-hidden="true"></div>
       </aside>
 
       <!-- 中：舞台 -->
@@ -74,17 +109,41 @@
         <div id="stage-tools">
           <button id="btn-edit-mode" class="btn small toggled-on" title="开启：舞台可拖动编辑；关闭：查看模式（舞台随时间轴播放头联动）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="pencil" aria-hidden="true" style="vertical-align:-2px"><path d="M4 20l1.2-4.2L16.6 4.4a2 2 0 0 1 2.9 2.9L8.2 18.7 4 20z"/><path d="M13.6 7.4l3 3"/></svg> 编辑</button>
           <button id="btn-multi" class="btn small" title="多选模式（触摸端多选入口）：开启后点按舞者=追加选择"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="menu" aria-hidden="true" style="vertical-align:-2px"><path d="M4 7h16M4 12h16M4 17h16"/></svg> 多选</button>
+          <!-- build-62-formations2 F3：观众方向快捷钮（bottom↔top 一键切换，单条「观众方向」历史；
+               文字随状态由 main.js render 同步；四向微调仍在舞台页签 select） -->
+          <button id="btn-audience-dir" class="btn small ghost" title="观众显示方向：观众在下（正面视角）/观众在上（背面镜像视角）一键切换，可撤销"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="flip-v" aria-hidden="true" style="vertical-align:-2px"><path d="M3 12h18M8 8l4-4 4 4M8 16l4 4 4-4"/></svg> <span id="audience-dir-label">观众在下</span></button>
           <span class="vsep"></span>
+          <!-- build-62-formations2 F1：生成器按「基础/几何/线条」分组（optgroup），+13 种常用队形；
+               旧 8 种 value 不变（兼容既有测试/用户习惯） -->
           <select id="gen-kind" title="队形生成器">
             <option value="">生成队形…</option>
-            <option value="rows">多横排</option>
-            <option value="line">一字横排</option>
-            <option value="columns">纵列</option>
-            <option value="circle">圆形</option>
-            <option value="arc">弧形</option>
-            <option value="v">V 形</option>
-            <option value="diagonal">斜线</option>
-            <option value="diamond">菱形</option>
+            <optgroup label="基础">
+              <option value="rows">多横排</option>
+              <option value="line">一字横排</option>
+              <option value="columns">纵列</option>
+              <option value="grid">方阵网格</option>
+            </optgroup>
+            <optgroup label="几何">
+              <option value="circle">圆形</option>
+              <option value="arc">弧形</option>
+              <option value="halfcircle">反半圆</option>
+              <option value="diamond">菱形</option>
+              <option value="triangle">三角形</option>
+              <option value="parallelogram">平行四边形</option>
+              <option value="chevron">楔形</option>
+              <option value="star">五角星</option>
+              <option value="xpattern">X 形</option>
+              <option value="center-surround">众星捧月</option>
+              <option value="doublecircle">双圆</option>
+            </optgroup>
+            <optgroup label="线条">
+              <option value="v">V 形</option>
+              <option value="diagonal">斜线</option>
+              <option value="diagonal2">双斜线</option>
+              <option value="staggered">交错横排</option>
+              <option value="sline">蛇形</option>
+              <option value="heart">心形</option>
+            </optgroup>
           </select>
           <select id="gen-unit" title="编队粒度">
             <option value="dancer">单人</option>
@@ -107,38 +166,58 @@
             <option value="center">面向圆心</option>
           </select>
           <span class="spacer"></span>
-          <button id="btn-ghost" class="btn small ghost toggled-on" title="显示前后队形 Ghost">幽灵</button>
-          <button id="btn-paths" class="btn small ghost toggled-on" title="显示移动路径">路径</button>
-          <button id="btn-switch-anim" class="btn small ghost toggled-on" title="切换队形帧时播放约0.7秒的快速过渡动画（纯界面效果，与时间轴时长无关）">切帧预览</button>
+          <!-- build-55-uiclean P3：幽灵/路径/切帧预览三状态开关收纳为「显示…」下拉（与导出菜单同款
+               dropdown 结构；菜单 fixed 摆位同 #io-menu（build-71 起原 #export-dd 菜单迁此）方案）。三项勾选态由 main.js render
+               按 store（showGhost/showPaths/previewOnSwitch）同步，store 字段不变 -->
+          <div class="dropdown" id="view-dd">
+            <button id="btn-view-dd" class="btn small ghost" title="显示开关：幽灵（前后队形虚影）/ 路径（移动轨迹）/ 切帧预览（换帧过渡动画）">显示…</button>
+            <div class="dd-menu" hidden>
+              <button id="vw-ghost" role="menuitemcheckbox" aria-checked="true" title="显示前后队形 Ghost">幽灵（前后队形虚影）</button>
+              <button id="vw-paths" role="menuitemcheckbox" aria-checked="true" title="显示移动路径">路径（移动轨迹虚线）</button>
+              <button id="vw-anim" role="menuitemcheckbox" aria-checked="true" title="切换队形帧时播放约0.7秒的快速过渡动画（纯界面效果，与时间轴时长无关）">切帧预览（换帧过渡动画）</button>
+            </div>
+          </div>
           <button id="btn-fit" class="btn small ghost" title="视图复位">⤢</button>
         </div>
         <div id="formation-index"></div>
         <div id="stage-wrap">
           <canvas id="stage-canvas" title="空白拖动=框选 ｜ 中键拖动或空格+左键拖动=平移（触控板/无中键鼠标无法产生中键时，请用空格+拖动） ｜ 触屏·笔长按空白=框选 ｜ 横向滚轮/触控板横滑=水平平移 ｜ Safari 提示：Cmd+1..9 编组快捷键被浏览器保留，请用右侧编组选项卡"></canvas>
-          <div id="countin-overlay" hidden></div>
         </div>
       </div>
 
       <!-- 右：属性 -->
       <aside id="right-panel">
-        <button id="btn-manual-open" class="manual-entry" title="打开使用说明书（全屏阅读）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="book" aria-hidden="true" style="vertical-align:-2px"><path d="M2.5 5H8a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2.5zM21.5 5H16a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h6.5z"/></svg> 使用说明书</button>
+        <!-- build-51-stageux F3：属性列折叠钮（桌面编舞模式呈示；⇄ 38px 竖排细条，记忆 wuzhen:stageRight） -->
+        <button id="rp-collapse" class="col-fold" aria-expanded="true" title="收起属性列（记忆）">»</button>
+        <!-- build-55-uiclean P2：说明书页签与页容器退役，入口迁顶栏「说明书」钮；
+             build-56-indextab：索引入栏为第 5 页签（data-tab="index" → #props-index），
+             切换机制（data-tab → 页容器显隐）不变，显隐收口 activatePropsTab 单入口 -->
         <div class="panel-tabs">
           <button class="ptab active" data-tab="formation">队形</button>
           <button class="ptab" data-tab="stage">舞台</button>
           <button class="ptab" data-tab="style">样式</button>
           <button class="ptab" data-tab="groups">编组</button>
-          <button class="mtab" data-tab="manual" title="使用说明书：典型使用动线 / 手势与快捷键速查 / 数据与限制"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="book" aria-hidden="true" style="vertical-align:-2px"><path d="M2.5 5H8a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2.5zM21.5 5H16a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h6.5z"/></svg> 说明书</button>
+          <button class="ptab" data-tab="index">索引</button>
         </div>
         <div id="props-formation" class="props-page"></div>
         <div id="props-stage" class="props-page" hidden></div>
         <div id="props-style" class="props-page" hidden></div>
         <div id="props-groups" class="props-page" hidden></div>
-        <div id="props-manual" class="props-page" hidden></div>
+        <!-- build-56-indextab F2：乐段索引页容器——播放头行 + si-list 由 main.js siMount 单挂载
+             （#si-playhead/#si-list 全文档唯一），内容高度 flex 撑满右面板 -->
+        <div id="props-index" class="props-page si-page" hidden></div>
+        <button id="rp-strip" class="col-strip" title="展开属性列（记忆）" aria-label="展开属性列"><svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>属性</button>
+        <!-- build-73-syncui F2：右列内缘拖宽 grip（桌面编舞模式呈示；宽 [200,400]，记忆
+             wuzhen:stageRightW，双击复位；折叠/移动端自动失效——折叠逻辑不变） -->
+        <div id="rp-grip" class="stage-grip grip-v" title="拖动调宽（双击复位）" aria-hidden="true"></div>
       </aside>
     </div>
 
     <!-- 底部：播放条 + 时间线 -->
     <div id="bottom-area">
+      <!-- build-73-syncui F2：底区顶缘拖高 grip（桌面编舞模式呈示；高 [80,320]，记忆
+           wuzhen:stageBottomH，双击复位；折叠/移动端自动失效——折叠逻辑不变） -->
+      <div id="ba-grip" class="stage-grip grip-h" title="拖动调高（双击复位）" aria-hidden="true"></div>
       <div id="playbar">
         <button id="pb-prev" class="btn ghost" title="上一队形"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="skip-back" aria-hidden="true" style="vertical-align:-2px"><path d="M7 5v14"/><path d="M19 6.5v11L10 12z"/></svg></button>
         <button id="pb-play" class="btn primary round" title="播放/暂停（空格）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="play" aria-hidden="true" style="vertical-align:-2px"><path d="M8 5.5v13l11-6.5z"/></svg></button>
@@ -147,26 +226,41 @@
         <span id="pb-pos" class="mono">1.1</span>
         <span id="pb-formation" class="dim"></span>
         <span class="spacer"></span>
-        <label class="ctl" title="播放速度">速度
+        <!-- build-65-mobilepb F2：「速度」文字包 .pb-txt——移动端隐藏文字只留 select（title 提示），桌面渲染不变 -->
+        <label class="ctl" title="播放速度"><span class="pb-txt">速度</span>
           <select id="pb-speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
         </label>
-        <label class="ctl" title="循环当前队形段"><input type="checkbox" id="pb-loop">循环</label>
-        <!-- 节拍器（W2 C13 落位）：§2.4 矩阵「节拍器/速度/循环→playbar（不变）」——
-             原「🎵 音乐与节拍」主行退役（C1）后回归播放条；id=pb-metro 不变，接线与仪器兼容 -->
-        <label class="ctl" title="节拍器（播放时每拍一声，小节首拍高音）"><input type="checkbox" id="pb-metro">节拍器</label>
+        <!-- build-65-mobilepb F2：#pb-row2=移动端行 2 容器（循环/节拍器）——桌面 display:contents
+             （两个控件直参 #playbar flex）；移动端 flex-basis:100% 强制换行为第二行，
+             允许内部横滚（主控行 1 不可滚）。
+             build-66-mobileux F1：两裸 checkbox（label 文字被 .pb-txt 隐藏、语义不可见）→ 图标
+             toggle 按钮：aria-pressed 为状态源 + 选中态 .btn.toggled-on accent 高亮；桌面=图标+文字
+             （.pb-txt span 保留，渲染语义与旧 label 文字一致）；移动端文字隐藏 → 图标自解释
+             （title/aria-label 兜底）。id 接线零迁移；循环仍走 player.setLoop（DOM 态），
+             节拍器仍走 project.timeline.metronome（store）——功能面不变 -->
+        <div id="pb-row2">
+          <button id="pb-loop" class="btn small ghost pb-toggle" aria-pressed="false" title="循环当前队形段（播放到段尾自动回绕）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="loop" aria-hidden="true" style="vertical-align:-2px"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg><span class="pb-txt">循环</span></button>
+          <!-- 节拍器（W2 C13 落位）：§2.4 矩阵「节拍器/速度/循环→playbar（不变）」——
+               原「🎵 音乐与节拍」主行退役（C1）后回归播放条；id=pb-metro 不变，接线与仪器兼容 -->
+          <button id="pb-metro" class="btn small ghost pb-toggle" aria-pressed="false" title="节拍器（播放时每拍一声，小节首拍高音）"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="metro" aria-hidden="true" style="vertical-align:-2px"><path d="M9.8 3.5h4.4L18.7 21H5.3z"/><path d="M12 16.5l4.6-9.8"/></svg><span class="pb-txt">节拍器</span></button>
+        </div>
       </div>
       <!-- 音乐工具条 40px（W1 §2.2；M5 按 §2.5 定稿分组）：资产组（载入/媒体库）│ 结构组（⚑打点/自动划分▾/索引）
-           │ 音频对齐组（BPM/首拍/点拍/小节/数拍/试听——BPM/首拍是校准参数非队形派生，title 标注）
-           │ 尺规组（拍刻度/－/＋/⤢/磁吸/剃刀——磁吸剃刀 M5 补钮，S/R 键位保持）┄┄ 资产名。
+           │ 音频对齐组（BPM/首拍/小节——BPM/首拍是校准参数非队形派生，title 标注；build-79-tlui 起
+             点拍/试听钮退役）│ 尺规组（拍刻度/－/＋/⤢/磁吸/剃刀——磁吸 M5 补钮；剃刀 build-88-waveui
+             起改单发执行：点击=以播放线剪切选中 clip，⌘K/Ctrl+K/R 同效，无 toggle 态）┄┄ 资产名。
            编舞模式隐藏（该模式走 #music-summary 摘要条，W2 C14）。
            M1：按队形段自动切已随决策③移除（队形驱动音频的反向路径）；BPM/首拍播放中可改（决策④）。
            控件为音乐模式孪生件（-music 后缀），与摘要条内同名控件同模型 -->
       <div id="music-toolbar">
         <button id="mtb-load-audio" class="btn small">＋ 载入音乐</button>
-        <button id="mtb-media-library" class="btn small" title="媒体库：导入/管理音乐资产（多文件），指定配乐">媒体库</button>
+        <button id="mtb-media-library" class="btn small" aria-pressed="false" title="打开媒体库侧边栏（拖资产到音轨落点生成剪辑；或资产行尾「…」菜单添加到第一轨）">媒体库</button>
         <span class="vsep"></span>
-        <button id="mtb-tag-drop" class="btn small" title="在当前播放头位置打一个节奏段起点标记（主歌/副歌/间奏…）；划分轨双击空白也可打点">⚑ 打点</button>
-        <div class="dropdown" id="auto-seg-dd">
+        <button id="mtb-tag-drop" class="btn small" title="在当前播放头位置新建一个节奏区域（默认宽 16 拍）并打开编辑器；划分轨双击空白也可新建">⚑ 打点</button>
+        <!-- build-47 暂隐（BPM 识别类功能收口：节奏/标记全交 tag 手动实现），可回——
+             自动划分下拉（均分N段/按小节规则/导入段落表）：仅藏呈示，#auto-seg-dd DOM 与
+             wireMusicToolbar 内处理器原样保留，回滚=删掉下方 display:none 一行 -->
+        <div class="dropdown" id="auto-seg-dd" style="display:none">
           <button id="btn-auto-segments" class="btn small" title="自动划分节奏段（落为段起点标记，整表替换现有标记；可撤销）">自动划分 ▾</button>
           <div class="dd-menu" hidden>
             <button id="seg-auto-even" title="按全曲拍数均分 N 段（默认 8 的倍数）">均分 N 段…</button>
@@ -174,21 +268,25 @@
             <button id="seg-auto-import" title="粘贴「前奏8 主歌32 副歌32…」文本解析落段">导入段落表…</button>
           </div>
         </div>
-        <button id="mtb-seg-index" class="btn small" title="乐段索引面板（⌘⇧L）：段名/拍位/秒位目录 + 段内小节格，点击行跳转播放头">索引</button>
+        <button id="mtb-seg-index" class="btn small" title="乐段索引面板（⌘⇧L）：段名/秒位区间目录 + 段内小节格，点击行跳转播放头；行尾「…」可编辑/删除标记">索引</button>
         <span class="vsep"></span>
-        <label class="ctl" title="音频对齐：BPM 是拍↔秒映射的校准参数（非队形派生）；播放中可改（秒制走带，秒位不变）">BPM <input id="bpm-input-music" type="number" min="30" max="300" step="1" style="width:56px"></label>
-        <label class="ctl" title="音频对齐：音乐第一拍的秒位校准；播放中可改（秒位不变）">首拍 <input id="offset-input-music" type="number" min="0" step="0.01" style="width:64px">s</label>
-        <button id="btn-tap-music" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
-        <label class="ctl" title="每小节拍数">小节 <select id="bpb-select-music"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
-        <label class="ctl" title="入场倒计拍数">数拍 <input id="countin-input-music" type="number" min="0" max="32" style="width:44px"></label>
-        <button id="btn-offset-test-music" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
-        <span class="vsep"></span>
-        <button id="tl-scale-toggle-music" class="btn small" title="尺规刻度：拍（小节/8 拍）与秒切换。选择会记住（音乐模式缺省秒刻度）">拍刻度</button>
+      <!-- build-49-tagregion BPM 全面退场，可回：BPM 输入/首拍输入/小节 select/拍刻度切换
+           仅藏呈示（内联 display:none + style.css 的 #music-toolbar .b49-exit 兜底），
+           DOM 与 wireMusicToolbar 内处理器原样保留；回滚=删掉内联样式与本 CSS 规则。
+           当前以时间轴（秒）为唯一对齐规范——秒刻度为音乐模式缺省（尺规刻度切换随 BPM 一并退场）。
+           build-79-tlui（需求 7b）：工具条「点拍」「试听」钮删除（DOM+接线一并退役，无 ?.
+           守卫残体）——节奏识别全交 tag 手动标注（build-47 口径的收口）；恢复=回填钮 HTML 与
+           tapTempo/auditionFirstBeat 接线 -->
+      <label class="ctl b49-exit" style="display:none" title="音频对齐：BPM 是拍↔秒映射的校准参数（非队形派生）；播放中可改（秒制走带，秒位不变）">BPM <input id="bpm-input-music" type="number" min="30" max="300" step="1" style="width:56px"></label>
+      <label class="ctl b49-exit" style="display:none" title="音频对齐：音乐第一拍的秒位校准；播放中可改（秒位不变）">首拍 <input id="offset-input-music" type="number" min="0" step="0.01" style="width:64px">s</label>
+      <label class="ctl b49-exit" style="display:none" title="每小节拍数">小节 <select id="bpb-select-music"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
+      <span class="vsep"></span>
+      <button id="tl-scale-toggle-music" class="btn small b49-exit" style="display:none" title="尺规刻度：拍（小节/8 拍）与秒切换。选择会记住（音乐模式缺省秒刻度）">拍刻度</button>
         <button id="tl-zoom-out-music" class="btn small" title="缩小时间线（以视口中心为锚；下限=整曲入画）">－</button>
         <button id="tl-zoom-in-music" class="btn small" title="放大时间线（以视口中心为锚；上限 8192px 画布）">＋</button>
         <button id="tl-zoom-fit-music" class="btn small" title="适配音频：整曲（音乐域+2s 尾余量）入画">⤢</button>
         <button id="tl-snap-toggle-music" class="btn small" title="磁吸开关（S）：clip 缘/块边界/tag/播放头/选区/零交叉">磁吸</button>
-        <button id="tl-razor-toggle-music" class="btn small" title="剃刀模式（R）：点击 clip 分割；Esc 退出">剃刀</button>
+        <button id="tl-razor-toggle-music" class="btn small" title="以播放线剪切选中的 clip（⌘K / Ctrl+K）">剃刀</button>
         <span class="spacer"></span>
         <span id="mtb-audio-name" class="dim">未载入音乐</span>
       </div>
@@ -197,63 +295,82 @@
           <span class="bc-label">块时长</span>
           <span id="bc-name" class="bc-name dim">—</span>
           <span class="vsep"></span>
-          <span class="ctl">保持
-            <button id="bc-hold-minus" class="btn small step" title="−1拍">−</button>
-            <span id="bc-hold" class="mono bc-val">16拍</span>
-            <button id="bc-hold-plus" class="btn small step" title="＋1拍">＋</button>
+          <!-- build-79-tlui（需求 3 保持/过渡重标签）：词标改明确文案——一眼区分
+               「保持=队形定格多久」「过渡=切换到下一队形花多久」；
+               ± 钮 title 补「±0.1s 调整的是时长，不是时间轴视图缩放（缩放用尺规 ±/滚轮）」区分。
+               build-67-mobilestage F1 行 A（≤1023.5 单行压缩，桌面渲染零变化）：
+               ①「保持/过渡」词标包 .ctl-lbl span——桌面 inline 呈示同旧；移动端 display:none（行宽预算
+               让位块名；± 钮 title 补「保持/过渡」语义）。
+               ②值拆 .bcv-beats/.bcv-sec 两 span——build-77-expux（时间唯一标准）起 .bcv-beats 承载
+               秒值（±0.1s 步进，去拍值）、.bcv-sec 恒空串（span 结构与移动端 CSS 收纳口径保留）；
+               静态初始为缺省 BPM 下的示例值（16拍=8s / 8拍=4s），render 即写实际值。 -->
+          <span class="ctl"><span class="ctl-lbl">保持 ▸ 此队形定格</span>
+            <button id="bc-hold-minus" class="btn small step" title="保持时长 −0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">−</button>
+            <span id="bc-hold" class="mono bc-val"><span class="bcv-beats">8s</span><span class="bcv-sec"></span></span>
+            <button id="bc-hold-plus" class="btn small step" title="保持时长 ＋0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">＋</button>
           </span>
-          <span class="ctl" id="bc-travel-wrap">过渡
-            <button id="bc-travel-minus" class="btn small step" title="−1拍">−</button>
-            <span id="bc-travel" class="mono bc-val">8拍</span>
-            <button id="bc-travel-plus" class="btn small step" title="＋1拍">＋</button>
+          <span class="ctl" id="bc-travel-wrap"><span class="ctl-lbl">过渡 ▸ 切换耗时</span>
+            <button id="bc-travel-minus" class="btn small step" title="过渡时长 −0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">−</button>
+            <span id="bc-travel" class="mono bc-val"><span class="bcv-beats">4s</span><span class="bcv-sec"></span></span>
+            <button id="bc-travel-plus" class="btn small step" title="过渡时长 ＋0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">＋</button>
           </span>
           <!-- 对齐到播放头（W2 C3 归位）：调整的是队形块起点（编舞域），自「🎵 音乐与节拍」面板迁入块时长栏；
                id/行为/仪器口径不变（TC-P4-13..15 直接点击本钮）。移动端先收纳（W3 移动形态，防块栏折行） -->
-          <button id="btn-align-playhead" class="btn small hide-mobile" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">对齐到播放头</button>
-          <button id="btn-tag-drop" class="btn small" title="在当前播放头位置打一个音乐标记（主歌/副歌/间奏…）；时间轴 tag 道双击空白也可打点"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="flag" aria-hidden="true" style="vertical-align:-2px"><path d="M6 21V4"/><path d="M6 5c2-1.3 4-1.3 6 0s4 1.3 6 0v8c-2 1.3-4 1.3-6 0s-4-1.3-6 0"/></svg><span class="hide-mobile"> 打点</span></button>
+          <button id="btn-align-playhead" class="btn small hide-mobile" title="把当前队形 clip 的起点对齐到播放头所在时间戳（整段平移，钳制不越相邻队形）">对齐到播放头</button>
+          <!-- build-55-uiclean P1-1：块时长条「打点」钮退役——打点建的是音乐节奏区域（音乐域语义），
+               与块时长条「队形时长」（编舞域语义）混位；唯一入口归音乐工具条（含 tag 道双击空白） -->
           <span id="bc-sec" class="dim hide-mobile"></span>
           <span class="spacer"></span>
-          <!-- 连续时长（W2 C4 迁移）：只影响块编辑（归编舞），自「校准」子折叠迁入块时长栏；
-               id=ripple-check 不变（TC-P4-11 / uf2 直接 dispatch change）。移动端先收纳（W3 移动形态） -->
-          <label class="ctl hide-mobile" title="开：改某块保持时长后续块顺延；关：压缩自身过渡、后续块不动"><input type="checkbox" id="ripple-check" checked>连续时长</label>
-          <span class="dim hide-mobile">拖动块边缘可连续调节（自动吸附节拍）</span>
+          <!-- build-70-formationclips：连续时长（ripple）checkbox 退役——队形轴 clip 化后时长操作
+               天然只作用本 clip（邻界钳制不越邻段），无 ripple 语义；提示语同步更新 -->
+          <span class="dim hide-mobile">拖动队形段移动 / 拖缘调长（自动吸附节拍）</span>
+          <!-- build-51-stageux F3：块时长条行尾两钮（编舞模式专属——#block-ctl 音乐模式 hidden）：
+               「索引」= 乐段索引面板入口（与音乐工具条 #mtb-seg-index 同组件，⌘⇧L 两模式通用）；
+               「⌄」= 底部时间轴区整体折叠（#bottom-area ⇄ #bottom-strip 细条，记忆 wuzhen:stageBottom） -->
+          <button id="bc-seg-index" class="btn small" title="乐段索引面板（⌘⇧L）：段名/秒位区间目录 + 段内小节格，点击行跳转播放头">索引</button>
+          <button id="bc-bottom-collapse" class="btn small" aria-expanded="true" title="收起底部时间轴区（记忆）">⌄</button>
         </div>
         <div id="music-strip">
           <!-- ===== W2 C14 编舞模式音乐摘要条（30px 单行，替代「🎵 音乐与节拍」折叠面板，C1 退役） =====
-               构成：♪ 资产名 64.0s · BPM120 4/4（只读呈示） · [点拍] [试听] [校准▸（BPM/首拍只读+小节/数拍）]
-                     [tag N 个 · 跳转列表] ┃ [拍刻度][－][＋][⤢]（C5 编舞尺规组留驻时间轴上沿） · [编辑音乐 →]
+               构成：♪ 资产名 64.0s · BPM120 4/4（只读呈示） · [tag N 个 · 跳转列表]
+                     ┃ [－][＋][⤢]（C5 编舞尺规组留驻时间轴上沿） · [编辑音乐 →]
                「编辑音乐 →」= setUiMode('music') 显性入口（IR-W2-3，与 M 键等效）。
                载入/媒体库/按队形段自动切不入编舞（§2.4 矩阵：摘要条「编辑音乐 →」直达）——音乐模式工具条承接。
                隐藏 file 输入为全应用音频导入管线（媒体库/空态/工具条共用），随条保留。
-               仪器兼容注：#audio-name/#bpm-input/#offset-input/#btn-tap/#btn-offset-test/#bpb-select/
-               #countin-input/#calib-disc/#ripple-check/#btn-align-playhead/#pb-metro 为既有用例锁定 id，
-               全部保留且功能不变（BPM/首拍在编舞呈只读 readonly，修改走音乐模式孪生件）。 -->
+               build-79-tlui（需求 7b）：「点拍」「试听」钮删除、「校准 ▸（BPM/首拍只读+小节）」折叠
+               注释隐藏（暂留代码便于恢复——恢复=去掉注释包裹；main.js 接线已 ?. 守卫，元素缺席自动跳过）。
+               仪器兼容注：#audio-name/#ms-meta/#btn-align-playhead/#pb-metro 为既有用例锁定 id
+               （#ripple-check 已随 build-70-formationclips 连续时长退役移除；
+                #bpm-input/#offset-input/#bpb-select/#calib-disc 随校准隐藏入注释），全部保留且功能不变
+               （BPM/首拍在编舞呈只读 readonly，修改走音乐模式孪生件）。 -->
           <div id="music-summary">
             <span class="ms-note" aria-hidden="true">♪</span>
             <span id="audio-name" class="ms-name" title="当前配乐">未载入音乐</span>
             <span id="ms-meta" class="ms-meta mono" title="BPM 与小节（编舞模式只读呈示；修改请进音乐模式——BPM 是节拍划分产物）">—</span>
             <span class="vsep"></span>
-            <button id="btn-tap" class="btn small" title="连点 3 次起算，取最近 8 次平均（停 2.5s 重新起算）">点拍</button>
-            <button id="btn-offset-test" class="btn small" title="从首拍前2秒播放，检查对齐">试听</button>
-            <details id="calib-disc">
-              <summary title="BPM / 首拍（编舞模式只读）/ 小节 / 数拍入场">校准</summary>
+            <!-- build-79-tlui（需求 7b）：「点拍/试听」钮删除、「校准」折叠注释隐藏（暂留代码便于恢复——
+                 恢复=去掉本注释包裹；main.js 的 #bpm-input/#offset-input/#bpb-select 接线已 ?.
+                 守卫，元素缺席自动跳过；BPM/首拍只读语义与小节 select 原样） -->
+            <!-- <details id="calib-disc">
+              <summary title="BPM / 首拍（编舞模式只读）/ 小节">校准</summary>
               <div id="calib-panel">
                 <label class="ctl">BPM <input id="bpm-input" type="number" min="30" max="300" step="1" readonly title="编舞模式只读呈示；修改请进音乐模式（M 或「编辑音乐 →」）" style="width:56px"></label>
                 <label class="ctl">首拍 <input id="offset-input" type="number" min="0" step="0.01" readonly title="编舞模式只读呈示；修改请进音乐模式（M 或「编辑音乐 →」）" style="width:64px">s</label>
                 <label class="ctl">小节 <select id="bpb-select" title="每小节拍数"><option value="4">4拍</option><option value="3">3拍</option><option value="2">2拍</option><option value="6">6拍</option></select></label>
-                <label class="ctl">数拍入场 <input id="countin-input" type="number" min="0" max="32" style="width:44px"></label>
               </div>
-            </details>
-            <button id="ms-tags" class="btn small" title="乐段索引面板（⌘⇧L）：段名/拍位/秒位目录 + 段内小节格，点击行跳转播放头" disabled>tag 0 个 · 跳转列表</button>
+            </details> -->
+            <button id="ms-tags" class="btn small" title="乐段索引面板（⌘⇧L）：段名/秒位区间目录 + 段内小节格，点击行跳转播放头" disabled>tag 0 个 · 跳转列表</button>
             <span class="spacer"></span>
-            <button id="tl-scale-toggle" class="btn small" title="尺规刻度：拍（小节/8 拍，恒定 BPM 口径）与秒（变速曲或无节拍音乐的降级对齐）切换。选择会记住">拍刻度</button>
+            <!-- build-77-expux（时间唯一标准）：#tl-scale-toggle 拍/秒切换钮移除——编舞模式
+                 尺规恒秒刻度（timeline.js drawRuler stage 分支强制 sec），拍刻度概念退场；
+                 音乐模式工具条孪生钮 #tl-scale-toggle-music 保留（音乐模式行为不动） -->
             <button id="tl-zoom-out" class="btn small" title="缩小时间线">－</button>
             <button id="tl-zoom-in" class="btn small" title="放大时间线">＋</button>
             <button id="tl-zoom-fit" class="btn small" title="适应宽度">⤢</button>
             <button id="ms-edit" class="btn small" title="切换到音乐模式（快捷键 M）：多轨剪辑、BPM/首拍、载入与节奏划分">编辑音乐 →</button>
           </div>
-          <input type="file" id="audio-file" accept="audio/*" hidden>
-          <input type="file" id="media-files" accept="audio/*" multiple hidden>
+          <input type="file" id="audio-file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,audio/*" hidden>
+          <input type="file" id="media-files" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,audio/*" multiple hidden>
           <div id="tl-body">
             <!-- C12 空态合并（W2）：旧「＋载入音乐/媒体库」双钮退役（音乐模式空态由工具条资产组承接）；
                  编舞简单道无音乐时呈一行灰字，点击跳音乐模式 -->
@@ -268,35 +385,73 @@
                 <canvas id="tl-overlay"></canvas>
               </div>
             </div></div>
+            <!-- build-51-stageux F4：时间轴底部导航滑块（视口概览条，两模式恒显）——
+                 拇指=当前可视窗口占全时域比例，拖动=平移，点空白=视口中心跳转；
+                 内容不溢出=满宽禁用态。原生细滚条保留（概览导航不替代）。 -->
+            <div id="tl-nav" aria-label="时间轴概览导航条"><div id="tl-nav-thumb"></div></div>
           </div>
         </div>
-        <!-- 队形 mini-preview 栏（W1 C15，音乐模式专属 280px）：只读画布随播放头同步当前队形 +
-             当前块 ±1 拍步进 + 对齐到播放头（「任意阶段可调整」最小集）；编舞模式隐藏。
-             M5（决策②）：可折叠、默认展开（.mp-head 折叠钮，wuzhen:mpCollapsed 记忆；折叠=只留头部）。
-             W3 §2.3：移动端折为底部横条 88px（mini canvas 88×60 + 当前块名/拍步进；折叠钮不呈示——
-             88px 横条无折叠余量）；#mp-countin（W3 C17 修 P12）：音乐模式数拍入场大字呈示 -->
-        <aside id="music-preview" title="当前队形预览（随播放头同步；只读——舞台编辑请切回编舞模式）">
-          <div class="mp-head">
-            <span class="mp-title">队形预览</span>
-            <button id="mp-collapse" class="btn small" aria-expanded="true" title="折叠预览栏（记忆）">▾</button>
+        <!-- ===== 右侧合并侧边栏（build-46-layout：队形预览上 + 媒体库下）=====
+             两段各自可纵向收起（段头箭头，记忆 wuzhen:rsbPreview / wuzhen:rsbLib；一侧收起
+             另一侧吃余量）；整栏可收起成细条（wuzhen:rsbClosed）+ 左缘 grip 拖宽
+             （180–480px=max(480, 容器40%)，记忆 wuzhen:rsbW）。桌面=右侧纵栏与多轨区 flex 并排；
+             移动端=底部抽屉（默认收成 88px 迷你预览条，上滑/呼出钮展开 ≤50vh，多轨区始终可见）。
+             #music-preview / #media-sidebar 元素 id 原样保留（main.js/timeline.js 按 id 取用）。
+             编舞模式整体不可见（CSS 默认 display:none，E-12 作用域）。 -->
+        <aside id="right-sidebar">
+          <div id="rsb-grip" title="拖拽调整侧边栏宽度（180–480px，记忆）"></div>
+          <button id="rsb-collapse" title="收起侧边栏（记忆）">»</button>
+          <div id="rsb-body">
+            <section id="rsb-preview-seg" class="rsb-seg">
+              <header class="rsb-seg-head">
+                <button id="rsb-preview-toggle" class="rsb-seg-toggle" aria-expanded="true" title="折叠/展开队形预览（记忆）">▾</button>
+                <span class="rsb-seg-title">队形预览</span>
+              </header>
+              <div id="music-preview" class="rsb-seg-body" title="当前队形预览（随播放头同步；只读——舞台编辑请切回编舞模式）">
+                <canvas id="mp-canvas"></canvas>
+                <div id="mp-name" class="mp-name">—</div>
+                <div class="mp-block">
+                  <!-- build-79-tlui（需求 3）：± 钮 title 与块时长条同口径——±0.1s 是时长不是缩放
+                       （原 −1拍/＋1拍 语义随 build-78 ±0.1s 步进已过期，一并校正） -->
+                  <span class="ctl">保持 <span id="mp-hold" class="mono">—</span>
+                    <button id="mp-hold-minus" class="btn small step" title="保持时长 −0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">−</button>
+                    <button id="mp-hold-plus" class="btn small step" title="保持时长 ＋0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">＋</button>
+                  </span>
+                  <span class="ctl">过渡 <span id="mp-travel" class="mono">—</span>
+                    <button id="mp-travel-minus" class="btn small step" title="过渡时长 −0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">−</button>
+                    <button id="mp-travel-plus" class="btn small step" title="过渡时长 ＋0.1s（±0.1s 调整的是队形时长，不是时间轴视图缩放——缩放用尺规 －/＋ 或滚轮）">＋</button>
+                  </span>
+                </div>
+                <button id="mp-align" class="btn small" title="把当前队形 clip 的起点对齐到播放头所在时间戳（整段平移，钳制不越相邻队形）">对齐到播放头</button>
+              </div>
+            </section>
+            <section id="rsb-lib-seg" class="rsb-seg rsb-grow">
+              <header class="rsb-seg-head">
+                <button id="rsb-lib-toggle" class="rsb-seg-toggle" aria-expanded="true" title="折叠/展开媒体库（记忆）">▾</button>
+                <!-- build-56-indextab F2：段头 tab 条 [媒体库|索引]——两 pane 互斥显隐（既有媒体库内容
+                     pane ⇄ 索引 pane=播放头行+si-list，由 main.js siMount 单挂载）。
+                     类名用 .rsb-tabs/.rtab（不入 .panel-tabs——那是 stage 右面板页签组，全局选择器互不串场） -->
+                <nav class="rsb-tabs" aria-label="媒体库段视图切换">
+                  <button class="rtab active" data-pane="lib" aria-selected="true">媒体库</button>
+                  <button class="rtab" data-pane="index" aria-selected="false">索引</button>
+                </nav>
+              </header>
+              <div id="media-sidebar" class="rsb-seg-body" aria-label="媒体库 · 音乐资产">
+                <div id="msb-body"></div>
+              </div>
+              <!-- 索引 pane：折叠态随 .rsb-folded 整段收起（rsb-seg-body 类共用折叠规则）；
+                   播放头行 + si-list 由 siMount 挂入，内容高度吃 rsb 余量 -->
+              <div id="rsb-index-pane" class="rsb-seg-body rsb-index-pane" hidden></div>
+            </section>
           </div>
-          <canvas id="mp-canvas"></canvas>
-          <div id="mp-name" class="mp-name">—</div>
-          <div class="mp-block">
-            <span class="ctl">保持 <span id="mp-hold" class="mono">—</span>
-              <button id="mp-hold-minus" class="btn small step" title="−1拍">−</button>
-              <button id="mp-hold-plus" class="btn small step" title="＋1拍">＋</button>
-            </span>
-            <span class="ctl">过渡 <span id="mp-travel" class="mono">—</span>
-              <button id="mp-travel-minus" class="btn small step" title="−1拍">−</button>
-              <button id="mp-travel-plus" class="btn small step" title="＋1拍">＋</button>
-            </span>
-          </div>
-          <button id="mp-align" class="btn small" title="把当前队形块的起点对齐到播放头所在时间戳（自动调整前一段过渡时长）">对齐到播放头</button>
-          <div id="mp-countin" hidden aria-hidden="true"></div>
         </aside>
       </div>
     </div>
+
+    <!-- build-51-stageux F3：底部折叠细条（stage 模式 + #bottom-area.ba-collapsed 时呈示）——
+         28px「时间轴」细条，整条点击=展开（记忆 wuzhen:stageBottom）；CSS stage 作用域，
+         音乐模式恒隐藏（#bottom-area 折叠类不串场） -->
+    <button id="bottom-strip" title="展开底部时间轴区（记忆）" aria-label="展开底部时间轴区"><svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 15l7-7 7 7"/></svg>时间轴</button>
 
     <!-- 移动端底部 Tab -->
     <nav id="mobile-tabs">
@@ -306,13 +461,35 @@
     </nav>
   </section>
 
-  <!-- 说明书全屏覆盖层（移动端「更多」入口打开；桌面与页签复用同一 renderManual 内容） -->
+  <!-- 说明书全屏覆盖层（build-55-uiclean P2：顶栏「说明书」钮打开；Esc/「完成」关闭。
+       桌面与移动共用同一 renderManual 内容） -->
   <div id="manual-overlay" hidden>
     <header class="manual-ov-head">
       <span class="manual-ov-title"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="book" aria-hidden="true" style="vertical-align:-2px"><path d="M2.5 5H8a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2.5zM21.5 5H16a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h6.5z"/></svg> 使用说明书</span>
       <button id="btn-manual-close" class="btn small">完成 <svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon="close" aria-hidden="true" style="vertical-align:-2px"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
     <div id="manual-overlay-body" class="manual-ov-body"></div>
+  </div>
+
+  <!-- build-71-iomenu F1：导入/导出统一菜单（#app 级共享，两视图可见）。
+       原 #export-dd 内联 .dd-menu 迁出：顶栏在 #editor-view 内、项目库（.lib-header）无顶栏，
+       hidden 祖先会连 fixed 后代一起隐藏——菜单必须放视图节区之外才能两视图共用同一组件。
+       摆位仍是 fixed（打开时按触发钮视口坐标放置，main.js openIoMenu）。
+       root 结构：保存覆盖（F2 条目，仅会话内从文件导入且已修改时可见）→ 从项目文件导入…
+       → 导出 ▸ 二级子菜单（原五项全部保留迁移，id 不变：exp-png/exp-video/exp-print/
+       exp-json-audio/exp-json；点击/悬停展开，触屏以点击为准） -->
+  <div class="dd-menu" id="io-menu" hidden>
+    <button id="save-back" hidden title="把当前修改写回导入时的原文件（本会话从文件导入后才可用）">保存覆盖到原文件…</button>
+    <button id="imp-json">从项目文件导入…</button>
+    <button id="exp-sub-toggle" aria-expanded="false" aria-controls="exp-submenu">导出</button>
+    <div id="exp-submenu" hidden>
+      <button id="exp-png">当前队形 PNG</button>
+      <button id="exp-video">导出视频（编排播放）</button>
+      <button id="exp-audio">仅导出音频</button>
+      <button id="exp-print">打印 / PDF（全部队形）</button>
+      <button id="exp-json-audio">导出项目文件（含音乐）</button>
+      <button id="exp-json">导出项目文件（不含音乐）</button>
+    </div>
   </div>
 
   <!-- 弹窗与提示 -->

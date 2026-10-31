@@ -21,8 +21,8 @@
   "version": 1,
   "meta": { "title": "2026队列舞《蓝色多瑙河》", "team": "", "createdAt": "...", "updatedAt": "..." },
   "stage": {
-    "widthM": 12,            // 舞台宽（米），队列舞标准场地约 12×16
-    "depthM": 16,            // 舞台深（米）
+    "widthM": 16,            // 舞台宽（米），build-61-stageaspect 起新建缺省 16×12（4:3 横向，面积同旧缺省 192m²；
+    "depthM": 12,            //   旧 12×16 等场地可在舞台页签「场地预设」五档或自由输入）
     "audience": "bottom",    // 观众方向 bottom/top/left/right（决定"面向观众"的朝向基准）
     "gridM": 0.5, "snap": true,
     "backstageM": 2,         // 四周后台区（米），首尾队形可站人
@@ -47,7 +47,9 @@
   "timeline": {
     "blocks": [ { "formationId": "f1", "holdBeats": 16, "travelBeats": 8 } ],
     // 每个队形块 = 到达后的保持拍数 + 进入下一队形的移动拍数；块起点由累加推算（与 ArrangeUs 同机制）
-    "countInBeats": 8, "metronome": false, "playSpeed": 1.0
+    "metronome": false, "playSpeed": 1.0
+    // build-68-nocountin：旧字段 countInBeats（数拍入场倒计拍数）已退役——新项目不再生成，
+    // 旧 JSON 里的残留载入时剥离（sanitizeTimeline delete，零迁移）。
   }
 }
 ```

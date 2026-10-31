@@ -100,7 +100,10 @@ test('DL-9 合法项目：fetch→validate→importProject 恰一次；replaceSt
   assert.equal(r.hasAudio, false);
   assert.equal(got.fetched[0], 'http://localhost:8137/demo/deep.json');
   assert.equal(got.imported.length, 1);
-  assert.ok(got.imported[0].dancers.length === 1 && got.imported[0].timeline.blocks.length === 1, 'validateProject 净化后对象被导入');
+  // build-70：blocks 退役——validateProject 净化时旧 blocks 迁移为 clip 字段（hold16 → [0,16)）后导入
+  const impF = got.imported[0].formations[0];
+  assert.ok(got.imported[0].dancers.length === 1 && impF.startBeat === 0 && impF.lenBeats === 16
+    && got.imported[0].timeline.blocks === undefined, 'validateProject 净化后对象被导入（blocks 已迁移为 clip 字段）');
   assert.equal(got.replaced[0], '/index.html');
   assert.equal(got.toasts[0], '已导入项目：深链样例（副本）');
 });

@@ -3,22 +3,40 @@
 // 节奏划分轨族），不依赖 DOM/浏览器。既有套件口径不变：本文件只新增，不改既有测试。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   musicLaneH, musicContentH, tlTotalHeight, resolveInitialUiMode,
   TRACKS_OPS_H, TL_RULER_H, SEG_LANE_H_MUSIC, MUSIC_LANE_GAP, MUSIC_LANE_MIN_H, MUSIC_LANE_MAX_H,
 } from '../js/timeline.js';
 import {
   sectionSegmentsOf, evenSectionBeats, barRuleSections, parseSectionTable, sectionTableToEntries,
-  applySectionEntries, splitSectionAt, mergeSectionWithNext, removeSection, setSectionColor,
+  applySectionEntries, removeSection, setSectionColor,
   sanitizeTags, SEG_COLOR_COUNT,
 } from '../js/model.js';
 
-// 最小项目夹具（computeSegments 只读 blocks 的 holdBeats/travelBeats；tags 见 timeline.tags）
+// build-49-tagregion F2：splitSectionAt/mergeSectionWithNext 随「于此拆分/与下一段合并」菜单项
+// 一并退役（区域块模型下无意义）——retirement guard 断言导出确已移除（见下方静态断言）。
+const modelSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'js', 'model.js'), 'utf8');
+
+// 最小项目夹具（build-70：clip 字段驻队形，见 proj 内迁移）
 const blk = (hold, travel = 0) => ({ holdBeats: hold, travelBeats: travel });
-const proj = (blocks, tags = []) => ({
-  audio: { bpm: 120, firstBeatSec: 0, beatsPerBar: 4 },
-  timeline: { blocks, tags },
-});
+const proj = (blocks, tags = []) => {
+  // build-70 夹具迁移：旧 blocks [{holdBeats,travelBeats}] → 队形 clip 字段（与 validateProject
+  // 迁移同规则：formation i startBeat=累计 holdStart、lenBeats=holdBeats；travelBeats=空隙）
+  const formations = [];
+  let b = 0;
+  for (const k of blocks) {
+    formations.push({ id: `f${formations.length}`, name: `F${formations.length}`, color: '#64748b', note: '', positions: {}, startBeat: b, lenBeats: k.holdBeats });
+    b += k.holdBeats + k.travelBeats;
+  }
+  return {
+    audio: { bpm: 120, firstBeatSec: 0, beatsPerBar: 4 },
+    formations,
+    timeline: { tags },
+  };
+};
 const ls = map => ({ getItem: k => (k in map ? map[k] : null) });
 
 // ---------- ① 音乐模式几何（W1-1）：容器推导 + clamp(56,120) ----------
@@ -47,10 +65,13 @@ test('G2W1 内容高：与 laneH/n 自洽；容器 ≥ 内容 → 画布拉满�
   assert.ok(musicContentH(musicLaneH(727, 4), 4) <= 727, '860 高 4 轨内容不超容器（无滚动）');
   assert.ok(musicContentH(musicLaneH(335, 4), 4) > 335, '容器不足 floor 内容 → 纵向滚动');
 });
-test('G2W1 编舞红线不动：tlTotalHeight stage 三值 150/120/160 逐值保持（E-12）', () => {
-  assert.equal(tlTotalHeight('stage', 66, false), 150);
-  assert.equal(tlTotalHeight('stage', 66, true), 120);
-  assert.equal(tlTotalHeight('stage', 112, false), 160);
+test('G2W1 编舞时间轴：桌面基线 112（内容地板 114 兜底）/ 移动 120 / 富余域 160（build-56 F1 改写）', () => {
+  // build-56-indextab F1 改写（原 E-12 断言 150/120/160）：stage 桌面基线 150→112（仅缺省值）；
+  // 内容地板=audioBottom 66+6+36+6=114 由 Math.max 兜底 → 实际写入高 114（恰合内容零死区）。
+  // 音乐模式推导零变化、移动端 120 不动； 富余域（audioBottom 112）仍 160。
+  assert.equal(tlTotalHeight('stage', 66, false), 114, '桌面：max(112 基线, 66+48 内容地板)=114');
+  assert.equal(tlTotalHeight('stage', 66, true), 120, '移动端不变');
+  assert.equal(tlTotalHeight('stage', 112, false), 160, '富余域不变');
   assert.equal(TRACKS_OPS_H, 26, '加轨条高=26（音乐模式底部 ＋加轨 DOM 条）');
   assert.equal(SEG_LANE_H_MUSIC, 28, '节奏划分轨升级 28px（§2.2.1；编舞 tag 道仍 18 不变）');
   assert.equal(MUSIC_LANE_GAP, 12);
@@ -117,28 +138,15 @@ test('落标 applySectionEntries：整表替换 tags；空名回落「段落 k�
   assert.ok(!('color' in p.timeline.tags[3]), 'color 越界 → 不落该键');
   assert.ok(p.timeline.tags.every(t => /^tag_/.test(t.id)), '全部补 uid');
 });
-test('拆分段：原段名+「·2」截断、拍位钳 ≥0.01、color 随原段；未知 tagId → null', () => {
-  const p = proj([blk(16)], [{ id: 't0', beat: 0, name: '副歌', color: 3 }]);
-  const t = splitSectionAt(p, 't0', 8.005);
-  assert.equal(p.timeline.tags.length, 2);
-  assert.equal(t.name, '副歌·2');
-  assert.equal(t.color, 3);
-  assert.equal(splitSectionAt(p, 'nope', 8), null);
-  const p2 = proj([blk(16)], [{ id: 't0', beat: 0, name: '一二三四五六七八九十一二三四五六七八九十' }]);
-  const t2 = splitSectionAt(p2, 't0', 4);
-  assert.ok(t2.name.length <= 20, '段名截断 ≤ TAG_NAME_MAX');
-});
-test('合并相邻：移除下一段起点（本段延到再下一段）；末段并入前段（移除自身前一界）', () => {
-  const p = proj([blk(16)], [
-    { id: 't0', beat: 0, name: 'A' }, { id: 't1', beat: 8, name: 'B' }, { id: 't2', beat: 16, name: 'C' },
-  ]);
-  mergeSectionWithNext(p, 't0');
-  assert.deepEqual(p.timeline.tags.map(t => t.id), ['t0', 't2'], 'A 合并 B → 移除 B 界');
-  mergeSectionWithNext(p, 't2');
-  assert.deepEqual(p.timeline.tags.map(t => t.id), ['t2'], '末段 C 并入前段 → 移除前一界 A，C 保留延到曲终');
-  const p3 = proj([blk(16)], [{ id: 't0', beat: 0, name: 'A' }]);
-  mergeSectionWithNext(p3, 't0');
-  assert.deepEqual(p3.timeline.tags.map(t => t.id), ['t0'], '仅一段：无可并 → 原样');
+test('退役 guard（build-49 F2）：splitSectionAt/mergeSectionWithNext 随拆分/合并菜单项一并退役', () => {
+  // 区域块模型下「于此拆分/与下一段合并」无意义：菜单项已删，模型函数无调用方 → 导出一并退役。
+  // 本断言防回归（再导出而菜单不回=死代码；菜单回来而模型缺失=运行时炸）。
+  assert.ok(!/export function splitSectionAt/.test(modelSrc), 'splitSectionAt 导出已退役');
+  assert.ok(!/export function mergeSectionWithNext/.test(modelSrc), 'mergeSectionWithNext 导出已退役');
+  // 菜单侧同步退役：segMenuItems 不再含拆分/合并项（删除入口收敛=长按/右键菜单与索引「…」的「删除标记」）
+  const mainSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'js', 'main.js'), 'utf8');
+  assert.ok(!/label: '于此拆分'/.test(mainSrc), '菜单不再有「于此拆分」项');
+  assert.ok(!/label: '与下一段合并'/.test(mainSrc), '菜单不再有「与下一段合并」项');
 });
 test('删除段 = 移除段起点 tag；换色 0..3 越界不动', () => {
   const p = proj([blk(16)], [{ id: 't0', beat: 0, name: 'A' }, { id: 't1', beat: 8, name: 'B' }]);
@@ -170,8 +178,10 @@ test('sanitizeTags color 透传：合法 0..3 保留；无/非法 → 输出 sha
     { id: 'c', beat: 16, name: 'C', color: 4 },
     { id: 'd', beat: 24, name: 'D', color: 1.5 },
   ]);
-  assert.deepEqual(out[0], { id: 'a', beat: 0, name: 'A', color: 3 });
-  assert.deepEqual(out[1], { id: 'b', beat: 8, name: 'B' }, '无 color 键 → shape 与既有完全一致');
-  assert.deepEqual(out[2], { id: 'c', beat: 16, name: 'C' });
-  assert.deepEqual(out[3], { id: 'd', beat: 24, name: 'D' });
+  // build-49 F1 改写：点 tag 迁移为区域——endBeat=下一个同层 tag.beat（无缝衔接），末尾 +16；
+  // color 透传语义不变（合法落键、无/越界/非整数不落键）。
+  assert.deepEqual(out[0], { id: 'a', beat: 0, name: 'A', color: 3, endBeat: 8 });
+  assert.deepEqual(out[1], { id: 'b', beat: 8, name: 'B', endBeat: 16 }, '无 color 键 → 不落该键（区域 endBeat 照常迁移）');
+  assert.deepEqual(out[2], { id: 'c', beat: 16, name: 'C', endBeat: 24 }, 'color 4 越界 → 不落');
+  assert.deepEqual(out[3], { id: 'd', beat: 24, name: 'D', endBeat: 40 }, 'color 1.5 非整数 → 不落；末 tag endBeat=beat+16');
 });

@@ -51,6 +51,9 @@ test('applySlots：唯一映射 + 就近保持', () => {
 
 test('mirrorH：x 镜像 + 朝向镜像', () => {
   const p = createProject({ pairs: 1 });
+  // build-61-stageaspect 改写注明：createProject 缺省改 16×12；本组测试钉住 12×16 验证镜像/
+  // 朝向几何（不随缺省漂移），断言语义不变。
+  p.stage.widthM = 12; p.stage.depthM = 16;
   const f = p.formations[0];
   const [l, fo] = p.dancers.map(d => d.id);
   f.positions[l] = { x: 3, y: 5, facing: 30 };
@@ -64,6 +67,7 @@ test('mirrorH：x 镜像 + 朝向镜像', () => {
 
 test('mirrorV：前后镜像', () => {
   const p = createProject({ pairs: 1 });
+  p.stage.widthM = 12; p.stage.depthM = 16; // build-61-stageaspect 改写注明：钉住旧缺省，断言语义不变
   const f = p.formations[0];
   const [l] = p.dancers.map(d => d.id);
   f.positions[l] = { x: 3, y: 5, facing: 90 };
@@ -101,6 +105,7 @@ test('swapTwo', () => {
 
 test('faceAll：面向观众/圆心（partner 语义已随 pairs 退役）', () => {
   const p = createProject({ pairs: 1 });
+  p.stage.widthM = 12; p.stage.depthM = 16; // build-61-stageaspect 改写注明：钉住旧缺省（圆心 6,8 派生），断言语义不变
   const f = p.formations[0];
   const [l] = p.dancers.map(d => d.id);
   f.positions[l] = { x: 4, y: 6, facing: 0 };

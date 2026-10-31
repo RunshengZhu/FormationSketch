@@ -42,12 +42,23 @@ function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, ex
   const project = {
     version: 1,
     meta: { title, team: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-    stage: { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null },
+    // build-61-stageaspect F1：缺省场地改 4:3 横向（16×12）——横视口下空间利用率高、舞者呈示更大、
+    // 横向移动余地更大（面积 192m² 与旧缺省 12×16 相同）。既有项目零迁移：只影响新建项目，
+    // 旧档 12×16 仍可用（舞台页签「3:4」预设一键回到竖向排练厅）。
+    // build-62-formations2 F3：+wingM 左右候场区宽（米）——纯视觉标记，不改舞者位置域；
+    //   validateProject 同步清洗。
+    // build-63-stageview2 F1：后台/候场瘦身——缺省 backstageM 2→1、wingM 1.5→1（后台通道不占
+    //   大面积；既有项目保留各自数值零迁移，范围 [0,10]/[0,5] 不变）。
+    stage: { widthM: 16, depthM: 12, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 1, wingM: 2, bgImage: null },
     audio: { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0 },
     media: { assets: [], activeAssetId: null }, // v3 音乐剪辑：媒体资产库（blob 走存储层，项目记录只存元数据）
     settings: { labelMode: 'no' }, // 项目级显示设置：'no'=编号序号(1..N) | 'short'=简称 | 'name'=姓名
     dancers: [], groups: [], formations: [],
-    timeline: { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [], tracks: [defaultTrack()] },
+    // build-70-formationclips M1：timeline.blocks 整体退役——队形即 clip（一等时间轴对象），
+    // 时长字段 startBeat/lenBeats 直接驻队形；变换段=相邻 clip 间空隙自动推导（不再存 travel）。
+    timeline: { metronome: false, playSpeed: 1, tags: [], audioClips: [], tracks: [defaultTrack()] },
+    // build-68-nocountin：timeline.countInBeats（数拍入场）退役——不再生成该字段；
+    // sanitizeTimeline 对旧 JSON 里的残留做容忍剥离（delete，零迁移），载入不报错。
   };
   for (let i = 1; i <= pairs; i++) {
     addDancer(project, `M${i}`, 'M', String(i));
@@ -61,12 +72,11 @@ function createProject({ title = '未命名队列舞', pairs = 6, extraM = 0, ex
     if (men.length) project.groups.push({ id: uid('g'), name: '男士', memberIds: men });
     if (women.length) project.groups.push({ id: uid('g'), name: '女士', memberIds: women });
   }
-  // 初始队形：双横排
-  const f = { id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {} };
+  // 初始队形：双横排（build-70 M1：首 clip [0, 16) 拍缺省）
+  const f = { id: uid('f'), name: '开场队形', color: '#64748b', note: '', positions: {}, startBeat: 0, lenBeats: FORM_CLIP_LEN_DEFAULT };
   project.formations.push(f);
   genDefaultRows(project, f);
   if (presetMerged) applyPresetMerged(project, f, pairs);
-  syncTimeline(project);
   return project;
 }
 // 「已组合」预设后处理：M_i×F_i 两两合并为 capsule 单元并收拢（位置=各对的默认队形点位中点）。
@@ -79,8 +89,14 @@ function applyPresetMerged(project, f, pairs) {
     if (addMerge(f, m.id, w.id, 'capsule')) collapseUnit(f, m.id, w.id);
   }
 }
-function genDefaultRows(project, f) {
-  const ids = orderedDancers(project);
+// 开场双横排生成（Wave1 需求 5 起导出）：可选第三参 options = { ids }——提供时仅对这些舞者
+// 写生成位置（其余舞者位置原样保留），行数/间距等几何按子集人数推导（内部逻辑只在 ids 子集
+// 内进行，子集按名册序取、限名册内防悬挂 id 写入 positions）；缺省=现行为（全员，逐字节不变）。
+function genDefaultRows(project, f, options = {}) {
+  const roster = orderedDancers(project);
+  const ids = (Array.isArray(options.ids) && options.ids.length)
+    ? roster.filter(id => options.ids.includes(id))
+    : roster;
   const { widthM: W, depthM: H } = project.stage;
   const n = ids.length, rows = n <= 4 ? 1 : 2, m = 1.5;
   const per = Math.ceil(n / rows);
@@ -109,6 +125,115 @@ function removeDancer(project, dancerId) {
       if (!f.merges.length) delete f.merges;
     }
   }
+}
+
+// build-69-roster R1：画布删除的新语义——仅从指定队形移除（名册保留）。
+// 名册是唯一身份源：画布不再是删除舞者的入口。只动该帧：positions 键删除 + 该帧 merges
+// 引用清理（清空后键移除，与 removeDancer 同口径）；dancers/groups/其它队形零触碰。
+// 可撤销性由调用方经 store.mutate(fn, label) 提交单条历史获得。
+function removeDancerFromFormation(project, formationIndex, dancerIds) {
+  const f = project?.formations?.[formationIndex];
+  if (!f) return;
+  const ids = [...new Set(dancerIds || [])];
+  for (const id of ids) delete f.positions[id];
+  if (f.merges) {
+    f.merges = f.merges.filter(m => !ids.includes(m.a) && !ids.includes(m.b));
+    if (!f.merges.length) delete f.merges;
+  }
+}
+// build-69-roster R2：「重新入队」——把名册舞者补齐进全部缺席队形（曾被「移出队形」者）。
+// 复用 ensureDancerInFormation（补位语义与新增舞者一致）；返回补齐的队形数
+//（0=本就全勤，名册 UI 据此 disabled）。
+function rejoinFormations(project, dancerId) {
+  if (!dancerById(project, dancerId)) return 0;
+  let n = 0;
+  for (const f of project.formations) {
+    if (!f.positions[dancerId]) { ensureDancerInFormation(project, f, dancerId); n++; }
+  }
+  return n;
+}
+// Wave1 需求 5：「在场」判定——舞者位置在舞台矩形内（0≤x≤widthM 且 0≤y≤depthM，含边界）。
+// 后台（depthM 外条带）/左右候场（wingM 条带）/观众区舞者均在矩形外，一律不算在场。
+// 按名册序返回在场舞者 id（生成器 ids 子集与名册上场状态的共用口径）。
+function onStageIds(project, formation) {
+  const { widthM, depthM } = project?.stage || {};
+  const out = [];
+  for (const d of project?.dancers || []) {
+    const p = formation?.positions?.[d.id];
+    if (p && p.x >= 0 && p.x <= widthM && p.y >= 0 && p.y <= depthM) out.push(d.id);
+  }
+  return out;
+}
+// Wave1 需求 6：名册「上场」——把舞者写入指定队形（positions 补位）。源位置顺延：其它队形
+// 有位 → 取与当前队形距离最近的一个（|i−fi| 同距取更早者，与 carryPositionsForward 的
+// 「向前找」口径一致），x/y/facing 整体顺延；全部无位 → 舞台中央（facing=面向观众，与
+// ensureDancerInFormation 同口径）。已在场/非法入参 → no-op 返回 false；写入成功返回 true。
+// 纯函数（原地改 project，单条历史由调用方 store.mutate 提交）。
+function admitToFormation(project, formationIndex, dancerId) {
+  const fs = project?.formations || [];
+  const f = fs[formationIndex];
+  if (!f || !dancerById(project, dancerId)) return false;
+  if (f.positions[dancerId]) return false; // 已在场：no-op
+  let src = null;
+  for (let k = 1; !src && k < fs.length; k++) {
+    const back = fs[formationIndex - k];
+    const fwd = fs[formationIndex + k];
+    src = (back && back.positions[dancerId]) ? back.positions[dancerId]
+      : (fwd && fwd.positions[dancerId]) ? fwd.positions[dancerId] : null;
+  }
+  f.positions[dancerId] = src
+    ? { x: src.x, y: src.y, facing: src.facing }
+    : { x: project.stage.widthM / 2, y: project.stage.depthM / 2, facing: faceAudience(project.stage) };
+  return true;
+}
+// ---------- build-69-roster R3：批量添加（名册是唯一身份源，批量入口在名册） ----------
+// 命名延续既有 M_i/F_i 序列语义（createProject 的 pairs 形态）：扫描名册取前缀最大序号+1。
+function nextNameIndex(project, prefix) {
+  const re = new RegExp(`^${prefix}(\\d+)$`);
+  let max = 0;
+  for (const d of project.dancers) {
+    const m = re.exec(d.name || '');
+    if (m) max = Math.max(max, +m[1]);
+  }
+  return max + 1;
+}
+// 「第k对」编组命名序：取既有「第k对」最大序+1（与 gender 分组并存；追加不冲突）
+function nextCoupleIndex(project) {
+  let max = 0;
+  for (const g of project.groups || []) {
+    const m = /^第(\d+)对$/.exec(g.name || '');
+    if (m) max = Math.max(max, +m[1]);
+  }
+  return max + 1;
+}
+// 按对添加 n 对：每对 M_k/F_k（k 为男女统一序——男女各自序列都从同一 k 起，避免错位配对），
+// 并建「第g对」编组 {memberIds:[男,女]}（复用既有 createGroup/groups 结构）。
+// 返回新增舞者 id（按对交替，先男后女）；新舞者经 addDancer 自动补进全部队形。
+function addCouples(project, n) {
+  const cnt = Math.max(0, Math.floor(+n || 0));
+  const added = [];
+  let k = Math.max(nextNameIndex(project, 'M'), nextNameIndex(project, 'F'));
+  let g = nextCoupleIndex(project);
+  for (let i = 0; i < cnt; i++, k++, g++) {
+    const m = addDancer(project, `M${k}`, 'M');
+    const f = addDancer(project, `F${k}`, 'F');
+    createGroup(project, [m.id, f.id], `第${g}对`);
+    added.push(m.id, f.id);
+  }
+  return added;
+}
+// 按数量添加 n 名指定角色舞者（role 'M'|'F'|'X'）：命名按角色前缀延续（X 用 舞者n 序列）。
+// 返回新增舞者 id；不建编组（按对语义仅 addCouples 承担）。
+function addDancersBatch(project, n, role = 'X') {
+  const cnt = Math.max(0, Math.floor(+n || 0));
+  const r = ['M', 'F', 'X'].includes(role) ? role : 'X';
+  const prefix = r === 'X' ? '舞者' : r;
+  const added = [];
+  let k = nextNameIndex(project, prefix);
+  for (let i = 0; i < cnt; i++, k++) {
+    added.push(addDancer(project, `${prefix}${k}`, r).id);
+  }
+  return added;
 }
 
 // ---------- RTS 式编组（project.groups：纯选择辅助，可与合并交叉叠加，不改变渲染/数据语义） ----------
@@ -165,6 +290,47 @@ function carryPositionsForward(project, index) {
     f.positions[d.id] = found || { x: widthM / 2, y: depthM / 2, facing: faceAudience(project.stage) };
   }
 }
+// build-73-syncui F1：把指定舞者在 index 队形的当前坐标同步到其后所有队形（批量调队形：
+// 先摆好一段，再一键把后续同名舞者全部带到同一摆位）。纯函数（原地改 project，store.mutate
+// 提交单条历史可撤销）。语义要点：
+//   ① 仅同步 x/y——facing 保留目标队形原值（朝向是逐段表演语义，不由批量同步覆盖）；
+//   ② 源队形缺位的 id（越界/已移出当前队形）直接忽略——不臆造坐标；
+//   ③ 后续队形缺同名舞者（已移出）跳过——不做 ensureFormationComplete 补位（那是入场语义）；
+//   ④ 末队形（无后续）自然返回 {formations:0}——调用方（菜单项）据此隐藏入口。
+// 返回 {formations, dancers}：实际写入的队形数 / 有效同步的舞者数（toast 口径）。
+// Wave1 需求 4：泛化出 syncPositionsRange——dir 'forward'|'backward' + 有限 count=只同步
+// 相邻的 N 个队形（forward=index+1..index+N；backward=index-1..index-N；越界自动截断；
+// count 非有限数=不限）。语义与上完全一致（只同步 x/y、facing 保留、缺位跳过）；
+// syncForwardPositions 保留为薄包装（现调用方/测试零改写）。
+function syncPositionsRange(project, formationIndex, dancerIds, { dir = 'forward', count = Infinity } = {}) {
+  const src = project.formations[formationIndex];
+  if (!src) return { formations: 0, dancers: 0 };
+  const ids = (dancerIds || []).filter(id => src.positions[id]);
+  if (!ids.length) return { formations: 0, dancers: 0 };
+  const backward = dir === 'backward';
+  const n = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : Infinity;
+  let formations = 0;
+  for (let k = 1; k <= n; k++) {
+    const i = formationIndex + (backward ? -k : k);
+    if (i < 0 || i >= project.formations.length) break; // 越界自动截断
+    const f = project.formations[i];
+    let touched = false;
+    for (const id of ids) {
+      const cur = f.positions[id];
+      if (!cur) continue;
+      const from = src.positions[id];
+      cur.x = from.x;
+      cur.y = from.y;
+      touched = true;
+    }
+    if (touched) formations++;
+  }
+  return { formations, dancers: ids.length };
+}
+function syncForwardPositions(project, formationIndex, dancerIds) {
+  return syncPositionsRange(project, formationIndex, dancerIds);
+}
+
 // ---------- 帧内合并单元（任意两名舞者合为一个呈示符号） ----------
 const UNIT_STYLES = ['capsule', 'single'];
 const mergeKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -220,10 +386,9 @@ function dancerOrdinal(project, dancerId) {
   const i = project.dancers.findIndex(d => d.id === dancerId);
   return i + 1; // 0 → 无此人
 }
-function dancerLabel(project, dancer, ordinal = dancerOrdinal(project, dancer?.id)) {
+function dancerLabel(project, dancer, ordinal = dancerOrdinal(project, dancer?.id), mode = labelModeOf(project)) {
   const no = ordinal > 0 ? String(ordinal) : String(dancer?.short ?? '?');
   if (!dancer) return no;
-  const mode = labelModeOf(project);
   if (mode === 'name') { const nm = String(dancer.name ?? '').trim(); return nm || dancer.short || no; }
   if (mode === 'short') return String(dancer.short ?? '') || no;
   return no;
@@ -233,9 +398,75 @@ function truncateLabel(s, max = 4) {
   const t = String(s ?? '');
   return t.length <= max ? t : t.slice(0, Math.max(1, max - 1)) + '…';
 }
+// build-74-labelname：舞者级显示覆盖——dancer.labelMode ∈ LABEL_MODES 时覆盖项目级
+// settings.labelMode；'' / 缺省 / 非法 = 跟随项目（validateProject 对非法值做 delete 清洗）。
+function effectiveLabelMode(project, dancer) {
+  const lm = dancer?.labelMode;
+  return LABEL_MODES.includes(lm) ? lm : labelModeOf(project);
+}
+// 舞台呈示标签表（Map<id, {text, idx}>）：每舞者按各自有效模式解析文本；解析文本重合的
+// 舞者（简称/姓名模式下的同名同姓等）按名册顺序加 1..n 角标去重（idx=0 无角标）。
+// 'no' 模式序号天然唯一；跨模式混合（覆盖不一致）同样按文本判重，天然兜底。
+function labelTableOf(project) {
+  const table = new Map();
+  const byText = new Map();
+  const ds = Array.isArray(project?.dancers) ? project.dancers : [];
+  ds.forEach((d, i) => {
+    const text = dancerLabel(project, d, i + 1, effectiveLabelMode(project, d));
+    table.set(d.id, { text, idx: 0 });
+    if (!byText.has(text)) byText.set(text, []);
+    byText.get(text).push(d.id);
+  });
+  for (const ids of byText.values()) {
+    if (ids.length < 2) continue;
+    ids.forEach((id, k) => { table.get(id).idx = k + 1; });
+  }
+  return table;
+}
+// 一键生成简称：默认档案名（M1/F12 这类 /^[A-Za-z]\d+$/）原名即简称；其余取首个字素
+// （[...nm] 按码点切，emoji/扩展区汉字不劈半）；空名保留原值。重合不在此消解——呈示层
+// labelTableOf 角标去重兜底。返回实际改动人数（toast 用）。
+function autoShorts(project) {
+  let n = 0;
+  for (const d of (Array.isArray(project?.dancers) ? project.dancers : [])) {
+    const nm = String(d.name ?? '').trim();
+    if (!nm) continue;
+    const s = /^[A-Za-z]\d+$/.test(nm) ? nm : ([...nm][0] || '');
+    if (s && s !== d.short) { d.short = s; n++; }
+  }
+  return n;
+}
+
+// ---------- 场地预设（build-61-stageaspect F2：宽:深 比例/尺度档，纯数据+纯函数，node 可测） ----------
+// 只写 widthM/depthM（audience/backstage/grid 不动）；档位参考场地类型见 kind。
+// 4:3 档即新建项目缺省（F1）；「小场地」8×6 与 16×12 同为 4:3 比例——高亮匹配因此
+// 先按精确宽深命中（区分这对同比档），再按宽深比兜底（自由输入 20×15 仍亮 4:3 档）。
+const STAGE_PRESETS = [
+  { id: '43',    label: '4:3',   widthM: 16, depthM: 12, kind: '标准舞池' },
+  { id: '34',    label: '3:4',   widthM: 12, depthM: 16, kind: '竖向排练厅' },
+  { id: '11',    label: '1:1',   widthM: 14, depthM: 14, kind: '方形场地' },
+  { id: '169',   label: '16:9',  widthM: 18, depthM: 10, kind: '宽幅舞台' },
+  { id: 'small', label: '小场地', widthM: 8,  depthM: 6,  kind: '小排练室' },
+];
+// 给定宽深 → 命中预设档 id 或 null（都不中=钮全不亮）。比率比较用交叉相乘+绝对 ε，
+// 规避浮点除法不等（尺寸输入 step 0.5，值可含 .5 小数）。
+function stagePresetHit(widthM, depthM, presets = STAGE_PRESETS) {
+  const w = Number(widthM), d = Number(depthM);
+  if (!Number.isFinite(w) || !Number.isFinite(d) || w <= 0 || d <= 0) return null;
+  const exact = presets.find(p => p.widthM === w && p.depthM === d);
+  if (exact) return exact.id;
+  const byRatio = presets.find(p => Math.abs(p.widthM * d - w * p.depthM) <= 1e-6);
+  return byRatio ? byRatio.id : null;
+}
 
 // ---------- 队形 ----------
-function faceAudience(stage) { return { bottom: 180, top: 0, left: 270, right: 90 }[stage.audience] ?? 180; }
+// 观众方向 → 面向观众的朝向角（0=上/−y 顺时针）。
+// build-62-formations2 F3 语义修订：bottom/top 是「观众显示方向」（正面视角/背面镜像视角），
+// 数据坐标恒按「观众在数据 +y 侧」的底侧约定（genSlots 几何/后台区布局同此约定）——
+// audience='top' 时画布渲染做垂直镜像（y'=depthM−y，朝向角经 stage.js mirrorFacing 随之镜像），
+// 因此 top 与 bottom 的数据朝向一致（180）：显示镜像后舞者恰好面向画面上方的观众标注。
+// left/right 仍是数据侧语义（无镜像，几何约定维持现状）。
+function faceAudience(stage) { return { bottom: 180, top: 180, left: 270, right: 90 }[stage.audience] ?? 180; }
 function ensureDancerInFormation(project, formation, dancerId) {
   if (formation.positions[dancerId]) return;
   const n = Object.keys(formation.positions).length;
@@ -248,70 +479,87 @@ function ensureDancerInFormation(project, formation, dancerId) {
 function ensureFormationComplete(project, formation) {
   for (const d of project.dancers) ensureDancerInFormation(project, formation, d.id);
 }
+// build-70-formationclips M2：＋新队形=追加到**末 clip.end 之后**（len=16 拍缺省）——clip 模型下
+// 无「插入中间」语义（插入点无空隙可落，交叉禁止不变式排除之）；srcIndex 仅决定复制谁的内容
+//（positions/merges/note）。数组序=时间序不变式由「追加在末尾」按构造成立。
 function createFormationFrom(project, srcIndex, { name } = {}) {
   const src = project.formations[srcIndex];
+  const lastEnd = project.formations.length
+    ? clipEndOf(project.formations[project.formations.length - 1]) : 0;
   const f = {
     id: uid('f'), name: name || `队形 ${project.formations.length + 1}`,
     color: ['#0ea5e9', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'][project.formations.length % 6],
-    note: src?.note || '', 
+    note: src?.note || '',
     positions: src ? clone(src.positions) : {},
     merges: src && src.merges ? clone(src.merges) : [],
+    startBeat: rBeat(lastEnd), lenBeats: FORM_CLIP_LEN_DEFAULT,
   };
-  if (srcIndex >= 0 && srcIndex < project.formations.length - 1) project.formations.splice(srcIndex + 1, 0, f);
-  else project.formations.push(f);
+  project.formations.push(f);
   ensureFormationComplete(project, f);
-  syncTimeline(project);
   return f;
 }
+// build-70 M2：删除队形=移除 formation+clip，**空位保留**——后续队形的 startBeat/lenBeats
+// 一个字节不动（被删 clip 留下的空白=前邻与后邻之间的变换段，自动适应——需求「删除不把
+// 后续队形移过来」的模型级保证）。
 function deleteFormation(project, index) {
   if (project.formations.length <= 1) return null;
   const [rm] = project.formations.splice(index, 1);
-  syncTimeline(project);
   return rm;
 }
+// 调整队形顺序：clip 槽位（startBeat/lenBeats 集合）留在原地、内容按新序换槽——
+// 旧 blocks 模型 syncTimeline「时长保序、内容换位」语义的 clip 对应（总布局逐值不变）。
 function moveFormation(project, from, to) {
   if (from === to || from < 0 || from >= project.formations.length) return;
+  const slots = project.formations.map(f => ({ startBeat: f.startBeat, lenBeats: f.lenBeats }));
   const [f] = project.formations.splice(from, 1);
   project.formations.splice(clamp(to, 0, project.formations.length), 0, f);
-  syncTimeline(project);
+  project.formations.forEach((g, i) => { g.startBeat = slots[i].startBeat; g.lenBeats = slots[i].lenBeats; });
 }
 function formationIndexById(project, fid) { return project.formations.findIndex(f => f.id === fid); }
 
-// ---------- 时间轴 ----------
-function syncTimeline(project) {
-  const old = new Map(project.timeline.blocks.map(b => [b.formationId, b]));
-  project.timeline.blocks = project.formations.map(f => {
-    const o = old.get(f.id);
-    return { formationId: f.id, holdBeats: o?.holdBeats ?? 16, travelBeats: o?.travelBeats ?? 8 };
-  });
+// ---------- 时间轴（build-70-formationclips M1：队形即 clip，blocks 模型退役） ----------
+// 队形是一等时间轴对象：startBeat（clip 起点，≥0）与 lenBeats（clip 长度，≥1 拍）直接驻队形。
+// 变换（travel）不再存于数据——**相邻两 clip 之间的空隙即变换段**，时长=空隙本身（自动适应
+// clip 增删/移动/缩放产生的空白，可为 0=瞬时切换）；[0, 首 clip.start) 保持首队形（候场）、
+// [末 clip.end, 域尾) 保持末队形。交叉禁止不变式：按 startBeat 排序后 clip[i].end ≤ clip[i+1].start
+//（载入迁移/移动/缩放/空隙调整全链钳制收口）。数组序=时间序不变式由全部写路径维持。
+const FORM_CLIP_LEN_DEFAULT = 16; // 新建 clip 缺省长度（拍）
+const FORM_CLIP_LEN_MIN = 1;      // clip 长度下限（拍）
+const rBeat = v => Math.round(Number(v) * 100) / 100;
+// clip 字段读取（读侧兜底）：缺省/非数值回退缺省值；有限但越域的钳回合法域（0.5 拍脏数据 → 1）
+function clipStartOf(f) {
+  const v = Number(f?.startBeat);
+  return Number.isFinite(v) ? rBeat(Math.max(0, v)) : 0;
+}
+function clipLenOf(f) {
+  const v = Number(f?.lenBeats);
+  return Number.isFinite(v) ? rBeat(Math.max(FORM_CLIP_LEN_MIN, v)) : FORM_CLIP_LEN_DEFAULT;
+}
+function clipEndOf(f) { return rBeat(clipStartOf(f) + clipLenOf(f)); }
+// 段派生（纯函数）：segments=按 startBeat 排序的 clip 列表（start/end=clip 时间域、
+// i=formations 数组下标——运行时不变式下两者同序），totalBeats=末 clip.end（=编舞域尾）。
+// 旧 computeSegments（hold/travel 累计推导）退役：clip 内=保持位形、clip 间空隙=变换段，
+// 不再有独立的过渡时长可读——变换时长永远=空隙本身（自动适应）。
+function segmentsFromClips(formations) {
+  const fs = Array.isArray(formations) ? formations : [];
+  const items = fs.map((f, i) => ({ f, i, start: clipStartOf(f), end: clipEndOf(f) }))
+    .sort((a, b) => a.start - b.start || a.i - b.i);
+  const segments = items.map(it => ({ i: it.i, formationId: it.f.id, start: it.start, end: it.end }));
+  return { segments, totalBeats: segments.length ? segments[segments.length - 1].end : 0 };
 }
 function spb(project) { return 60 / (project.audio.bpm || DEFAULT_BPM); }
 function beatToSec(project, beat) { return (project.audio.firstBeatSec || 0) + beat * spb(project); }
 function secToBeat(project, sec) { return (sec - (project.audio.firstBeatSec || 0)) / spb(project); }
 
-function computeSegments(project) {
-  const blocks = project.timeline.blocks, formations = project.formations;
-  const segs = [];
-  let b = 0;
-  for (let i = 0; i < blocks.length; i++) {
-    const blk = blocks[i];
-    const hasTravel = i < blocks.length - 1;
-    const holdStart = b, holdEnd = b + Math.max(0, blk.holdBeats);
-    const travelEnd = hasTravel ? holdEnd + Math.max(0, blk.travelBeats) : holdEnd;
-    segs.push({ i, formationId: blk.formationId, holdStart, holdEnd, travelEnd, hasTravel });
-    b = travelEnd;
-  }
-  return { segments: segs, totalBeats: b };
-}
 function totalDurationSec(project) {
-  const { totalBeats } = computeSegments(project);
+  const { totalBeats } = segmentsFromClips(project.formations);
   return beatToSec(project, totalBeats);
 }
-// ---------- 音乐域基座（音乐模式重定位 M1 · D1） ----------
-// 音乐模式时间轴主域上界（秒）：最后 clip 终点与活动资产时长取大，下限 10s 托底。
-// blocks/totalBeats 完全不参与——「音乐为底层」的几何基础：波形全可见、播放头全可达、
-// 缩放/自动划分/⤢ 适配统一以本域为参照。clip 终点就地规约（不 import audio-clips——
-// 该模块反向 import 本模块，避免依赖环）；编舞模式域（computeSegments/totalDurationSec）逐值不动。
+// ---------- 音乐域基座（音乐模式重定位 M1 · D1；build-70 换源） ----------
+// 音乐模式时间轴主域上界（秒）：max(末队形 clip.end 换算秒, 音频 clip 终点, 活动资产时长, 10s 托底)。
+// build-70-formationclips：队形 clip 成为一等时间轴对象后，其域随 clip 拖动/缩放/增删自动伸缩
+//（同形换源——max 公式不变，新增末队形 clip.end 参与取大；音频 clip 终点 ≤ 资产时长，保留项显式自洽）。
+// 该模块反向 import 无（clip 终点就地规约，不 import audio-clips——避免依赖环）。
 function musicDomainSec(p) {
   let clipEnd = 0;
   for (const c of clipsOf(p)) {
@@ -319,23 +567,33 @@ function musicDomainSec(p) {
     if (e > clipEnd) clipEnd = e;
   }
   const assetDur = Number(activeAssetOf(p)?.durationSec) || 0;
-  return Math.max(clipEnd, assetDur, 10);
-}
-function segmentAt(segments, beat) {
-  if (!segments.length) return null;
-  if (beat <= 0) return segments[0];
-  for (const s of segments) if (beat < s.travelEnd) return s;
-  return segments[segments.length - 1];
+  const formEndSec = beatToSec(p, segmentsFromClips(p?.formations).totalBeats);
+  return Math.max(formEndSec, clipEnd, assetDur, 10);
 }
 
 // ---------- 时间轴标记（音乐时间轴 tag 道：主歌/副歌/间奏等分段记号） ----------
-// 纯拍位标记：beat 为浮点拍，与 blocks 同基准——随 BPM/首拍自然换算秒位（beatToSec），
-// 不参与播放/循环/队形任何逻辑；name 非空、≤ TAG_NAME_MAX 字（超长截断）。
+// build-49-tagregion F1 区域块化：tag=区域块 { id, name, level(0..2), beat=区域起点拍（字段名沿用）,
+// endBeat=区域终点拍（必填，> beat）, color?, sig?, bars? }。区域即段——索引/划分轨的「段」概念
+// 直接读 [beat,endBeat)，空白=该层该处没有任何区域；音乐模式不再由 sectionSegmentsOf 邻接推导。
+// 当前以时间轴（秒）为唯一对齐规范（beat↔second 映射机制保留：stage 编舞仍需），BPM 估计全面退场。
 const TAG_NAME_MAX = 20;
+// 区域宽缺省/下限（拍）：新建/迁移末尾=16（2 个 4/4 小节）；零/负宽兜底与拖缘下限=1 拍
+const TAG_REGION_DEFAULT_BEATS = 16;
+const TAG_REGION_MIN_BEATS = 1;
+// 区域终点读取（UI/索引共用）：缺 endBeat（未迁移数据兜底）→ beat+16
+function tagEndBeatOf(tag) {
+  const e = Number(tag?.endBeat);
+  return Number.isFinite(e) ? e : (Number(tag?.beat) || 0) + TAG_REGION_DEFAULT_BEATS;
+}
 function cleanTagName(name) { return String(name ?? '').trim().slice(0, TAG_NAME_MAX); }
 // 清洗（validateProject/导入入口共用）：丢弃非合法项——beat 非有限或负值、清洗后 name 为空、
 // 重复 id（保首个弃后续）；id 缺失/空则补 uid。返回新数组，不改输入。
 // color（W1 段色板 0..3）：合法整数则透传；无/非法 → 输出不含该键（shape 与既有逐值一致）。
+// level/sig/bars（build-47 分层+手动节奏标注）：三者均为可选字段、缺省即旧数据零迁移——
+//   level 合法整数钳 0..TAG_LEVEL_MAX 后非 0 才落盘（0=最高层=缺省，不写键）；
+//   sig 白名单（TAG_SIGS）外不落键；bars 非正整数不落键。
+// description（Wave1 需求 1）：非空字符串 trim 后保留（slice 200）；空/非法不落键。
+// build-49 F1：清洗后统一过 resolveTagRegions——旧点 tag 迁移为区域 + 不变式强制（见其注释）。
 function sanitizeTags(raw) {
   const arr = Array.isArray(raw) ? raw : [];
   const seen = new Set();
@@ -350,9 +608,58 @@ function sanitizeTags(raw) {
     if (seen.has(id)) continue;
     seen.add(id);
     const colorOk = Number.isInteger(t.color) && t.color >= 0 && t.color < SEG_COLOR_COUNT;
-    out.push(colorOk ? { id, beat, name, color: t.color } : { id, beat, name });
+    const levelOk = clampTagLevel(t.level);
+    const sigOk = TAG_SIGS.includes(t.sig) ? t.sig : null;
+    const barsOk = tagBarsValid(t.bars) ? t.bars : null;
+    // description（Wave1 需求 1）：区域备注——非空字符串 trim 后保留（slice 200）；空/非法
+    // 不落键（JSON 往返不新增键，与既有 sig/bars 同纪律）。
+    const desc = typeof t.description === 'string' ? t.description.trim().slice(0, 200) : '';
+    out.push({
+      id, beat, name,
+      // build-49 F1：区域终点透传（有限才落键；合法性/不变式由 resolveTagRegions 统一强制）
+      ...(Number.isFinite(Number(t.endBeat)) ? { endBeat: Number(t.endBeat) } : {}),
+      ...(colorOk ? { color: t.color } : {}),
+      ...(levelOk ? { level: levelOk } : {}),
+      ...(sigOk ? { sig: sigOk } : {}),
+      ...(barsOk ? { bars: barsOk } : {}),
+      ...(desc ? { description: desc } : {}),
+    });
   }
-  return out;
+  return resolveTagRegions(out);
+}
+// ---------- 区域解析与不变式（build-49-tagregion F1，数组级一遍；就地改写传入项、返回原数组） ----------
+// ①迁移（只在缺 endBeat 时）：同层按 beat 排序（同拍位按 id 稳定序），endBeat=下一个同层 tag.beat
+//   （无缝衔接，保留旧分段观感），末尾 tag endBeat=beat+16；
+// ②不变式强制：endBeat 非有限或 ≤ beat → beat+1 兜底；同层不交叠——越界钳到邻界（容忍相等=贴合），
+//   钳后仍 ≤ beat（同拍位退化，UI 拖拽不会造出）→ beat+1 兜底。
+// 已有合法 endBeat 且不越界的数据零触碰（JSON 往返逐字节稳定）。数组顺序不重排（渲染层自排序）。
+const rTag2 = v => Math.round(v * 100) / 100;
+function resolveTagRegions(tags) {
+  const arr = Array.isArray(tags) ? tags : [];
+  const byLevel = new Map();
+  for (const t of arr) {
+    const lv = tagLevelOf(t);
+    if (!byLevel.has(lv)) byLevel.set(lv, []);
+    byLevel.get(lv).push(t);
+  }
+  for (const list of byLevel.values()) {
+    list.sort((a, b) => a.beat - b.beat || String(a.id).localeCompare(String(b.id)));
+    // ①迁移：缺 endBeat → 无缝衔接/末尾 +16
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      if (!Number.isFinite(Number(t.endBeat))) {
+        t.endBeat = i + 1 < list.length ? list[i + 1].beat : rTag2(t.beat + TAG_REGION_DEFAULT_BEATS);
+      }
+    }
+    // ②不变式：endBeat > beat → 同层不交叠钳制 → 钳后兜底
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      if (!(Number(t.endBeat) > t.beat)) t.endBeat = rTag2(t.beat + TAG_REGION_MIN_BEATS);
+      if (i + 1 < list.length && t.endBeat > list[i + 1].beat) t.endBeat = rTag2(list[i + 1].beat);
+      if (!(t.endBeat > t.beat)) t.endBeat = rTag2(t.beat + TAG_REGION_MIN_BEATS);
+    }
+  }
+  return arr;
 }
 function tagById(project, id) { return (project.timeline.tags || []).find(t => t.id === id) || null; }
 // 默认名「标记 N」：N 从现有数量+1 起找第一个未被占用的号（删除后打点不重号）
@@ -363,11 +670,22 @@ function nextTagName(project) {
   while (used.has(`标记 ${n}`)) n++;
   return `标记 ${n}`;
 }
-function addTag(project, beat, name = '') {
+function addTag(project, beat, name = '', extra = null) {
   project.timeline.tags = project.timeline.tags || [];
   const b = Number(beat);
   const t = { id: uid('tag'), beat: Number.isFinite(b) ? Math.max(0, b) : 0, name: cleanTagName(name) || nextTagName(project) };
+  // 区域宽（build-49 F1）：缺省 16 拍（2 个 4/4 小节）；extra.endBeat 合法（有限且 > beat）则用之
+  const eb = Number(extra?.endBeat);
+  t.endBeat = rTag2(Number.isFinite(eb) && eb > t.beat ? eb : t.beat + TAG_REGION_DEFAULT_BEATS);
+  // build-47 可选字段（分层编辑器/长按新建入口）：合法才落键（缺省 shape 与旧数据逐值一致）
+  if (extra && typeof extra === 'object') {
+    const lv = clampTagLevel(extra.level);
+    if (lv) t.level = lv;
+    if (TAG_SIGS.includes(extra.sig)) t.sig = extra.sig;
+    if (Number.isInteger(extra.bars) && extra.bars > 0) t.bars = extra.bars;
+  }
   project.timeline.tags.push(t);
+  resolveTagRegions(project.timeline.tags); // 层内不交叠钳制（右邻区贴合；同层无空间时缩到邻界内）
   return t;
 }
 function removeTag(project, id) {
@@ -378,31 +696,326 @@ function renameTag(project, id, name) {
   const n = cleanTagName(name);
   if (t && n) t.name = n;
 }
+// 移动标记（stage 拖旗路径沿用；build-49 区域模型）：整块平移——endBeat 随 beat 同步平移保持区域宽。
+// 负值钳 0、两位小数舍入；区域是否压到同层邻区由 UI 层拖拽钳制（clampRegionMove）把守，此处兜底不变式
+// 交由下一次 sanitize/resolve（JSON 往返/导入）收口。
 function moveTag(project, id, beat) {
   const t = tagById(project, id);
   const b = Number(beat);
-  if (t && Number.isFinite(b)) t.beat = Math.max(0, Math.round(b * 100) / 100);
+  if (t && Number.isFinite(b)) {
+    const nb = Math.max(0, Math.round(b * 100) / 100);
+    const w = Math.max(TAG_REGION_MIN_BEATS, tagEndBeatOf(t) - t.beat);
+    t.beat = nb;
+    t.endBeat = rTag2(nb + w);
+  }
+}
+
+// ---------- 区域几何钳制纯函数（build-49 F2 交互同构，node 可测；UI 拖拽与模型写入共用口径） ----------
+// 同层邻界（贴靠式约束）：lo=左邻区 endBeat（无左邻=0）；hi=右邻区 beat（无右邻=Infinity）。
+// level 给定时按目标层解析（跨层落位用）；缺省=tag 当前层。自身不参与（同层移动不受自己约束）。
+function tagRegionBounds(project, tagId, level = null) {
+  const t = tagById(project, tagId);
+  if (!t) return { lo: 0, hi: Infinity, width: TAG_REGION_DEFAULT_BEATS };
+  const lv = Number.isInteger(level) ? level : tagLevelOf(t);
+  let lo = 0, hi = Infinity;
+  const others = (project.timeline.tags || [])
+    .filter(x => x.id !== t.id && tagLevelOf(x) === lv)
+    .sort((a, b2) => a.beat - b2.beat);
+  for (const o of others) {
+    if (o.beat <= t.beat) lo = Math.max(lo, tagEndBeatOf(o));
+    else hi = Math.min(hi, o.beat);
+  }
+  return { lo, hi, width: Math.max(TAG_REGION_MIN_BEATS, tagEndBeatOf(t) - t.beat) };
+}
+// 整块移动钳制：newBeat ∈ [lo, hi-width]；无空间（hi-width < lo，左右邻区已贴合）→ null（原位不动）
+function clampRegionMove(newBeat, width, lo, hi) {
+  const b = Number(newBeat);
+  if (!Number.isFinite(b)) return null;
+  const w = Math.max(TAG_REGION_MIN_BEATS, Number(width) || TAG_REGION_MIN_BEATS);
+  const l = Math.max(0, Number.isFinite(lo) ? lo : 0);
+  const h = Number.isFinite(hi) ? hi : Infinity;
+  if (h - w < l) return null;
+  return rTag2(Math.max(l, Math.min(b, h - w)));
+}
+// 边界钳制：side 'L' → beat ∈ [lo, endBeat-最小宽]；side 'R' → endBeat ∈ [beat+最小宽, hi]
+function clampRegionEdge(side, value, beat, endBeat, lo, hi) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return null;
+  if (side === 'L') {
+    const l = Math.max(0, Number.isFinite(lo) ? lo : 0);
+    return rTag2(Math.max(l, Math.min(v, endBeat - TAG_REGION_MIN_BEATS)));
+  }
+  const h = Number.isFinite(hi) ? hi : Infinity;
+  return rTag2(Math.max(beat + TAG_REGION_MIN_BEATS, Math.min(v, h)));
+}
+// 区域移动（拖体路径）：当前层邻界钳制后整块平移；无空间/未知 id 不动（返回是否变更）
+function moveTagRegion(project, tagId, newBeat) {
+  const t = tagById(project, tagId);
+  if (!t) return false;
+  const { lo, hi, width } = tagRegionBounds(project, tagId);
+  const b = clampRegionMove(newBeat, width, lo, hi);
+  if (b == null) return false;
+  t.beat = b;
+  t.endBeat = rTag2(b + width);
+  return true;
+}
+// 区域边界调整（拖缘路径）：'L'=改 beat（首缘）、'R'=改 endBeat（尾缘）；邻界贴合 + 最小宽 1 拍钳制
+function resizeTagRegion(project, tagId, side, value) {
+  const t = tagById(project, tagId);
+  if (!t) return false;
+  const { lo, hi } = tagRegionBounds(project, tagId);
+  const v = clampRegionEdge(side === 'L' ? 'L' : 'R', value, t.beat, tagEndBeatOf(t), lo, hi);
+  if (v == null) return false;
+  if (side === 'L') t.beat = v; else t.endBeat = v;
+  return true;
+}
+// 跨层落位（拖体换层路径）：目标层邻界钳制（贴合式）；目标层无空间 → 不动（返回 null）。
+// 落位成功 = level 变更 + beat/endBeat 整块平移到钳制后位置。
+function placeTagRegion(project, tagId, level, newBeat) {
+  const t = tagById(project, tagId);
+  if (!t || !Number.isInteger(level)) return null;
+  const lv = clampTagLevel(level);
+  const { lo, hi, width } = tagRegionBounds(project, tagId, lv);
+  const b = clampRegionMove(newBeat, width, lo, hi);
+  if (b == null) return null;
+  if (lv === 0) delete t.level; else t.level = lv;
+  t.beat = b;
+  t.endBeat = rTag2(b + width);
+  return t;
+}
+// 层内重贴（升降级/落层后调用）：区域钳回当前层邻界内——保宽优先平移，无空间则贴 lo 并缩宽（≥最小宽）
+function fitTagRegionInLevel(project, tagId) {
+  const t = tagById(project, tagId);
+  if (!t) return;
+  const { lo, hi, width } = tagRegionBounds(project, tagId);
+  if (t.beat < lo || tagEndBeatOf(t) > hi) {
+    if (hi - width >= lo) {
+      const nb = rTag2(Math.max(lo, Math.min(t.beat, hi - width)));
+      t.beat = nb;
+      t.endBeat = rTag2(nb + width);
+    } else {
+      t.beat = rTag2(lo);
+      t.endBeat = rTag2(lo + Math.max(TAG_REGION_MIN_BEATS, Math.min(width, hi - lo)));
+    }
+  }
 }
 // tag.color（W1 节奏划分轨换色）：0..3 = 段色板索引（呈示层 SEG_COLORS 解释）；缺省=按段序 4 色循环。
 // 可选字段、向后兼容：旧项目无 color → sanitize 原样不含该键（shape 与既有逐值一致，零迁移成本）。
 const SEG_COLOR_COUNT = 4;
 
-// ---------- 节奏划分轨（W1 §2.2.1）：段 = 相邻 tags 派生区间，落标 = 批量写 timeline.tags ----------
+// ---------- tag 分层 + 手动节奏标注（build-47-taghier） ----------
+// level：层级 0..TAG_LEVEL_MAX，0=最高层、缺省 0（旧数据零迁移：无 level 键=0，不落盘）。
+// sig：拍值字符串白名单（如 '3/4'）；bars：正整数小节数。二者均可缺省（完全不标节奏）。
+// 展示组合走 tagRhythmLabel（'3/4 · 2小节' / '3/4' / '2小节' / ''）。
+const TAG_LEVEL_MAX = 3;
+const TAG_SIGS = ['2/4', '3/4', '4/4', '6/8'];
+// level 清洗：非法（非整数/越界）钳回 0..MAX；结果 0 = 缺省不落盘
+function clampTagLevel(v) {
+  const n = Number(v);
+  if (!Number.isInteger(n)) return 0;
+  return Math.max(0, Math.min(TAG_LEVEL_MAX, n));
+}
+function tagBarsValid(v) { return Number.isInteger(v) && v > 0; }
+// tag 的有效层级（缺省/非法 → 0）；读侧统一入口
+function tagLevelOf(tag) { return tag ? clampTagLevel(tag.level) : 0; }
+// 节奏标注展示组合（纯函数）：sig+bars → '3/4 · 2小节'；只有 sig → '3/4'；只有 bars → '2小节'；都无 → ''
+function tagRhythmLabel(tag) {
+  if (!tag) return '';
+  const sig = TAG_SIGS.includes(tag.sig) ? tag.sig : null;
+  const bars = tagBarsValid(tag.bars) ? tag.bars : null;
+  if (sig && bars) return `${sig} · ${bars}小节`;
+  if (sig) return sig;
+  if (bars) return `${bars}小节`;
+  return '';
+}
+// 项目内出现的层级集合（升序、去空层；无 tag → [0] 单层=现状）。
+// maxLevels：呈示层上限截断（移动端传 3——层数最多 3×28px，高层优先保留）。
+function tagLevelsOf(project, maxLevels = TAG_LEVEL_MAX + 1) {
+  const set = new Set();
+  for (const t of project?.timeline?.tags || []) set.add(tagLevelOf(t));
+  if (!set.size) set.add(0);
+  return [...set].sort((a, b) => a - b).slice(0, Math.max(1, maxLevels));
+}
+// 设置 tag 层级（右键「升一级/降一级」入口；非法不动；钳 0..MAX；0=删键保持缺省 shape）
+function setTagLevel(project, tagId, level) {
+  const t = tagById(project, tagId);
+  if (!t || !Number.isInteger(level)) return null;
+  const lv = clampTagLevel(level);
+  if (lv === 0) delete t.level; else t.level = lv;
+  return t;
+}
+// 设置手动节奏标注（popover 编辑器入口）：sig ∉ 白名单/空 → 删键；bars 非正整数/空 → 删键。
+// 就地改写该 tag；返回该 tag（未知 id → null）。
+function setTagRhythm(project, tagId, { sig = null, bars = null } = {}) {
+  const t = tagById(project, tagId);
+  if (!t) return null;
+  if (TAG_SIGS.includes(sig)) t.sig = sig; else delete t.sig;
+  if (tagBarsValid(bars)) t.bars = bars; else delete t.bars;
+  return t;
+}
+
+// ---------- 显式层管理（build-48-tagui F4）：p.timeline.tagLevelCount（1..3，缺省 1） ----------
+// 音乐模式划分轨层数不再按出现 level 推导（tagLevelsOf 退役为索引面板专用），改由本显式计数
+// 驱动：空层也渲染轨道（可直接双击/长按建 tag）；「加层/删层」在轨头卡片操作，不再只靠降级。
+// JSON 往返：缺省 1 不落键（旧项目 shape 逐值一致）；越层 tag（旧项目降级/导入）sanitize 钳到 count-1。
+const TAG_LEVEL_COUNT_MAX = 3;
+// 层数清洗：非整数/越界钳回 1..MAX（非法 → 1=缺省单层）
+function clampTagLevelCount(v) {
+  const n = Number(v);
+  if (!Number.isInteger(n)) return 1;
+  return Math.max(1, Math.min(TAG_LEVEL_COUNT_MAX, n));
+}
+// 读侧统一入口（缺省/非法 → 1）
+function tagLevelCountOf(project) {
+  return clampTagLevelCount(project?.timeline?.tagLevelCount ?? 1);
+}
+// 设置显式层数：写键（1=删键保持缺省 shape）并把 level > n-1 的 tag 钳降到 n-1（数据不丢失、
+// 全部收拢到最底层）。返回生效层数。
+function setTagLevelCount(project, n) {
+  const c = clampTagLevelCount(n);
+  if (c <= 1) delete project.timeline.tagLevelCount;
+  else project.timeline.tagLevelCount = c;
+  const maxLv = c - 1;
+  for (const t of project.timeline.tags || []) {
+    if (tagLevelOf(t) > maxLv) setTagLevel(project, t.id, maxLv);
+  }
+  return c;
+}
+// 加层（轨头「＋ 加层」入口；上限 MAX 由模型与 UI 双把守）：返回 { ok, count } / { ok:false, error }
+function addTagLayer(project) {
+  const c = tagLevelCountOf(project);
+  if (c >= TAG_LEVEL_COUNT_MAX) return { ok: false, error: `划分轨最多 ${TAG_LEVEL_COUNT_MAX} 层` };
+  setTagLevelCount(project, c + 1);
+  return { ok: true, count: c + 1 };
+}
+// 删层：仅空层可删（该层有 tag → 拒绝）；删除后更深层号依次上移（level-1，保持层序连续）。
+// level 缺省=最底层（count-1）。返回 { ok, count } / { ok:false, error }。
+function removeTagLayer(project, level = null) {
+  const c = tagLevelCountOf(project);
+  if (c <= 1) return { ok: false, error: '仅剩一层划分轨，不可删除' };
+  const k = Number.isInteger(level) ? level : c - 1;
+  if (k < 0 || k >= c) return { ok: false, error: '层不存在' };
+  const tags = project.timeline.tags || [];
+  const n = tags.filter(t => tagLevelOf(t) === k).length;
+  if (n) return { ok: false, error: `该层仍有 ${n} 个标记——先删除或移动到其他层` };
+  for (const t of tags) {
+    const lv = tagLevelOf(t);
+    if (lv > k) setTagLevel(project, t.id, lv - 1);
+  }
+  setTagLevelCount(project, c - 1);
+  resolveTagRegions(project.timeline.tags); // 层号上移可能造成同层挤叠——区域不变式重贴（build-49 F1）
+  return { ok: true, count: c - 1 };
+}
+
+// ---------- 节奏划分轨（W1 §2.2.1）：段 = 相邻 tags 派生区间（stage 旧语义专用，build-49 归属注记） ----------
+// 【归属】build-49-tagregion F1 起，「区域即段」——音乐模式一律直接读 tag 的 [beat,endBeat) 区域本身，
+// 不再经过本函数邻接推导；本函数仅服务 stage（编舞）非严格旧语义路径：drawSegEmphasis 段界强调线、
+// 编舞模式乐段索引面板。strict 选项同为 stage/兼容面保留（音乐模式已不调用）。
 // 段派生（纯函数）：段 i = [tags[i].beat, tags[i+1].beat)，末段到曲终；
 // 首个 tag 之前的区间不属任何段（呈示为未划分灰底）。零长段（重复拍位）跳过。
 // endBeatOverride（M1 D4 可选参数）：末段终点拍位——音乐模式调用方传 secToBeat(musicDomainSec)
-// 使划分域覆盖到音频末（blocks 短于音频时后半也能划分）；缺省=现状 totalBeats（编舞调用方零变化）。
-function sectionSegmentsOf(project, endBeatOverride) {
-  const tags = [...(project.timeline.tags || [])].sort((a, b) => a.beat - b.beat || String(a.id).localeCompare(String(b.id)));
-  const { totalBeats } = computeSegments(project);
+// 使划分域覆盖到音频末（队形域短于音频时后半也能划分）；缺省=末 clip.end（编舞调用方零变化）。
+// level（build-47 分层，第三参缺省 0）：只取该层 tag 成段——同层相邻 tag 成段、各层独立派生；
+// 缺省 0 = 全部既有调用方零改动（旧数据无 level 键=全 0 层）。
+// opts.strict（build-48-tagui F3，第四参可选）：严格相邻同层 tag 之间成段——末 tag 不延域尾、
+// 末 tag 之后与首 tag 之前同为无标注空白（不画段带、不进索引）。音乐模式调用方传 strict；
+// 缺省 false = 旧「末段延域尾」语义逐值不变（stage 红线 E-12 隔离）。
+// 返回值 additive 扩展：tags=该层排序后的 tag 列表（strict 下末 tag 不成段——呈示层据此补画孤儿旗）。
+function sectionSegmentsOf(project, endBeatOverride, level = 0, opts = null) {
+  const lv = Number.isInteger(level) ? level : 0;
+  const strict = !!(opts && opts.strict);
+  const tags = [...(project.timeline.tags || [])]
+    .filter(t => tagLevelOf(t) === lv)
+    .sort((a, b) => a.beat - b.beat || String(a.id).localeCompare(String(b.id)));
+  // build-70 换源：域尾缺省=末 clip.end（segmentsFromClips；旧 computeSegments 退役）
+  const { totalBeats } = segmentsFromClips(project.formations);
   const endBeat = (Number.isFinite(endBeatOverride) && endBeatOverride > 0) ? endBeatOverride : totalBeats;
   const segs = [];
   for (let i = 0; i < tags.length; i++) {
     const start = tags[i].beat;
+    // strict：末 tag 之后=空白（末 tag 不成段）；非 strict：末段延到域尾（现状）
+    if (strict && i + 1 >= tags.length) break;
     const end = i + 1 < tags.length ? tags[i + 1].beat : Math.max(endBeat, start);
     if (end > start) segs.push({ i, tag: tags[i], start, end });
   }
-  return { segs, totalBeats: endBeat };
+  return { segs, totalBeats: endBeat, tags };
+}
+// 跨层段列表 → 索引面板分层归属（build-47 F3 纯函数）：按 start 升序扫描，
+// 每段深度 = 「最近一个 start 落入其范围的低层段」层级+1（子段按 beat 落入父段范围即归属，
+// 不强制完全包含）；无任何父段 → 顶层（depth 0）。返回 [{seg, depth}]（保持时间序）。
+function nestSegmentsByLevel(segs) {
+  const sorted = [...(segs || [])].sort((a, b) =>
+    a.start - b.start || tagLevelOf(a.tag) - tagLevelOf(b.tag) || String(a.tag?.id ?? '').localeCompare(String(b.tag?.id ?? '')));
+  const last = new Map(); // level → 该层最近一段（时间序扫描的归属候选）
+  const out = [];
+  for (const s of sorted) {
+    const lv = tagLevelOf(s.tag);
+    let depth = 0;
+    for (let k = lv - 1; k >= 0; k--) {
+      const c = last.get(k);
+      if (c && s.start >= c.start && s.start < c.end) { depth = k + 1; break; }
+    }
+    last.set(lv, { start: s.start, end: s.end });
+    out.push({ seg: s, depth });
+  }
+  return out;
+}
+// 折叠集过滤（build-50 F2 纯函数）：rows=nestSegmentsByLevel 出参（[{seg,depth}] 时间序=先序），
+// collapsed=折叠中的 tag id 集。语义：收起某行 → 其后所有 depth 更大的连续后代（递归：子的子
+// 一并隐藏，后代自身是否也在折叠集不影响）全部 hidden，直到遇到 depth ≤ 收起行 depth 的下一行
+// （兄弟/更高层，恢复可见）。缺省全展开（空集）；行自身永不 hidden（它是折叠/展开的钮面）。
+// 返回 [{seg, depth, hidden}]（同序附加 hidden 标志，不改变入参）。
+function filterCollapsedRows(rows, collapsed) {
+  const set = collapsed instanceof Set ? collapsed : new Set(collapsed || []);
+  const list = Array.isArray(rows) ? rows : [];
+  let cover = Infinity; // 当前仍生效的收起祖先中最浅 depth（其所有 depth>cover 的后代隐藏）
+  const out = [];
+  for (const r of list) {
+    const depth = r?.depth ?? 0;
+    if (depth > cover) { out.push({ ...r, hidden: true }); continue; }
+    // 可见行：若自身折叠则从此处开始遮蔽其子树，否则清空遮蔽
+    cover = set.has(r?.seg?.tag?.id) ? depth : Infinity;
+    out.push({ ...r, hidden: false });
+  }
+  return out;
+}
+// build-56-indextab 退役注记：索引面板拖宽/拖高钳制（build-50 F1）与浮动面板避让定位
+// （build-51 F2 常量组+摆位纯函数）随浮动面板一并退役——索引进两模式侧栏 tab 后尺寸/摆位由
+// 宿主容器 flex 决定，无自由几何可钳可摆（零残留由 tests/indextab.test.js 钉住）。
+// fixed 下拉摆位（build-50 F3 纯函数，#export-dd 用；#music-toolbar 的 auto-seg 左对齐语义
+// 不同不入此函数）：按钮 rect（{bottom,right}）+视口宽 → fixed 坐标。右对齐按钮
+// （right=视口宽-按钮右缘，钳 ≥8px 留边）、top=按钮底+4px。
+function placeDropdownBelow(btn, vw) {
+  const view = Number(vw) || 0;
+  return { top: (Number(btn?.bottom) || 0) + 4, right: Math.max(8, view - (Number(btn?.right) || 0)) };
+}
+
+// ---------- build-51-stageux F4：时间轴底部导航滑块（视口概览条）几何（纯函数，node 可测） ----------
+// 拇指宽=可视宽/内容宽×条宽（≥TLNAV_MIN_THUMB 下限）；位置=scrollLeft/溢出量线性映射。
+// 内容不溢出（scrollW≤clientW）=拇指满宽禁用态（tlnav-off，不可拖不响应点条）。
+const TLNAV_MIN_THUMB = 24;
+function tlnavThumb({ clientW, scrollW, scrollLeft = 0, barW }) {
+  const cw = Math.max(0, Number(clientW) || 0), sw = Math.max(0, Number(scrollW) || 0);
+  const sl = Math.max(0, Number(scrollLeft) || 0), bw = Math.max(0, Number(barW) || 0);
+  if (sw <= cw || bw <= 0) return { w: bw, x: 0, disabled: true };
+  const w = Math.max(TLNAV_MIN_THUMB, Math.round(bw * cw / sw));
+  const maxScroll = sw - cw;
+  const x = Math.round((Math.min(sl, maxScroll) / maxScroll) * (bw - w));
+  return { w, x, disabled: false };
+}
+// 拖拇指 → scrollLeft：拇指左缘在条内的比例 × 溢出量（拖中实时平移；越界钳 [0,maxScroll]）。
+function tlnavScrollForThumbPos({ thumbLeft, thumbW, barW, clientW, scrollW }) {
+  const maxScroll = Math.max(0, (Number(scrollW) || 0) - (Number(clientW) || 0));
+  const denom = Math.max(1, (Number(barW) || 0) - (Number(thumbW) || 0));
+  const ratio = Math.max(0, Math.min(1, (Number(thumbLeft) || 0) / denom));
+  return Math.round(ratio * maxScroll);
+}
+// 点条身空白 → 视口中心跳到该处：目标 scrollLeft = 当前 scrollLeft + 点击点 − 条宽/2（钳量程）。
+//（等价于「点击处的内容点滚到视口中心」——不改滚动量纲，点击即达无比例换算漂移。）
+function tlnavScrollForBarClick({ clickX, barW, clientW, scrollW, scrollLeft }) {
+  const maxScroll = Math.max(0, (Number(scrollW) || 0) - (Number(clientW) || 0));
+  const target = (Number(scrollLeft) || 0) + (Number(clickX) || 0) - (Number(barW) || 0) / 2;
+  return Math.max(0, Math.min(maxScroll, Math.round(target)));
 }
 const r2 = v => Math.round(v * 100) / 100;
 // 来源①均分 N 段：按 totalBeats/N 生成 N 个段起点拍位（含 0）。N 钳制 1..64；totalBeats≤0 → []。
@@ -471,34 +1084,23 @@ function sectionTableToEntries(entries, totalBeats) {
 }
 // 落标（唯一写入点）：整体替换 timeline.tags（划分=定义全曲结构；undo 一键还原）。
 // entries: [{name, beat}]（color 可选 0..3）。拍位钳非负、保留 2 位小数；名称清洗（空→「段落 k」）。
+// build-49 F1：落标即区域——无缝衔接（endBeat=下一个 entry.beat，末尾 +16）；build-48 起入口暂隐，
+// 模型保留（可回）。
 function applySectionEntries(project, entries) {
-  project.timeline.tags = (entries || []).map((e, k) => ({
+  const list = (entries || []).map((e, k) => ({
     id: uid('tag'),
     beat: Math.max(0, r2(Number(e.beat) || 0)),
     name: cleanTagName(e.name) || `段落 ${k + 1}`,
     ...(Number.isInteger(e.color) && e.color >= 0 && e.color < SEG_COLOR_COUNT ? { color: e.color } : {}),
   }));
+  for (let i = 0; i < list.length; i++) {
+    list[i].endBeat = i + 1 < list.length ? list[i + 1].beat : r2(list[i].beat + TAG_REGION_DEFAULT_BEATS);
+  }
+  project.timeline.tags = list;
 }
-// 段级操作（右键/边界拖拽共用；均为对 tags 的原子改写，历史条数由调用方 mutateLabeled 保证恰一）：
-// 于此拆分：在 beat 处插入段起点（拍位 ≥0.01 起；新段名=原段名+「·2」截断，色随原段）
-function splitSectionAt(project, tagId, beat) {
-  const src = tagById(project, tagId);
-  const b = Math.max(0.01, r2(Number(beat) || 0));
-  if (!src) return null;
-  const t = { id: uid('tag'), beat: b, name: cleanTagName(`${src.name}·2`) || nextTagName(project), ...(src.color != null ? { color: src.color } : {}) };
-  project.timeline.tags.push(t);
-  return t;
-}
-// 删除段 = 移除其段起点 tag（该区间并入前段；首段删除后区间呈未划分灰底）
+// 段级操作（右键/索引「…」菜单共用；对 tags 的原子改写，历史条数由调用方 mutateLabeled 保证恰一）：
+// 删除标记 = 移除该区域（该层该处回到空白；相邻区域不自动延展——区域模型下空白天然合法）
 function removeSection(project, tagId) { removeTag(project, tagId); }
-// 合并相邻 = 移除「下一段」的段起点（本段延到再下一段/曲终）；末段则并入前段（移除自身起点）
-function mergeSectionWithNext(project, tagId) {
-  const tags = [...(project.timeline.tags || [])].sort((a, b) => a.beat - b.beat);
-  const idx = tags.findIndex(t => t.id === tagId);
-  if (idx < 0) return;
-  const victim = idx + 1 < tags.length ? tags[idx + 1] : tags[idx - 1]; // 末段→并前段
-  if (victim) removeTag(project, victim.id);
-}
 // 换色（0..3 越界钳制；非法输入不动）
 function setSectionColor(project, tagId, color) {
   const t = tagById(project, tagId);
@@ -524,22 +1126,151 @@ function lerpFormations(A, B, t) {
   }
   return out;
 }
+// build-70 M3 播放插值（segmentsFromClips 同链）：clip 内=保持位形；clip 间空隙=变换段
+//（prev→next easeInOut 插值，时长=空隙本身——自动适应 clip 操作产生的空白，空隙 0=瞬时切换）；
+// [0, 首 clip.start)=保持首队形（候场）；beat ≥ 末 clip.end=保持末队形。
 function posAt(project, beat) {
   const formations = project.formations;
   if (!formations.length) return { positions: {}, seg: null, phase: 'hold', t: 0 };
-  const { segments } = computeSegments(project);
-  if (beat <= 0) return { positions: formations[0].positions, seg: segments[0], phase: 'hold', t: 0 };
-  const last = segments[segments.length - 1];
-  if (beat >= last.travelEnd) return { positions: formations[formations.length - 1].positions, seg: last, phase: 'hold', t: 1 };
-  const seg = segmentAt(segments, beat);
-  if (beat < seg.holdEnd) return { positions: formations[seg.i].positions, seg, phase: 'hold', t: 0 };
-  const t = easeInOut((beat - seg.holdEnd) / Math.max(1e-6, seg.travelEnd - seg.holdEnd));
-  return { positions: lerpFormations(formations[seg.i].positions, formations[seg.i + 1].positions, t), seg, phase: 'travel', t };
+  const b = Number(beat) || 0;
+  const mkSeg = f => ({ i: formations.indexOf(f), formationId: f.id, start: clipStartOf(f), end: clipEndOf(f) });
+  if (b < clipStartOf(formations[0])) {
+    return { positions: formations[0].positions, seg: mkSeg(formations[0]), phase: 'hold', t: 0 };
+  }
+  for (let i = 0; i < formations.length; i++) {
+    const f = formations[i];
+    const s = clipStartOf(f), e = clipEndOf(f);
+    if (b < e) return { positions: f.positions, seg: mkSeg(f), phase: 'hold', t: 0 };
+    const next = formations[i + 1];
+    if (next && b < clipStartOf(next)) {
+      // 变换段（空隙）：prev→next 插值；空隙 0 时此分支不可达（b<e 与 b<next.start 不相交）
+      const t = easeInOut((b - e) / Math.max(1e-6, clipStartOf(next) - e));
+      return { positions: lerpFormations(f.positions, next.positions, t), seg: mkSeg(f), phase: 'travel', t };
+    }
+  }
+  const lastF = formations[formations.length - 1];
+  return { positions: lastF.positions, seg: mkSeg(lastF), phase: 'hold', t: 1 };
 }
+// 播放头所属队形下标：clip 内=该队形；变换段（空隙）=前队形（旧 travel 段 seg.i 语义延续）；
+// 候场（首 clip 前）=0；越末 clip.end=末队形（build-51 越界防护语义在 segmentsFromClips 下自动成立）。
 function currentFormationIndexAt(project, beat) {
-  const { segments } = computeSegments(project);
-  const seg = segmentAt(segments, beat);
-  return seg ? seg.i : 0;
+  const formations = project.formations;
+  if (!formations.length) return 0;
+  const b = Number(beat) || 0;
+  if (b < clipStartOf(formations[0])) return 0;
+  for (let i = 0; i < formations.length; i++) {
+    const f = formations[i];
+    if (b < clipEndOf(f)) return i;
+    const next = formations[i + 1];
+    if (next && b < clipStartOf(next)) return i; // 变换段：前队形
+  }
+  return formations.length - 1;
+}
+
+// ---------- clip 操作（build-70 M2：移动/缩放/空隙/分割；全链钳制，node 可测） ----------
+// 时间邻界（交叉禁止不变式把守）：lo=左邻 clip.end（无左邻=0）、hi=右邻 clip.start（无右邻=∞）。
+// 全部按 formations 数组序解析（数组序=时间序不变式）；写入值 rBeat 两位小数舍入。
+function clipBoundsOf(formations, index) {
+  const { segments } = segmentsFromClips(formations);
+  const k = segments.findIndex(s => s.i === index);
+  if (k < 0) return null;
+  return {
+    lo: k > 0 ? segments[k - 1].end : 0,
+    hi: k + 1 < segments.length ? segments[k + 1].start : Infinity,
+  };
+}
+// 整段平移（拖 clip 体）：newStart 钳 [lo, hi−len]（不越左右邻）；越界/非法入参钳界内落地。
+function moveFormationClip(project, index, newStart) {
+  const f = project?.formations?.[index];
+  if (!f) return false;
+  const b = clipBoundsOf(project.formations, index);
+  if (!b) return false;
+  const s = Number(newStart);
+  if (!Number.isFinite(s)) return false;
+  const len = clipLenOf(f);
+  const maxS = Number.isFinite(b.hi) ? b.hi - len : Infinity;
+  f.startBeat = rBeat(Math.max(0, Math.min(Math.max(s, b.lo), maxS >= b.lo ? maxS : b.lo)));
+  return true;
+}
+// 缘缩放（拖左右缘）：'L'=start 与 len 联动（start ∈ [lo, end−MIN]）；'R'=len（end ∈ [start+MIN, hi]）。
+function resizeFormationClip(project, index, side, value) {
+  const f = project?.formations?.[index];
+  if (!f) return false;
+  const b = clipBoundsOf(project.formations, index);
+  if (!b) return false;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return false;
+  const s = clipStartOf(f), e = clipEndOf(f);
+  if (side === 'L') {
+    const ns = Math.min(Math.max(v, b.lo), e - FORM_CLIP_LEN_MIN);
+    if (!(ns >= b.lo)) return false; // 空间不足（退化）不动
+    f.startBeat = rBeat(Math.max(0, ns));
+    f.lenBeats = rBeat(e - f.startBeat);
+  } else {
+    const ne = Math.min(Math.max(v, s + FORM_CLIP_LEN_MIN), b.hi);
+    if (!(ne >= s + FORM_CLIP_LEN_MIN)) return false;
+    f.lenBeats = rBeat(ne - s);
+  }
+  return true;
+}
+// 选中 clip 长度直写（保持±1 拍/面板输数；右缘动）：钳 [MIN, hi−start]。
+function setFormationClipLen(project, index, len) {
+  const f = project?.formations?.[index];
+  if (!f) return false;
+  const b = clipBoundsOf(project.formations, index);
+  if (!b) return false;
+  const v = Number(len);
+  if (!Number.isFinite(v)) return false;
+  const maxLen = Number.isFinite(b.hi) ? b.hi - clipStartOf(f) : Infinity;
+  f.lenBeats = rBeat(Math.max(FORM_CLIP_LEN_MIN, Math.min(v, maxLen)));
+  return true;
+}
+// 过渡（空隙）调整：下一 clip 的 start=本 clip.end+gap。ripple=false（UI 口径）只动下一 clip、
+// 钳不越下下个（next.start ≤ 下下个.start−next.len）；ripple=true（技能 apply 级联口径）后续整列
+// 同步平移（相对空隙/长度不变——旧 blocks ripple 语义对应）。gap 钳 ≥0（重叠=交叉禁止）。
+function setFormationGap(project, index, gap, { ripple = false } = {}) {
+  const formations = project?.formations || [];
+  const f = formations[index];
+  const next = formations[index + 1];
+  if (!f || !next) return false;
+  const g = Number(gap);
+  if (!Number.isFinite(g) || g < 0) return false;
+  const curEnd = clipEndOf(f);
+  let ns = rBeat(curEnd + g);
+  if (!ripple) {
+    const nextNext = formations[index + 2];
+    const hi = nextNext ? clipStartOf(nextNext) - clipLenOf(next) : Infinity;
+    ns = Math.min(ns, Math.max(curEnd, hi)); // 无空间时退化为贴合（gap=0）
+  }
+  const delta = rBeat(ns - clipStartOf(next));
+  if (!delta) return false;
+  if (ripple) {
+    for (let k = index + 1; k < formations.length; k++) {
+      formations[k].startBeat = rBeat(Math.max(0, clipStartOf(formations[k]) + delta));
+    }
+  } else {
+    next.startBeat = ns;
+  }
+  return true;
+}
+// 分割队形 clip（需求 2）：beat 落在 clip 内部且两端各留 ≥1 拍 → 深拷贝队形内容为两个 clip
+//（前段 [start, beat]、后段 [beat, end]）——两 clip 位形完全相同（缩略图同位形 ✓）。
+// 就地改写前段（len 缩短）、新队形插入后一位（数组序=时间序成立）。beat 非法/空间不足 → null。
+function splitFormationClip(project, index, beat) {
+  const formations = project?.formations || [];
+  const f = formations[index];
+  if (!f) return null;
+  const s = clipStartOf(f), e = clipEndOf(f);
+  const b = Number(beat);
+  if (!Number.isFinite(b) || !(b >= s + FORM_CLIP_LEN_MIN && b <= e - FORM_CLIP_LEN_MIN)) return null;
+  const cut = rBeat(b);
+  const back = clone(f);
+  back.id = uid('f');
+  back.startBeat = cut;
+  back.lenBeats = rBeat(e - cut);
+  f.lenBeats = rBeat(cut - s);
+  formations.splice(index + 1, 0, back);
+  return back;
 }
 
 // ---------- 小节/8拍显示 ----------
@@ -552,28 +1283,40 @@ function beatLabel(project, beat) {
 function countLabel(beat) { return `${Math.floor(Math.max(0, beat) / 8) + 1}`; } // 第 n 个 8 拍
 
 // ---------- 时间轴对齐 ----------
-// 把第 index 个队形块的起点对齐到目标拍（调整前一个过渡的时长，必要时压缩上一块的保持时长）
-function alignBlockStart(project, index, targetBeat, segments = computeSegments(project).segments) {
-  if (index <= 0 || !segments[index] || !segments[index - 1]) return false;
-  const prevSeg = segments[index - 1];
-  const prev = project.timeline.blocks[index - 1];
-  let need = targetBeat - prevSeg.holdEnd;
-  if (need < 0.5) {
-    const reduce = Math.min(0.5 - need, Math.max(0, prev.holdBeats - 0.5));
-    prev.holdBeats = Math.max(0.5, prev.holdBeats - reduce);
-    need += reduce;
-  }
-  prev.travelBeats = Math.max(0.5, need);
-  return true;
+// build-70 M2：「对齐到播放头」=选中 clip 的 start 对齐目标拍（moveFormationClip 邻界钳制——
+// 旧 alignBlockStart「压上一块 hold/改过渡」机制随 blocks 模型退役；对齐=整段平移到界内最近位）。
+// 返回对齐后的实际 start（供 UI toast 汇报钳制结果）。
+function alignFormationClipStart(project, index, targetBeat) {
+  const f = project?.formations?.[index];
+  if (!f) return null;
+  if (!moveFormationClip(project, index, targetBeat)) return null;
+  return clipStartOf(f);
 }
 
 // ---------- 媒体资产与音频 clip（v3 音乐剪辑 · 规格 docs/music-clip-ui-spec.md） ----------
 // project.media = { assets: [{id,name,durationSec,size}], activeAssetId }
 // project.timeline.tracks = [{id,name,gain,muted}]（多轨模型 · 见下方「多轨」节）
-// project.timeline.audioClips = [{id,assetId,trackId?,timelineStartSec,srcStartSec,lengthSec,fadeInSec,fadeOutSec,gain,name,muted?,color?,fadeInAuto?,fadeOutAuto?,autoPair?,autoPairIn?,autoPairOut?}]
+// project.timeline.audioClips = [{id,assetId,trackId?,timelineStartSec,srcStartSec,lengthSec,fadeInSec,fadeOutSec,fadeInCurve?,fadeOutCurve?,gain,name,muted?,color?,fadeInAuto?,fadeOutAuto?,autoPair?,autoPairIn?,autoPairOut?,rate?,speed?,pitchSemi?}]
+// rate（滑动变速 varispeed · 0.25–4 磁带式）：slot 内消耗的源内容量按 rate 加速（源读取位 =
+// srcStartSec + 时间轴相对时刻 × rate，音高随速度变化）；时间轴 slot 域（timelineStartSec/
+// lengthSec/淡化）完全不受影响。缺省=1（键可省，读侧 clip.rate || 1）。
+// speed（离线变速·保音高 TSM · 0.25–4 两位小数）+ pitchSemi（离线变调·半音整数 ±12）：二者经
+// js/clip-process.js 的 SignalsmithStretch 管线离线渲染 processed buffer（音高不随 speed 变），
+// 与 rate（磁带式·音高随速度）正交可叠加。缺省=1/0（键可省，读侧 clip.speed || 1、
+// clip.pitchSemi || 0，js/clip-process.js 的 needsProcess 判定是否走处理管线）。
 // clip=可自由摆放的独立对象：间隙=静音，重叠=自动等功率交叉淡化（fades 记录在 clip 上）。
+// 淡化曲线（build-45）：fadeInCurve/fadeOutCurve ∈ [-1,1]，缺省 0=等功率 sin（旧数据无字段
+// → 清洗不补写，读侧 fadePow(Number(undefined)||0)=1，零迁移成本；清洗只在非 0 时落盘）。
 const MIN_CLIP_DUR = 0.005;
 const r6c = v => Math.round(v * 1e6) / 1e6;
+// 淡化曲线清洗/钳制（build-45，导出供时间线拖拽与引擎 setSeamCurves 共用）：非有限数值 = 0
+//（等功率缺省，旧数据零迁移）；[-1,1] 外收界；r6 舍入与时长字段同规矩。
+// 0 值在 sanitizeAudioClips 落盘时省略（见其内注释）。
+function clampCurve(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return r6c(Math.max(-1, Math.min(1, n)));
+}
 // 媒体资产清洗：非合法项丢弃；id 补 uid、去重；name 非空 ≤120 字；时长/大小钳制；dataBase64 剥离（导入入口已还原 Blob）
 function sanitizeMedia(raw) {
   const m = (raw && typeof raw === 'object') ? raw : {};
@@ -599,7 +1342,9 @@ function sanitizeMedia(raw) {
   return { assets, activeAssetId: assets.length ? activeId : null };
 }
 // 音频 clip 清洗：引用有效资产、数值域钳制（时间 ≥0、length>MIN、srcStart+length ≤ 资产时长、
-// 淡化 ≥0 且总量 ≤ length 按比例收缩、gain 0..4）、id 补 uid/去重；数组顺序即 z 序（保持不排序）。
+// 淡化 ≥0 且总量 ≤ length 按比例收缩、gain 0..4、rate/speed 钳 [0.25,4] 两位小数且非 ≈1 不落键、
+// pitchSemi 整数钳 [-12,12] 且非 0 不落键）、
+// id 补 uid/去重；数组顺序即 z 序（保持不排序）。
 // autoPair 双缘升级（R47）：autoPairOut/autoPairIn 各记一条交叉淡化缘（out=对后端 clip 淡出、
 // in=对前端 clip 淡入）；旧单字段 autoPair 迁移为双缘等价——只有单侧 auto 缘时按缘归属精确迁移，
 // 双侧 auto 缘并存（链式中段，旧单字段只保留了最后写入的 out 侧）按「末次写入=out 侧」启发式迁移，
@@ -627,7 +1372,34 @@ function sanitizeAudioClips(raw, assets, opts = {}) {
     let fo = Math.max(0, Number(c.fadeOutSec) || 0);
     const total = fi + fo;
     if (total > len && total > 0) { const k = len / total; fi *= k; fo *= k; }
+    // 淡化曲线（build-45）：[-1,1] 外收界；非法/缺失 = 0（等功率）；r6 与时长字段同规矩。
+    // 非 0 才落盘（缺省形态与旧项目 JSON 逐字节一致，deepEqual 往返不新增键）。
+    const fic = clampCurve(c.fadeInCurve);
+    const foc = clampCurve(c.fadeOutCurve);
     const gain = Number(c.gain);
+    // rate（滑动变速）：有限数值 → 钳 [0.25,4] → 两位小数（1% 粒度）；|v−1|<0.005（含 1 本身）
+    // 或非法/缺省不落键——缺省=1.00，JSON 往返零漂移，与 gain/fade 同纪律；旧 clip 无键按 1
+    // 处理（读侧消费方一律 clip.rate || 1），不补键。时间轴 slot 域字段不受 rate 影响。
+    const rateNum = Number(c.rate);
+    const rateC = Number.isFinite(rateNum)
+      ? Math.round(Math.max(0.25, Math.min(4, rateNum)) * 100) / 100
+      : 1;
+    const rateOk = Number.isFinite(rateNum) && Math.abs(rateC - 1) >= 0.005;
+    // speed（离线变速·保音高 TSM）：与 rate 同纪律——有限数值 → 钳 [0.25,4] → 两位小数；
+    // |v−1|<0.005（含 1 本身）或非法/缺省不落键——缺省=1.00，JSON 往返零漂移；读侧一律
+    // clip.speed || 1（js/clip-process.js needsProcess 判定）。时间轴 slot 域字段不受影响。
+    const speedNum = Number(c.speed);
+    const speedC = Number.isFinite(speedNum)
+      ? Math.round(Math.max(0.25, Math.min(4, speedNum)) * 100) / 100
+      : 1;
+    const speedOk = Number.isFinite(speedNum) && Math.abs(speedC - 1) >= 0.005;
+    // pitchSemi（离线变调·半音）：整数（数值且整值；数值字符串经 Number 合法化）→ 钳 [-12,12]；
+    // 0 或非法（非整值如 2.5/非数值）不落键——缺省=0，JSON 往返零漂移；读侧 clip.pitchSemi || 0。
+    const semiNum = Number(c.pitchSemi);
+    const semiC = (Number.isFinite(semiNum) && Number.isInteger(semiNum))
+      ? Math.max(-12, Math.min(12, semiNum))
+      : 0;
+    const semiOk = Number.isFinite(semiNum) && Number.isInteger(semiNum) && semiC !== 0;
     // autoPair 旧单字段 → 双缘迁移（见函数头注释）
     const legacyPair = (typeof c.autoPair === 'string' && c.autoPair) ? c.autoPair : null;
     let pairOut = (typeof c.autoPairOut === 'string' && c.autoPairOut) ? c.autoPairOut : null;
@@ -651,11 +1423,16 @@ function sanitizeAudioClips(raw, assets, opts = {}) {
       fadeInSec: r6c(Math.min(fi, len)),
       fadeOutSec: r6c(Math.min(fo, len)),
       gain: Number.isFinite(gain) ? Math.max(0, Math.min(4, gain)) : 1,
+      ...(rateOk ? { rate: rateC } : {}),
+      ...(speedOk ? { speed: speedC } : {}),
+      ...(semiOk ? { pitchSemi: semiC } : {}),
       name: String(c.name ?? '').slice(0, 80),
       ...(c.muted ? { muted: true } : {}),
       ...(typeof c.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c.color) ? { color: c.color } : {}),
       ...(c.fadeInAuto ? { fadeInAuto: true } : {}),
       ...(c.fadeOutAuto ? { fadeOutAuto: true } : {}),
+      ...(fic ? { fadeInCurve: fic } : {}),
+      ...(foc ? { fadeOutCurve: foc } : {}),
       ...(legacyPair ? { autoPair: legacyPair } : {}),
       ...(pairOut ? { autoPairOut: pairOut } : {}),
       ...(pairIn ? { autoPairIn: pairIn } : {}),
@@ -701,6 +1478,8 @@ const DEFAULT_TRACK_ID = 'trk1';
 const defaultTrack = () => ({ id: DEFAULT_TRACK_ID, name: '配乐', gain: 1, muted: false });
 // 轨清洗：非合法项丢弃；id 缺失补 uid/去重（重复保首个弃后续）；name 非空 ≤24 字；
 // gain 0..2 钳制；muted 布尔归一。返回新数组，不改输入。
+// laneH（Wave1 并行：timeline.js 划分轨行高驻数据 track.laneH）：有限数值钳 [24,240] 保留；
+// 非法/缺省不落键（JSON 往返不新增键）。
 function sanitizeTracks(raw) {
   const arr = Array.isArray(raw) ? raw : [];
   const seen = new Set();
@@ -711,11 +1490,13 @@ function sanitizeTracks(raw) {
     if (seen.has(id)) continue;
     seen.add(id);
     const gain = Number(t.gain);
+    const laneH = Number(t.laneH);
     out.push({
       id,
       name: String(t.name ?? '').trim().slice(0, TRACK_NAME_MAX) || `轨 ${out.length + 1}`,
       gain: Number.isFinite(gain) ? Math.max(0, Math.min(2, gain)) : 1,
       muted: !!t.muted,
+      ...(Number.isFinite(laneH) ? { laneH: Math.max(24, Math.min(240, laneH)) } : {}),
     });
   }
   return out;
@@ -810,11 +1591,15 @@ function validateProject(json) {
   const p = json;
   p.meta = (p.meta && typeof p.meta === 'object') ? p.meta : { title: '导入项目' };
   p.meta.title = String(p.meta.title ?? '未命名').slice(0, 120);
-  p.stage = { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 2, bgImage: null, ...p.stage };
+  p.stage = { widthM: 12, depthM: 16, audience: 'bottom', gridM: 0.5, snap: true, backstageM: 1, wingM: 2, bgImage: null, ...p.stage };
   p.stage.widthM = num(p.stage.widthM, 12, 4, 60);
   p.stage.depthM = num(p.stage.depthM, 16, 4, 60);
-  p.stage.gridM = num(p.stage.gridM, 0.5, 0.1, 2);
-  p.stage.backstageM = num(p.stage.backstageM, 2, 0, 10);
+  // build-77-expux（W2 接线清单 #6）：gridM 下界 0.1→0.05——0.05m 档（GRID_PRESETS/细粒度
+  // 次级网格线/细吸附）合法入库；main.js STAGE_RANGE 与 props 输入框 min/step 同步放宽
+  p.stage.gridM = num(p.stage.gridM, 0.5, 0.05, 2);
+  // build-63-stageview2 F1：缺省 2→1（瘦身）；显式数值原样保留（既有项目零迁移）
+  p.stage.backstageM = num(p.stage.backstageM, 1, 0, 10);
+  p.stage.wingM = num(p.stage.wingM, 2, 0, 5); // build-62 F3 + build-64：侧翼扩容（两侧后台更大空间）
   p.stage.snap = !!p.stage.snap;
   if (!['bottom', 'top', 'left', 'right'].includes(p.stage.audience)) p.stage.audience = 'bottom';
   p.audio = { name: '', durationSec: 0, bpm: DEFAULT_BPM, beatsPerBar: 4, firstBeatSec: 0, ...p.audio };
@@ -830,10 +1615,24 @@ function validateProject(json) {
   delete p.pairs; // v3：舞对概念退役——旧项目载入时忽略并清除 pairs 字段，不破坏 formations/positions/merges
   p.groups = Array.isArray(p.groups) ? p.groups : [];
   p.formations = Array.isArray(p.formations) ? p.formations : [];
-  p.timeline = { blocks: [], countInBeats: 8, metronome: false, playSpeed: 1, tags: [], audioClips: [], ...p.timeline };
-  p.timeline.countInBeats = num(p.timeline.countInBeats, 8, 0, 32);
-  p.timeline.blocks = Array.isArray(p.timeline.blocks) ? p.timeline.blocks : [];
+  // build-70-formationclips M1 迁移：timeline.blocks 一次性退役——旧顺序块 [{formationId,
+  // holdBeats, travelBeats}] → 队形 clip 字段：formation i 的 startBeat=旧块 i 的 holdStart
+  //（Σ_{j<i}(hold_j+travel_j) 累计）、lenBeats=旧块 i 的 holdBeats（≥1 钳制）。travelBeats 不迁移：
+  // 新模型变换=相邻 clip 间空隙，旧过渡时长自然成为空隙（无损 ✓）。迁移后 blocks 字段删除。
+  p.timeline = { metronome: false, playSpeed: 1, tags: [], audioClips: [], ...p.timeline };
+  delete p.timeline.countInBeats; // build-68-nocountin：退役字段容忍剥离（旧 JSON 载入不报错、不保留）
+  const legacyBlocks = Array.isArray(p.timeline.blocks) ? p.timeline.blocks : null;
+  delete p.timeline.blocks; // blocks 字段不保留（重构一次到位：不存新旧并存的中间态）
   p.timeline.tags = sanitizeTags(p.timeline.tags); // 时间轴标记清洗（旧项目无 tags → []，零迁移成本）
+  // 显式层数清洗（build-48-tagui F4）：1..3 钳制、缺省 1 不落键（JSON 往返不新增键）；
+  // level ≥ tagLevelCount 的越层数据（旧项目降级/导入）钳到 count-1——段不丢失、收拢到最底层
+  const tlc = clampTagLevelCount(p.timeline.tagLevelCount);
+  if (tlc > 1) p.timeline.tagLevelCount = tlc; else delete p.timeline.tagLevelCount;
+  for (const t of p.timeline.tags) {
+    if (tagLevelOf(t) > tlc - 1) setTagLevel(p, t.id, tlc - 1);
+  }
+  // 层钳降后区域不变式重贴（build-49 F1）：同层不交叠、endBeat > beat——越层数据收拢后仍合法
+  p.timeline.tags = resolveTagRegions(p.timeline.tags);
   // 媒体资产与音频 clip（v3 音乐剪辑）：清洗 + v1 单音频迁移（1 asset + 全长 clip，零体验变化）
   p.media = sanitizeMedia(p.media);
   // 多轨（tracks）：清洗 + 缺省补建 trk1「配乐」（旧项目零体验变化）；clip.trackId 悬挂回落 trk1
@@ -849,7 +1648,12 @@ function validateProject(json) {
   p.timeline.audioClips = sanitizeAudioClips(p.timeline.audioClips, p.media.assets, trackOpts);
   for (const f of p.formations) f.positions = f.positions || {};
   const ids = new Set();
-  for (const d of p.dancers) { if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id); d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X'; }
+  // build-74-labelname：舞者级显示覆盖清洗——非法值 delete（键不落盘，JSON 往返不新增键）
+  for (const d of p.dancers) {
+    if (!d.id || ids.has(d.id)) d.id = uid('d'); ids.add(d.id);
+    d.role = ['M', 'F', 'X'].includes(d.role) ? d.role : 'X';
+    if (!LABEL_MODES.includes(d.labelMode)) delete d.labelMode;
+  }
   const dids = new Set(p.dancers.map(d => d.id));
   p.formations = p.formations.filter(f => f && f.id);
   // groups 清洗：缺省 []、悬挂成员清理（引用已删除舞者的 memberIds）、组内去重、组 id 去重
@@ -875,7 +1679,50 @@ function validateProject(json) {
       if (!f.merges.length) delete f.merges;
     } else delete f.merges;
   }
-  syncTimeline(p);
+  // build-70 M1：clip 字段清洗与不变式收口（替代旧 syncTimeline）——
+  // ①旧 blocks 迁移（有则）：formation i ← 旧块 i（startBeat=累计 holdStart、lenBeats=holdBeats）；
+  // ②缺字段补缺（无 blocks 或部分缺）：依序追加到已定义 clip 的末尾之后（len 缺省 16）；
+  // ③域钳制：startBeat ≥ 0、lenBeats ≥ 1；
+  // ④稳定排序恢复「数组序=时间序」不变式 + 交叉禁止（越界钳到右邻 start；≥1 拍下限兜底）。
+  if (legacyBlocks) {
+    let b = 0;
+    for (let i = 0; i < p.formations.length; i++) {
+      const blk = legacyBlocks[i];
+      if (!blk || typeof blk !== 'object') continue;
+      const hold = Number(blk.holdBeats);
+      const travel = Number(blk.travelBeats);
+      const f = p.formations[i];
+      f.startBeat = rBeat(Math.max(0, b));
+      f.lenBeats = rBeat(Math.max(FORM_CLIP_LEN_MIN, Number.isFinite(hold) ? hold : FORM_CLIP_LEN_DEFAULT));
+      b = clipEndOf(f) + (Number.isFinite(travel) && travel > 0 ? travel : 0);
+    }
+  }
+  {
+    const defined = p.formations.filter(f => Number.isFinite(Number(f.startBeat)) && Number.isFinite(Number(f.lenBeats)));
+    let cursor = defined.length ? Math.max(...defined.map(clipEndOf)) : 0;
+    for (const f of p.formations) {
+      if (!(Number.isFinite(Number(f.startBeat)) && Number.isFinite(Number(f.lenBeats)))) {
+        f.startBeat = rBeat(cursor);
+        f.lenBeats = FORM_CLIP_LEN_DEFAULT;
+      }
+      cursor = Math.max(cursor, clipEndOf(f));
+    }
+  }
+  for (const f of p.formations) {
+    f.startBeat = clipStartOf(f);
+    f.lenBeats = clipLenOf(f);
+  }
+  {
+    const order = p.formations.map((f, i) => ({ f, i }))
+      .sort((a, b2) => (clipStartOf(a.f) - clipStartOf(b2.f)) || (a.i - b2.i));
+    p.formations = order.map(o => o.f);
+    for (let k = 0; k + 1 < p.formations.length; k++) {
+      const cur = p.formations[k], nxt = p.formations[k + 1];
+      if (clipEndOf(cur) > clipStartOf(nxt)) {
+        cur.lenBeats = rBeat(Math.max(FORM_CLIP_LEN_MIN, clipStartOf(nxt) - clipStartOf(cur)));
+      }
+    }
+  }
   return { ok: errors.length === 0, errors, project: p };
 }
 
@@ -883,7 +1730,18 @@ function validateProject(json) {
 /* from model: faceAudience, uid → 同作用域（拼接） */
 // 队形生成器与整体位置变换 —— 纯逻辑，无 DOM 依赖
 /* import from model（拼接后为局部名） */
-const SHAPE_KINDS = ['rows', 'line', 'columns', 'circle', 'arc', 'v', 'diagonal', 'diamond'];
+// build-62-formations2 F1：+13 种常用预设（grid/triangle/halfcircle/parallelogram/chevron/star/
+// xpattern/center-surround/doublecircle/diagonal2/staggered/sline/heart）。旧 8 种 value 与几何
+// 逐一不变（兼容既有测试与用户习惯）；新种全部观众相对（几何按「观众在数据 +y 侧」的底侧约定
+// 呈示，audience='top' 时由显示层垂直镜像整体翻转，见 stage.js）、适配任意 count、域内 clamp。
+const SHAPE_KINDS = [
+  // 基础
+  'rows', 'line', 'columns', 'grid',
+  // 几何
+  'circle', 'arc', 'halfcircle', 'diamond', 'triangle', 'parallelogram', 'chevron', 'star', 'xpattern', 'center-surround', 'doublecircle',
+  // 线条
+  'v', 'diagonal', 'diagonal2', 'staggered', 'sline', 'heart',
+];
 
 const margin = stage => Math.min(1.5, stage.widthM / 8);
 
@@ -894,6 +1752,11 @@ function genSlots(kind, count, stage, opts = {}) {
   const face = faceAudience(stage);
   const pts = [];
   const push = (x, y, f = face) => pts.push({ x, y, facing: ((f % 360) + 360) % 360 });
+  // 新预设（build-62 F1）专用：域内 clamp 后落点（[m, W−m]×[m, H−m]；旧 8 种几何不动）
+  const cl = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const pushC = (x, y, f = face) => push(cl(x, m, W - m), cl(y, m, H - m), f);
+  // 一行 cnt 点在 [cxCenter−halfW, cxCenter+halfW] 内均布（单点居中）
+  const spreadX = (cxCenter, halfW, cnt, i) => cnt > 1 ? cxCenter - halfW + (2 * halfW) * i / (cnt - 1) : cxCenter;
 
   switch (kind) {
     case 'line': {
@@ -976,6 +1839,232 @@ function genSlots(kind, count, stage, opts = {}) {
       }
       break;
     }
+    case 'grid': {
+      // 方阵网格：r×c 尽量方正（|r−c| 最小）；末行不足列数时居中
+      let bestC = 1, bestScore = Infinity;
+      for (let c = 1; c <= count; c++) {
+        const r = Math.ceil(count / c);
+        const score = Math.abs(r - c);
+        if (score < bestScore) { bestScore = score; bestC = c; }
+      }
+      const gc = bestC, gr = Math.ceil(count / gc);
+      const gsp = Math.min(2.0, gc > 1 ? (W - 2 * m) / (gc - 1) : 0);
+      const ggy = Math.min(1.6, gr > 1 ? (H - 2 * m) / (gr - 1) : 0);
+      for (let i = 0; i < count; i++) {
+        const r = Math.floor(i / gc), c = i % gc;
+        const rowCount = Math.min(gc, count - r * gc);
+        const off = (gc - rowCount) * gsp / 2; // 末行居中
+        pushC(cx - (gc - 1) * gsp / 2 + off + c * gsp, cy - (gr - 1) * ggy / 2 + r * ggy);
+      }
+      break;
+    }
+    case 'triangle': {
+      // 三角形（实心）：顶点朝后（远离观众），opts.flip=倒三角（顶点朝观众）。
+      // 行内人数按行宽比例（w_r=r+1）最大余数法分配——顶点行最窄、底行最宽
+      const R = Math.max(1, Math.ceil((Math.sqrt(8 * count + 1) - 1) / 2)); // 最小 R 使 R(R+1)/2 ≥ count
+      const T = R * (R + 1) / 2;
+      const counts = Array.from({ length: R }, (_, r) => Math.floor(count * (r + 1) / T));
+      let given = counts.reduce((a, b) => a + b, 0);
+      const fracOrder = counts.map((_, r) => r).sort((a, b) => (count * (b + 1) / T % 1) - (count * (a + 1) / T % 1));
+      for (let k = 0; given < count; k++, given++) counts[fracOrder[k % R]]++;
+      const spanY = Math.min(H - 2 * m, H * 0.6);
+      const baseW = Math.min(W - 2 * m, H * 0.7);
+      let row = 0, rowStart = 0; // 行游标跨舞者持久推进（逐行填满再进下一行）
+      for (let i = 0; i < count; i++) {
+        while (row < R - 1 && i - rowStart >= counts[row]) { rowStart += counts[row]; row++; }
+        const idxInRow = i - rowStart;
+        const halfW = baseW / 2 * (row + 1) / R;
+        const rowY = R > 1 ? spanY * row / (R - 1) : 0;
+        pushC(spreadX(cx, halfW, counts[row], idxInRow), opts.flip ? cy + spanY / 2 - rowY : cy - spanY / 2 + rowY);
+      }
+      break;
+    }
+    case 'halfcircle': {
+      // 反半圆：标准半圆（180° 张角），拱背朝后、开口朝观众（与 arc 浅弧的区别=张角与半径）
+      const r = Math.min(W / 2 - m, H * 0.55);
+      const ccyy = Math.min(H - m, m + r + (H - 2 * m - r) * 0.3);
+      for (let i = 0; i < count; i++) {
+        const th = (count > 1 ? 180 * i / (count - 1) : 90) * Math.PI / 180; // 0°=右端 → 180°=左端
+        pushC(cx + r * Math.cos(th), ccyy - r * Math.sin(th));
+      }
+      break;
+    }
+    case 'parallelogram': {
+      // 平行四边形：斜置矩形阵列（每行右移 shear）
+      const prows = clampInt(opts.rows || (count <= 3 ? 1 : 2), 1, 4);
+      const pcols = Math.ceil(count / prows);
+      const psp = Math.min(1.8, pcols > 1 ? (W - 2 * m) * 0.6 / (pcols - 1) : 0);
+      const budget = (W - 2 * m) - (pcols - 1) * psp;
+      const shear = prows > 1 ? Math.min(1.2, budget / (prows - 1)) : 0;
+      const pgy = Math.min(1.6, prows > 1 ? (H * 0.5) / (prows - 1) : 0);
+      for (let i = 0; i < count; i++) {
+        const r = Math.floor(i / pcols), c = i % pcols;
+        const startX = cx - ((pcols - 1) * psp + (prows - 1) * shear) / 2 + r * shear;
+        pushC(startX + c * psp, cy - (prows - 1) * pgy / 2 + r * pgy);
+      }
+      break;
+    }
+    case 'chevron': {
+      // 楔形：双排 V 实心（嵌套 V 带，顶点朝后、开口朝观众）；奇数人时顶点站 1 人
+      const D = Math.ceil(Math.max(0, count - 1) / 2); // 最大深度
+      const cs = D > 0 ? Math.min(1.6, (W / 2 - m) / D) : 0;
+      const cgap = D > 0 ? Math.min(1.5, H * 0.55 / D) : 0;
+      const apexY = cy - H * 0.22;
+      let k = 0;
+      if (count % 2 === 1) { pushC(cx, apexY); k++; }
+      for (let d = 1; k < count; d++) {
+        pushC(cx - d * cs, apexY + d * cgap); k++; // 左臂
+        if (k >= count) break;
+        pushC(cx + d * cs, apexY + d * cgap); k++; // 右臂
+      }
+      break;
+    }
+    case 'star': {
+      // 五角星：外/内交替十边形轮廓按周长均匀采样（顶点+凹点，人数多时沿轮廓均匀）
+      const R = Math.min(W, H) / 2 - m;
+      const ri = R * 0.42;
+      const vs = [];
+      for (let j = 0; j < 10; j++) {
+        const rad = j % 2 === 0 ? R : ri;
+        const ph = j * 36 * Math.PI / 180; // j=0 顶部外顶点
+        vs.push({ x: cx + rad * Math.sin(ph), y: cy - rad * Math.cos(ph) });
+      }
+      const lens = [];
+      let per = 0;
+      for (let j = 0; j < 10; j++) {
+        const L = dist(vs[j], vs[(j + 1) % 10]);
+        lens.push(L); per += L;
+      }
+      for (let i = 0; i < count; i++) {
+        let d = per * i / count, seg = 0;
+        while (seg < 9 && d > lens[seg]) { d -= lens[seg]; seg++; }
+        const a = vs[seg], b = vs[(seg + 1) % 10], t = lens[seg] > 0 ? d / lens[seg] : 0;
+        pushC(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+      }
+      break;
+    }
+    case 'xpattern': {
+      // X 形：两条对角线交叉于中心；4 臂自中心向外均布（不重复占中心点）
+      const corners = [{ x: m, y: m }, { x: W - m, y: m }, { x: W - m, y: H - m }, { x: m, y: H - m }];
+      const base = Math.floor(count / 4), rem = count % 4;
+      for (let i = 0; i < count; i++) {
+        const arm = i % 4;
+        const cnt = base + (arm < rem ? 1 : 0);
+        const j = Math.floor(i / 4);
+        if (cnt === 0) continue;
+        const t = (j + 1) / cnt; // (0,1]：末点落在角上
+        pushC(cx + (corners[arm].x - cx) * t, cy + (corners[arm].y - cy) * t);
+      }
+      break;
+    }
+    case 'center-surround': {
+      // 众星捧月：中心小簇（ceil(n/3)）+ 外围大环（环上面向圆心，与 circle 同约定）
+      const innerN = Math.ceil(count / 3), outerN = count - innerN;
+      const R = Math.min(W, H) / 2 - m;
+      const rc = Math.min(1.6, R * 0.35);
+      for (let i = 0; i < innerN; i++) {
+        const th = 360 * (innerN > 1 ? i / innerN : 0) * Math.PI / 180;
+        pushC(cx + rc * Math.sin(th), cy - rc * Math.cos(th), innerN > 1 ? th + 180 : face);
+      }
+      for (let i = 0; i < outerN; i++) {
+        const th = 360 * i / outerN;
+        const rad = th * Math.PI / 180;
+        pushC(cx + R * Math.sin(rad), cy - R * Math.cos(rad), th + 180); // 面向圆心
+      }
+      break;
+    }
+    case 'doublecircle': {
+      // 双圆：内外同心圆（外圈 ceil(n·2/3)、内圈其余；内圈错半步起步）
+      const outerN = Math.ceil(count * 2 / 3), innerN = count - outerN;
+      const R = Math.min(W, H) / 2 - m;
+      const ri = R * 0.52;
+      for (let i = 0; i < outerN; i++) {
+        const th = 360 * i / outerN;
+        const rad = th * Math.PI / 180;
+        pushC(cx + R * Math.sin(rad), cy - R * Math.cos(rad), th + 180); // 面向圆心
+      }
+      for (let i = 0; i < innerN; i++) {
+        const th = 360 * (i + 0.5) / Math.max(1, innerN);
+        const rad = th * Math.PI / 180;
+        pushC(cx + ri * Math.sin(rad), cy - ri * Math.cos(rad), th + 180);
+      }
+      break;
+    }
+    case 'diagonal2': {
+      // 双斜线：两条平行斜线错开（各 ceil/floor 半数，含两端点）
+      const off = Math.min(1.2, (W - 2 * m) * 0.08);
+      const dxx = W / 2 - off - m;
+      const nA = Math.ceil(count / 2);
+      for (let i = 0; i < count; i++) {
+        const onA = i < nA;
+        const j = onA ? i : i - nA;
+        const cnt = onA ? nA : count - nA;
+        const t = cnt > 1 ? j / (cnt - 1) : 0.5;
+        const xTop = onA ? m : W / 2 + off;
+        pushC(xTop + dxx * t, m + (H - 2 * m) * t);
+      }
+      break;
+    }
+    case 'staggered': {
+      // 交错横排：两排前后错位半间距（后排在先、整体右移半距；keep-visible 排型——
+      // 前排间隙对准后排每人）；组宽=(per−1)·sp+sp/2 居中，两排均不出域
+      const per = Math.ceil(count / 2);
+      const sp = per > 1 ? (W - 2 * m) / (per - 0.5) : 0;
+      const gap = 1.6;
+      for (let i = 0; i < count; i++) {
+        const back = i < per;
+        const j = back ? i : i - per;
+        const x = cx - (per - 1) * sp / 2 - sp / 4 + j * sp + (back ? sp / 2 : 0);
+        pushC(x, back ? cy - gap / 2 : cy + gap / 2);
+      }
+      break;
+    }
+    case 'sline': {
+      // 蛇形/S 曲线：纵向推进（后→前），弯数按人数自适应（≥18 人三折 / ≥8 人两折 / 其余一折）；
+      // 朝向沿行进切线（蛇形队惯常面向行进方向）
+      const bends = count >= 18 ? 3 : (count >= 8 ? 2 : 1);
+      const A = (W / 2 - m) * 0.8;
+      const path = [];
+      for (let i = 0; i < count; i++) {
+        const t = count > 1 ? i / (count - 1) : 0.5;
+        const p = { x: cx + A * Math.sin(Math.PI * bends * t), y: m + t * (H - 2 * m) };
+        path.push(p);
+        const prev = path[i - 1];
+        pushC(p.x, p.y, prev ? angleTo(prev, p) : face);
+      }
+      if (count > 1) {
+        const last = pts[pts.length - 1], prev = pts[pts.length - 2];
+        last.facing = ((angleTo(prev, last) % 360) + 360) % 360;
+      }
+      break;
+    }
+    case 'heart': {
+      // 心形：参数化心形曲线按弧长均匀采样（心尖朝观众、双瓣朝后），bbox 拟合场内
+      const N = 240;
+      const raw = [];
+      let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+      for (let i = 0; i <= N; i++) {
+        const t = 2 * Math.PI * i / N;
+        const mx = 16 * Math.pow(Math.sin(t), 3);
+        const my = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+        raw.push({ x: mx, y: my });
+        if (mx < bx0) bx0 = mx; if (mx > bx1) bx1 = mx;
+        if (my < by0) by0 = my; if (my > by1) by1 = my;
+      }
+      const sc = Math.min((W - 2 * m) / (bx1 - bx0), (H - 2 * m) / (by1 - by0)) * 0.92;
+      const path = raw.map(p => ({ x: cx + (p.x - (bx0 + bx1) / 2) * sc, y: cy - (p.y - (by0 + by1) / 2) * sc }));
+      const cum = [0];
+      for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + dist(path[i - 1], path[i]));
+      const total = cum[cum.length - 1];
+      let seg = 0;
+      for (let i = 0; i < count; i++) {
+        const d = total * i / count;
+        while (seg < cum.length - 2 && cum[seg + 1] < d) seg++;
+        const t = cum[seg + 1] > cum[seg] ? (d - cum[seg]) / (cum[seg + 1] - cum[seg]) : 0;
+        pushC(path[seg].x + (path[seg + 1].x - path[seg].x) * t, path[seg].y + (path[seg + 1].y - path[seg].y) * t);
+      }
+      break;
+    }
     default:
       for (let i = 0; i < count; i++) push(cx, cy);
   }
@@ -988,9 +2077,20 @@ function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function angleTo(a, b) { return (Math.atan2(b.x - a.x, -(b.y - a.y)) * 180 / Math.PI + 360) % 360; } // 0=上 顺时针 0..360
 
 // 把槽位映射进队形：优先保持现有就近站位（slot→最近舞者，贪心）
-function applySlots(formation, orderedIds, slots, { current = {} } = {}) {
-  const remaining = new Set(orderedIds);
+// Wave1 需求 5：可选 opts.ids 子集生成——就近映射只在 ids 子集内进行、仅对这些舞者写生成
+// 位置，其余舞者本帧位置原样保留（不做整表替换）；缺省 ids=null=现行为（orderedIds 全员、
+// 整表替换，逐字节不变）。槽位数由调用方给定（子集生成传 genSlots(kind, ids.length, …)）。
+function applySlots(formation, orderedIds, slots, { current = {}, ids = null } = {}) {
+  const subset = (Array.isArray(ids) && ids.length) ? new Set(ids) : null;
+  const targets = subset ? orderedIds.filter(id => subset.has(id)) : orderedIds;
+  const remaining = new Set(targets);
   const positions = {};
+  if (subset) {
+    // 子集模式：子集外舞者原位保留（positions 以保留项为底、仅子集键被生成结果改写）
+    for (const [id, p] of Object.entries(formation.positions || {})) {
+      if (!subset.has(id)) positions[id] = p;
+    }
+  }
   for (const s of slots) {
     let best = null, bd = Infinity;
     for (const id of remaining) {
@@ -1206,9 +2306,16 @@ export {
   easeInOut,
   addDancer,
   createProject,
+  genDefaultRows,
   dancerById,
   orderedDancers,
   removeDancer,
+  removeDancerFromFormation,
+  rejoinFormations,
+  onStageIds,
+  admitToFormation,
+  addCouples,
+  addDancersBatch,
   groupById,
   nextGroupName,
   createGroup,
@@ -1217,6 +2324,8 @@ export {
   setGroupMembers,
   expandUnits,
   carryPositionsForward,
+  syncPositionsRange,
+  syncForwardPositions,
   UNIT_STYLES,
   mergeKey,
   findMerge,
@@ -1231,6 +2340,11 @@ export {
   dancerOrdinal,
   dancerLabel,
   truncateLabel,
+  effectiveLabelMode,
+  labelTableOf,
+  autoShorts,
+  STAGE_PRESETS,
+  stagePresetHit,
   faceAudience,
   ensureDancerInFormation,
   ensureFormationComplete,
@@ -1238,40 +2352,79 @@ export {
   deleteFormation,
   moveFormation,
   formationIndexById,
-  syncTimeline,
+  FORM_CLIP_LEN_DEFAULT,
+  FORM_CLIP_LEN_MIN,
+  clipStartOf,
+  clipLenOf,
+  clipEndOf,
+  segmentsFromClips,
   spb,
   beatToSec,
   secToBeat,
-  computeSegments,
   totalDurationSec,
   musicDomainSec,
-  segmentAt,
   TAG_NAME_MAX,
+  TAG_REGION_DEFAULT_BEATS,
+  TAG_REGION_MIN_BEATS,
+  tagEndBeatOf,
   sanitizeTags,
+  resolveTagRegions,
   tagById,
   nextTagName,
   addTag,
   removeTag,
   renameTag,
   moveTag,
+  tagRegionBounds,
+  clampRegionMove,
+  clampRegionEdge,
+  moveTagRegion,
+  resizeTagRegion,
+  placeTagRegion,
+  fitTagRegionInLevel,
   SEG_COLOR_COUNT,
+  TAG_LEVEL_MAX,
+  TAG_SIGS,
+  clampTagLevel,
+  tagLevelOf,
+  tagRhythmLabel,
+  tagLevelsOf,
+  setTagLevel,
+  setTagRhythm,
+  TAG_LEVEL_COUNT_MAX,
+  clampTagLevelCount,
+  tagLevelCountOf,
+  setTagLevelCount,
+  addTagLayer,
+  removeTagLayer,
   sectionSegmentsOf,
+  nestSegmentsByLevel,
+  filterCollapsedRows,
+  placeDropdownBelow,
+  TLNAV_MIN_THUMB,
+  tlnavThumb,
+  tlnavScrollForThumbPos,
+  tlnavScrollForBarClick,
   evenSectionBeats,
   barRuleSections,
   parseSectionTable,
   sectionTableToEntries,
   applySectionEntries,
-  splitSectionAt,
   removeSection,
-  mergeSectionWithNext,
   setSectionColor,
   lerpAngle,
   posAt,
   currentFormationIndexAt,
+  moveFormationClip,
+  resizeFormationClip,
+  setFormationClipLen,
+  setFormationGap,
+  splitFormationClip,
   beatLabel,
   countLabel,
-  alignBlockStart,
+  alignFormationClipStart,
   MIN_CLIP_DUR,
+  clampCurve,
   sanitizeMedia,
   sanitizeAudioClips,
   migrateLegacyAudio,

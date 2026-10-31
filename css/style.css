@@ -76,90 +76,163 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 #editor-view[data-uimode="music"] #mobile-tabs{display:none}
 /* M2：纵滚归 #tl-scroll（轨头 sticky 列与 lane 区同滚，DAW 标准行为）；#tl-body 只做外框 */
 #editor-view[data-uimode="music"] #tl-body{flex:1 1 auto;min-height:0;overflow:hidden}
-#editor-view[data-uimode="music"] #tl-scroll{height:100%} /* 容器 flex 撑满；画布高由 render 实测推导 */
+#editor-view[data-uimode="music"] #tl-scroll{flex:1 1 auto;min-height:0} /* F4：height:100% 改 flex 撑满（让位 16px 概览条；容器实测推导链不变） */
 #music-toolbar{display:none}
 #editor-view[data-uimode="music"] #music-toolbar{display:flex}
-#music-preview{display:none}
-#editor-view[data-uimode="music"] #music-preview{display:flex}
+/* build-46-layout：合并侧边栏只在音乐模式呈示（编舞模式完全不可见，E-12 作用域） */
+#right-sidebar{display:none}
+#editor-view[data-uimode="music"] #right-sidebar{display:flex}
 @media (max-width:1023.5px){
   /* 移动端顶栏紧凑：模式开关呈单字（编/乐）；顶栏过挤时内部横滚（同 #stage-tools 既有模式，
      scrollWidth 仍 ≤375，L2 C-09a 口径不破） */
   .seg-full{display:none}
   .seg-short{display:inline}
   #ui-mode-seg .seg-btn{padding:5px 8px}
-  #topbar{overflow-x:auto;scrollbar-width:none}
-  #topbar::-webkit-scrollbar{display:none}
+  /* build-66-mobileux F2：顶栏两段结构——横滚兜底移到滚动段 #topbar-scroll（C-09a 口径照旧），
+     #ui-mode-seg 固定段 flex:none 不参与横滚（375 首屏恒可见可点） */
+  #topbar-scroll{overflow-x:auto;scrollbar-width:none}
+  #topbar-scroll::-webkit-scrollbar{display:none}
   /* W1 移动端音乐模式：三栏隐藏已由上方通用规则覆盖（修复 E-09 的 58% 空白）；
      W3 §2.3：preview 条改移动形态（88px 底部横条，见下方专段），不再整体隐藏 */
   #editor-view[data-uimode="music"] #music-toolbar{overflow-x:auto;scrollbar-width:none}
   #editor-view[data-uimode="music"] #music-toolbar::-webkit-scrollbar{display:none}
   /* 编舞模式 data-mtab 残留不串场：音乐模式时间轴恒可见 */
   #editor-view[data-uimode="music"] #tl-scroll{display:block}
-  /* ---- W3 §2.3 移动端音乐模式重排 ----
-     纵序：音乐工具条 40（横滚）→ 尺规/tag/lanes（flex:1；>2 轨/内容超出时 #tl-body 纵滚，
-     laneH 上限 64 由 timeline.musicLaneH maxH 参数承担）→ preview 条 88px → playbar 44。
-     #timeline-area 转 column（桌面为 row 双栏），#music-strip 吃满余量，preview 条沉底。 */
+  /* ---- W3 §2.3 移动端音乐模式重排（build-46-layout 改版）----
+     纵序：音乐工具条 40（横滚）→ 尺规/tag/lanes（flex:1）→ playbar 44。
+     合并侧边栏（#right-sidebar）改底部抽屉（固定定位、锚在播放条上沿）：默认收成 88px
+     迷你预览条（多轨区只被遮 88px 且可先滚开），上滑/呼出钮展开 ≤50vh——见下方专段。 */
   #editor-view[data-uimode="music"] #timeline-area{flex-direction:column}
   #editor-view[data-uimode="music"] #music-strip{flex:1 1 auto}
-  #editor-view[data-uimode="music"] #music-preview{
-    display:grid;grid-template-columns:88px minmax(0,1fr);grid-template-rows:auto auto;
-    gap:3px 10px;align-items:center;flex:none;height:88px;min-height:0;padding:8px 10px;
-    border-left:none;border-top:1px solid var(--line);overflow:hidden}
-  #editor-view[data-uimode="music"] #mp-canvas{grid-row:1/3;width:88px;height:60px}
-  #editor-view[data-uimode="music"] #music-preview .mp-name{grid-column:2;grid-row:1;min-width:0}
-  #editor-view[data-uimode="music"] #music-preview .mp-block{grid-column:2;grid-row:2;flex-direction:row;gap:10px;flex-wrap:nowrap;min-width:0}
-  #editor-view[data-uimode="music"] #music-preview .mp-block .ctl{font-size:11px;gap:3px}
-  #editor-view[data-uimode="music"] #music-preview .btn.step{padding:0 7px;line-height:18px;font-size:13px}
-  /* 值里的「·秒」段移动端隐藏（防 375 横溢；拍数与 ± 步进保留——§2.3「当前块名/拍步进」） */
-  #editor-view[data-uimode="music"] #music-preview .mp-s{display:none}
-  /* 对齐到播放头为桌面纵栏能力；移动横条 375 内放不下（无横溢红线 C-09a），收纳隐藏 */
-  #editor-view[data-uimode="music"] #mp-align{display:none}
 }
 
-/* ---- 音乐工具条 40px（W1 新增）---- */
-#music-toolbar{align-items:center;gap:8px;padding:0 10px;height:40px;flex:none;border-bottom:1px solid var(--line);background:var(--bg2);white-space:nowrap}
+/* ---- 音乐工具条 40px（W1 新增）----
+   build-44 D3：溢出可达——桌面（iPad 横屏走桌面布局）补 overflow-x:auto，控件经内滚可达
+   （旧值裁切，剃刀/磁吸/缩放钮够不着）；子项 flex:none 防挤压变形；桌面给细横滚条让内滚
+   能力可见。移动端（≤1023.5px，见文件头部媒体查询）保持横滚+隐藏滚动条现状（C-09a 口径），
+   故可见滚条收进 min-width:1024px 互补区间，避免同特异度规则后写覆盖移动端隐藏。 */
+#music-toolbar{align-items:center;gap:8px;padding:0 10px;height:40px;flex:none;border-bottom:1px solid var(--line);background:var(--bg2);white-space:nowrap;overflow-x:auto}
+#music-toolbar > *{flex:none}
+#music-toolbar > .spacer{flex:1 1 0px;min-width:0} /* 收尾撑杆：内容放得下时把 #mtb-audio-name 推到行尾；溢出时自然收 0（名字随内容滚出视野） */
 #music-toolbar .ctl input[type=number]{padding:2px 5px}
 #mtb-audio-name{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+/* D3 连带：overflow-x:auto 使 overflow-y 计算为 auto——absolute 下拉会被裁进 40px 条内。
+   工具条内下拉改 fixed（打开时由 main.js 按按钮视口坐标摆位），不受滚动容器裁切；
+   顶栏 #export-dd 等他处下拉不受此规则影响。 */
+#music-toolbar .dd-menu{position:fixed}
+/* build-50 F3：顶栏 #export-dd 同病同修——≤1023.5px 顶栏 overflow-x:auto（style.css 头部
+   媒体查询）把 absolute 菜单裁进 48px 顶栏（iPad 竖屏「无法显示和操作」）。与 build-44
+   #music-toolbar 方案同构：改 fixed（打开时 main.js 按按钮视口坐标摆位，M.placeDropdownBelow），
+   z-index 200 高于弹窗（150）（build-56 起索引面板已入侧栏 tab，无独立浮层），不受滚动容器裁切；顶栏横滚/窗口 resize 时
+   main.js 直接收起（取简单者）。
+   build-71-iomenu F1：菜单本体迁出为 #app 级共享 #io-menu（两视图共用同一组件，hidden 祖先
+   会连 fixed 后代一起隐藏，不能留在 #editor-view 内）；fixed 摆位/z-index 契约原样随迁。 */
+#io-menu{position:fixed;z-index:200}
+/* build-71-iomenu F1：导出二级子菜单——#io-menu 内联展开（点击/悬停，触屏以点击为准）。
+   不做浮层飞出：免第二套 fixed 摆位算术与视口钳制，移动端窄屏也不会溢出。层级缩进示意从属 */
+#exp-submenu button{padding-left:26px}
+#exp-sub-toggle::after{content:' ▸'}
+/* build-55-uiclean P3：stage-tools「显示…」下拉同病同修（工具行 overflow-x:auto 裁 absolute
+   菜单）——fixed 摆位与 #export-dd 同构（打开时 main.js 按按钮视口坐标摆位，M.placeDropdownBelow） */
+#view-dd .dd-menu{position:fixed;z-index:200}
+/* build-56-indextab F2：乐段索引入两模式侧栏（浮动面板与拖宽高 grip 退役）——
+   stage=#props-index 页容器（flex 撑满右面板，去页容器缺省内边距让列表通栏）；
+   music=#rsb-index-pane（媒体库段索引 pane，rsb-seg-body 折叠规则共用，内容吃 rsb 余量）。
+   播放头行/列表的内联样式由 main.js siMount 单挂载写入（两宿主同构）。 */
+#props-index.si-page{padding:0;gap:0}
+#rsb-index-pane{display:flex;flex-direction:column;flex:1 1 0;min-height:0;min-width:0;overflow:hidden}
+/* pane 互斥显隐：hidden 属性必须显式压过本块 display:flex / #media-sidebar 既有 display 规则 */
+#rsb-index-pane[hidden],#media-sidebar[hidden]{display:none}
+/* 媒体库段头 tab 条 [媒体库|索引]：独立类 .rsb-tabs/.rtab（不入 .panel-tabs——stage 右面板
+   页签组专用，全局选择器互不串场）；右侧留 22px 防 #rsb-collapse（段头右上角绝对定位钮）压字 */
+.rsb-tabs{display:flex;flex:1;min-width:0;gap:2px;margin-right:22px}
+.rtab{flex:1;background:none;border:0;padding:4px 4px 5px;font-size:12px;color:var(--dim);
+  border-bottom:2px solid transparent;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rtab.active{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+.rtab:hover{color:var(--acc)}
+@media (min-width:1024px){
+  #editor-view[data-uimode="music"] #music-toolbar{scrollbar-width:thin;scrollbar-color:var(--dim) transparent}
+  #editor-view[data-uimode="music"] #music-toolbar::-webkit-scrollbar{width:8px;height:8px}
+  #editor-view[data-uimode="music"] #music-toolbar::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  #editor-view[data-uimode="music"] #music-toolbar::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+  #editor-view[data-uimode="music"] #music-toolbar::-webkit-scrollbar-track{background:transparent}
+}
 
-/* ---- 队形 mini-preview 栏 280px（W1 C15 新增；音乐模式只读对齐参照）----
-   W3：#music-preview 需作 #mp-countin（数拍大字）的定位上下文 */
-#music-preview{flex:0 0 280px;flex-direction:column;gap:8px;padding:10px;border-left:1px solid var(--line);background:var(--bg2);min-height:0;overflow-y:auto;position:relative}
+/* ---- 右侧合并侧边栏（build-46-layout：队形预览上 + 媒体库下）----
+   #timeline-area 内 flex 兄弟列（多轨 lane 区 │ 合并栏），非覆盖非浮层——拖宽/收起时 lane 区
+   flex 自然让位/回占。两段各自可纵向收起（.rsb-folded，记忆 wuzhen:rsbPreview / wuzhen:rsbLib；
+   一侧收起另一侧 .rsb-grow 吃余量）；整栏收起=16px 细条（wuzhen:rsbClosed）；左缘 #rsb-grip
+   拖宽（180–480px=max(480, 容器40%)，记忆 wuzhen:rsbW，Pointer Events+setPointerCapture）。
+   #media-sidebar 保留 id 作 syncMediaSidebar 挂载点（msb-body 列表滚动 overflow-y）。 */
+#editor-view[data-uimode="music"] #right-sidebar{
+  display:flex;flex-direction:column;position:relative;flex:0 0 auto;
+  width:280px;min-width:180px;max-width:min(480px,60%);
+  border-left:1px solid var(--line);background:var(--bg2);min-height:0;overflow:hidden}
+#rsb-body{display:flex;flex-direction:column;flex:1 1 0;min-height:0}
+/* 整栏收起（build-46 验收反馈二）：完全收起=零占位（display:none），不再留 16px 细条/
+   88px 迷你条等「半收起」形态——多轨区满幅。重开通道=工具条「媒体库」钮（按下态醒目）。
+   段级折叠（.rsb-folded）只收内容留 28px 段头，
+   与整栏收起是两级语义。特异性须 ≥ 基础规则（2 ID+1 属性）。 */
+#editor-view[data-uimode="music"] #right-sidebar.rsb-closed{display:none}
+#rsb-grip{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:col-resize;touch-action:none;z-index:7}
+/* 收起钮：栏内右上角（段头行右侧空闲位；overflow:hidden 内不裁切） */
+#rsb-collapse{position:absolute;right:2px;top:5px;width:18px;height:22px;padding:0;line-height:20px;
+  font-size:12px;background:var(--bg2);border:1px solid var(--line);border-radius:6px;z-index:8;color:var(--dim)}
+#rsb-collapse:hover{color:var(--acc);border-color:var(--acc)}
+/* 段（segment）：段头=折叠箭头+标题；rsb-grow=吃余量（另一侧折叠时由 updateRsbGrow 分配） */
+.rsb-seg{display:flex;flex-direction:column;min-height:0;flex:0 1 auto}
+.rsb-seg.rsb-grow{flex:1 1 0}
+#rsb-preview-seg{border-bottom:1px solid var(--line)}
+.rsb-seg-head{display:flex;align-items:center;gap:4px;padding:5px 8px;flex:none;border-bottom:1px solid var(--line);min-width:0}
+.rsb-seg-toggle{background:none;border:0;color:var(--dim);font-size:12px;line-height:1;padding:2px 4px;flex:none}
+.rsb-seg-toggle:hover{color:var(--acc)}
+.rsb-seg-title{font-weight:600;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* 折叠规则特异性须压过 #music-preview/#media-sidebar 的 (1,0,0) display——否则段折叠永不生效
+   （build-46 验收反馈「预览收起不彻底」根因） */
+#right-sidebar .rsb-seg.rsb-folded .rsb-seg-body{display:none}
+/* 预览段体（原 280px 纵栏内容 id 原样迁移） */
+#music-preview{display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;padding:10px;overflow-y:auto;position:relative}
 #mp-canvas{display:block;width:100%;height:170px;flex:none;background:#f8fafc;border:1px solid var(--line);border-radius:8px}
 [data-theme="dark"] #mp-canvas{background:#0b1220}
 #music-preview .mp-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #music-preview .mp-block{display:flex;flex-direction:column;gap:6px}
 #music-preview .ctl{white-space:nowrap}
 #music-preview .btn.step{padding:0 9px;line-height:20px;font-size:14px}
-/* M5（决策②）：preview 栏可折叠——默认展开，wuzhen:mpCollapsed 记忆（跨会话）。
-   折叠=只留头部窄条（画布/步进/对齐全部收纳，展开钮 ▸ 常驻）；仅桌面形态（≥1024px），
-   移动端 88px 横条不呈示头部（W3 §2.3 无折叠余量，记忆键在移动端不生效） */
-#music-preview .mp-head{display:flex;align-items:center;justify-content:space-between;flex:none;min-width:0}
-#music-preview .mp-title{font-weight:600;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media (min-width:1024px){
-  #music-preview.mp-collapsed{flex:0 0 42px;align-items:stretch;padding:8px 5px;overflow:hidden}
-  #music-preview.mp-collapsed .mp-head{justify-content:center}
-  #music-preview.mp-collapsed .mp-title,
-  #music-preview.mp-collapsed #mp-canvas,
-  #music-preview.mp-collapsed .mp-name,
-  #music-preview.mp-collapsed .mp-block,
-  #music-preview.mp-collapsed #mp-align{display:none}
-}
+/* 媒体库段体：纵向填充 + 列表滚动（msb-body overflow-y 沿用） */
+#media-sidebar{display:flex;flex-direction:column;flex:1 1 0;min-height:0;min-width:0;overflow:hidden}
+#msb-body{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:8px 10px;min-height:0}
+/* F4 单行资产行：[名(ellipsis) 时长·大小] [配乐chip] [… ]；行高紧凑 ~32px；
+   「…」点开 showContextMenu 菜单（添加到第一轨/用作配乐/重命名/删除，视口钳制不溢出抽屉） */
+#msb-body .mlib-row{display:flex;align-items:center;gap:6px;padding:5px 4px;min-height:32px;border-bottom:1px solid var(--bg3)}
+#msb-body .mlib-row .mlib-name{flex:1 1 auto;min-width:0;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#msb-body .mlib-row .mlib-dur{flex:none;font-size:11px}
+#msb-body .mlib-row .chip{flex:none}
+#msb-body .mlib-row .mlib-more{flex:none;padding:0 8px;line-height:20px;font-size:14px;font-weight:700}
+#msb-body .mlib-row.mlib-active{background:var(--bg3);border-radius:6px}
+/* 移动端（≤1023.5px）：合并栏=底部抽屉。完全收起（.rsb-closed）=零占位（display:none，
+   见上方总规则）——88px 迷你预览条「半收起」态随验收反馈一并退役，多轨区满幅；
+   打开（.rsb-open，工具条「媒体库」钮）=50vh 双段纵列抽屉，下滑/收起钮收回。 */
 @media (max-width:1023.5px){
-  #music-preview .mp-head{display:none}
+  #editor-view[data-uimode="music"] #right-sidebar{
+    position:fixed;left:0;right:0;bottom:var(--pb-h);z-index:45;
+    width:auto !important;min-width:0;max-width:none;flex:none;height:50vh;max-height:50vh;
+    border-left:none;border-top:1px solid var(--line);border-radius:12px 12px 0 0;
+    box-shadow:0 -10px 30px rgba(0,0,0,.4)}
+  #rsb-grip{display:none}
+  #rsb-collapse{left:auto;right:8px;top:6px}
+  /* 抽屉内预览用桌面纵栏形态（迷你 grid 随 88px 迷你条退役）；375 横溢保护保留 */
+  #editor-view[data-uimode="music"] #music-preview .mp-s{display:none}
+  #editor-view[data-uimode="music"] #mp-align{display:none}
 }
-/* W3 C17（修 P12）：音乐模式数拍入场大字——盖在 preview 条上（桌面=280 纵栏、移动=88 横条皆居中）。
-   编舞模式走 #stage-wrap>#countin-overlay 既有路径（该元素随 #editor-main 隐藏，无干扰） */
-#mp-countin{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;
-  font-size:56px;font-weight:800;color:var(--acc);pointer-events:none;
-  text-shadow:0 4px 30px rgba(0,0,0,.55);background:rgba(2,6,23,.18);border-radius:inherit}
-#mp-countin[hidden]{display:none}
 
 /* ---- 项目库 ---- */
 #library-view{display:flex;flex-direction:column;overflow:auto}
 .offline-note{display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 16px;font-size:12.5px;color:var(--dim);background:var(--bg3);border-bottom:1px solid var(--line)}
 .offline-note-x{border:0;background:none;color:var(--dim);font-size:16px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:6px}
 .offline-note-x:hover{color:var(--fg);background:var(--bg2)}
-.lib-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;position:sticky;top:0;background:var(--bg);z-index:5}
+/* build-58-manual3 F2/C-09a：标题行加入说明书大钮后，375px 窄屏放不下 brand+双钮——
+   lib-sub 移动端隐藏（hide-mobile）+ 本行允许换行兜底；桌面（≥1024）排布不变 */
+.lib-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;row-gap:8px;padding:16px 20px;position:sticky;top:0;background:var(--bg);z-index:5}
 .lib-brand{font-size:20px;font-weight:700}
 .lib-sub{font-size:13px;color:var(--dim);font-weight:400;margin-left:6px}
 .lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:6px 20px 30px}
@@ -177,10 +250,15 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 /* ---- 编辑器布局（移动优先） ---- */
 #editor-view{display:flex;flex-direction:column}
 #topbar{height:var(--tb-h);display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line);background:var(--bg2);flex:none}
+/* build-66-mobileux F2：顶栏两段结构——#topbar-scroll=滚动段（桌面无 overflow：flex/gap/对齐
+   与旧「#topbar 直挂子元素」同构，单行照旧）；#ui-mode-seg=固定段 flex:none 恒可见
+   （移动端不随横滚消失；.seg 基础规则本就 flex:none，显式重申两段契约） */
+#topbar-scroll{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:8px}
+#ui-mode-seg{flex:none}
 .title-input{background:transparent;border:1px solid transparent;font-weight:600;max-width:280px;min-width:60px}
 .title-input:hover,.title-input:focus{background:var(--bg3);border-color:var(--line)}
 #editor-main{flex:1;display:flex;min-height:0;position:relative}
-#left-panel{display:none;flex-direction:column;width:180px;border-right:1px solid var(--line);background:var(--bg2);flex:none;min-height:0}
+#left-panel{display:none;flex-direction:column;width:150px;border-right:1px solid var(--line);background:var(--bg2);flex:none;min-height:0} /* build-56 F1：180→150（舞台多占一列宽；chip 100% 自适应不受累） */
 .panel-head{padding:10px 12px 6px;font-weight:600;font-size:13px}
 .panel-foot{padding:8px;border-top:1px solid var(--line);display:flex;gap:6px}
 #formation-list{flex:1;overflow-y:auto;padding:4px 8px;display:flex;flex-direction:column;gap:6px}
@@ -210,7 +288,6 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 #stage-tools{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line);background:var(--bg2);flex-wrap:wrap;flex:none}
 #stage-wrap{flex:1;position:relative;min-height:0;overflow:hidden;background:#0b1220}
 #stage-canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
-#countin-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:120px;font-weight:800;color:var(--acc);text-shadow:0 4px 30px rgba(0,0,0,.6);pointer-events:none}
 
 /* F-11（UX-11/16）：iOS 长按 loupe/文本放大镜与 Android 长按呼出显式抑制；
    编辑面禁文本选择（拖拽跨面零泄露、双击面板不再误选文字），输入控件显式豁免（保留拖选/复制） */
@@ -230,26 +307,39 @@ input:focus,select:focus{outline:1px solid var(--acc)}
 .prop-row input[type=number]{width:70px}
 .prop-row input[type=text]{width:100%}
 .prop-row input[type=color]{padding:0;width:34px;height:26px}
+/* build-61-stageaspect F2：场地预设钮高亮——命中档 accent 描边+着色（其余沿用 .btn.small） */
+.stage-preset{flex:none}
+.stage-preset.active{border-color:var(--acc);color:var(--acc);font-weight:600;box-shadow:0 0 0 1px var(--acc)}
 textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px}
 
 /* ---- 底部播放条/时间线 ---- */
 #bottom-area{border-top:1px solid var(--line);background:var(--bg2);flex:none}
 #playbar{height:var(--pb-h);display:flex;align-items:center;gap:8px;padding:0 10px}
 #pb-pos{min-width:52px;text-align:center}
+/* build-65-mobilepb F2：#pb-row2=循环/节拍器的行 2 容器。桌面 display:contents——两个
+   .ctl label 直接参与 #playbar flex（与容器引入前逐像素同布局，桌面零变化）；
+   移动端（≤1023.5px，见下方媒体查询）改 flex-basis:100% 强制换行为第二行 + 内部横滚。 */
+#pb-row2{display:contents}
+/* build-66-mobileux F1：循环/节拍器图标 toggle 按钮（原裸 checkbox）——桌面=图标+.pb-txt 文字
+   （.btn.small 尺度，图标与文字 gap 4px）；选中态沿用 .btn.toggled-on（accent 描边+着色），
+   状态源 aria-pressed（main.js setPbToggle 同步类与属性） */
+.pb-toggle{gap:4px;flex:none}
 #timeline-area{border-top:1px solid var(--line)}
-#block-ctl{display:flex;align-items:center;gap:10px;padding:4px 10px;border-bottom:1px dashed var(--bg3);flex-wrap:wrap}
+#block-ctl{display:flex;align-items:center;gap:10px;padding:4px 10px;border-bottom:1px dashed var(--bg3);flex-wrap:nowrap}
+/* build-83 单行钉死：秒值变宽（8s→12.4s）曾越过 wrap 阈值整行折行——nowrap 后由块名弹性
+   吸收（flex 收缩 + 省略号），行高恒定不再跳；桌面名称预算放宽 140→240（移动端单行压缩规则在下方 build-67 块）。 */
 #block-ctl .bc-label{font-size:12px;color:var(--acc);font-weight:600}
-#block-ctl .bc-name{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#block-ctl .bc-name{flex:1 1 auto;min-width:24px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #block-ctl .bc-val{min-width:70px;text-align:center;display:inline-block;background:var(--bg3);border-radius:6px;padding:2px 6px}
 #block-ctl .btn.step{padding:0 9px;line-height:20px;font-size:14px}
-/* ⚑ 打点与 ± 步进同高（避免行高变化挤压舞台几何——D-08 类像素仪器对布局位移敏感） */
-#block-ctl #btn-tag-drop{padding:0 9px;line-height:20px;font-size:14px}
-/* 对齐到播放头（W2 自摘要条迁入块栏）：与打点/步进同高，同口径防行高位移 */
+/* 对齐到播放头（W2 自摘要条迁入块栏）：与步进同高，同口径防行高位移
+   （build-55-uiclean P1-1：原「⚑ 打点」同高规则随按钮退役） */
 #block-ctl #btn-align-playhead{padding:0 9px;line-height:20px;font-size:14px}
 /* 图标化几何补偿（汇合轮）：⚑→SVG 后按钮宽 +7.6px，375px 视口 #block-ctl 行内放不下 flex
    spacer → spacer 独占一行令整条高 10px（舞台画布随之变矮，L2 移动端几何/半径基线依赖旧值）。
-   移动端 spacer 本为 0.7px 视觉空隙，隐藏之恢复单行布局（与图标化前逐像素一致）。 */
-@media (max-width:1023.5px){#block-ctl .spacer{display:none}}
+   build-67-mobilestage 退役注：旧兜底「移动端隐藏块栏 spacer 防折行」的媒体规则随行 A 单行化
+   （下方 build-67 块 #block-ctl 单行 nowrap）按构造失效——spacer 回归 .spacer{flex:1} 基础语义，
+   作行尾「索引/⌄」前弹性撑杆（task 行 A 构成「…+ spacer + 索引 + ⌄」），规则本体退役。 */
 #music-strip{display:flex;flex-direction:column}
 /* ---- W2 C14 编舞模式音乐摘要条（30px 单行）----
    替代「🎵 音乐与节拍」折叠面板（C1 退役，原 summary 25px + audio-panel 78px）：
@@ -281,6 +371,38 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
   #music-summary::-webkit-scrollbar{display:none}
   #music-summary .ms-name{max-width:150px}
 }
+/* ===== build-67-mobilestage F1/F2：移动端底部区压缩为两行（≤1023.5；桌面 ≥1024 零变化） =====
+   行 A #block-ctl ≈42px：块名 + 保持± + 过渡± + spacer + 索引 + 折叠⌄（单行 nowrap——
+     旧「wrap 折两行 75px」根治面；收纳项：块时长 label/vsep/保持·过渡词标(.ctl-lbl)/
+     值秒后缀(.bcv-sec)；对齐到播放头/连续时长/说明文字沿用既有 .hide-mobile；spacer 由
+     上方退役注回归 flex 撑杆）。行宽预算（375，±钮 0 7px、值 12px/min36）：词标隐藏后
+     双 ctl ≈94×2 + 索引 46 + ⌄ 33 + 间距 20 ≈ 287 → 块名余 ~70px ellipsis（title 兜底全名）。
+     行高预算：.btn.small 移动 6+6+19+2=33 → 4+33+4+1=42 ≤ 48。
+   行 B #music-summary ≈34px：♪ 资产名(ellipsis 撑满)+BPM 只读元 + 「编辑音乐 →」恒驻行尾；
+     收纳：点拍/试听/校准▸/tag 计数/拍刻度/缩放组（音乐域工具，编舞只读摘要移动端不需要——
+     「编辑音乐 →」进音乐模式后工具条承接；tag 跳转列表经行 A「索引」钮仍一键可达）。
+     行高预算：33 + 边框 1 = 34 ≤ 40。省出高度经 flex 直返舞台（#stage-wrap flex:1 自适应）。
+   F2 断点穿越：本块全部纯 CSS 断点规则——跨 1023.5 双向自动套/退，无 JS 状态、无渲染链残留
+     （桌面规则一字未动；#tl-scroll 移动 120 基线 = 多轨区不动）。 */
+@media (max-width:1023.5px){
+  /* ---- 行 A：块时长条单行 ---- */
+  #block-ctl{flex-wrap:nowrap;gap:4px;padding:4px 8px;overflow-x:auto;scrollbar-width:none} /* nowrap 单行；overflow 兜底 C-09a */
+  #block-ctl::-webkit-scrollbar{display:none}
+  #block-ctl .bc-label,#block-ctl .vsep,#block-ctl .ctl-lbl,#block-ctl .bcv-sec{display:none}
+  #block-ctl .bc-name{min-width:0;max-width:none} /* 撑余量唯一弹性项（overflow 已 hidden，ellipsis 不破行） */
+  #block-ctl .bc-val{min-width:36px;padding:2px 4px;font-size:12px}
+  #block-ctl .btn.step{padding:0 7px}
+  /* ---- 行 B：音乐摘要极简 ---- */
+  #music-summary .vsep,#music-summary .spacer{display:none} /* ms-name flex 撑满后 spacer 无职责 */
+  #music-summary .ms-name{flex:1 1 auto;max-width:none} /* 覆盖上方 150px 帽（极简版行内余量全给资产名） */
+  #music-summary #btn-tap,
+  #music-summary #btn-offset-test,
+  #music-summary #calib-disc,
+  #music-summary #ms-tags,
+  #music-summary #tl-zoom-out,
+  #music-summary #tl-zoom-in,
+  #music-summary #tl-zoom-fit{display:none} /* #ms-edit「编辑音乐 →」不在列=行尾恒驻（编舞→音乐主入口）；拍/秒切换钮已随 build-77-expux 移除 */
+}
 /* C12 空态（W2 合并）：一行灰字浮于音频简单道上，点击跳音乐模式；旧双钮已退役 */
 #tl-audio-empty{position:absolute;left:10px;z-index:7;display:flex;align-items:center;color:var(--dim);font-size:12px;cursor:pointer;user-select:none}
 #tl-audio-empty:hover{color:var(--acc)}
@@ -290,8 +412,11 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
    轨头 sticky 左缘固定，canvas 从轨头列右缘起绘，物理无重叠（遮挡/错位按构造消失）。
    W1 退役：#tl-audio-toggle 展开钮与 #tl-head 展开态表头样式随 DOM 一并删除（C6/C7）。
    W2（C12）：#tl-audio-empty 由「＋载入/媒体库」双钮改为一行灰字（样式见 #music-summary 区块）。 */
-#tl-body{position:relative}
-#tl-scroll{overflow:auto;height:150px;position:relative} /* 实际高度由 timeline.render 按 简单150/移动120 写入；music 模式 height:100%+纵横滚 */
+/* build-51-stageux F4：#tl-body 改纵向 flex——#tl-scroll 之下常驻 16px 概览导航条 #tl-nav；
+   编舞模式 #tl-scroll 高仍由 render 写行内值（build-56 F1 起 112 基线/114 地板、120 移动、160 富余域），音乐模式高度改 flex
+   撑满（原 height:100% 在有 16px 兄弟条时会溢出裁切，flex 撑满 + 容器实测推导语义不变）。 */
+#tl-body{position:relative;display:flex;flex-direction:column}
+#tl-scroll{overflow:auto;height:112px;position:relative} /* build-56 F1：缺省占位 150→112（实际高度由 timeline.render 按 stage 基线 112/内容地板 114、移动 120 写入；music 模式 flex 撑满+纵横滚） */
 /* #tl-inner = lane 区 flex 兄弟列（M2 修 build-37-headerfix）：宽由 timeline.render 按 W 显式写入
    （两 canvas 均 absolute、无内在尺寸，缺省宽 0 → .tl-grid 不含画布、滚动量程靠溢出撑出的旧结构
    已退役）；flex:none 防伸缩，轨头列 + lane 区并排构成 .tl-grid 的全部内容宽（headW + W 按构造） */
@@ -301,9 +426,40 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
    行距只用「track+track 12px」兄弟 margin（不用容器 row-gap）——ops 行紧贴末行，
    与画布「末 lane 底 + ops 26px」逐像素同构（旧浮层 12px 错位 E58-08 按构造消失） */
 .tl-grid{display:flex;min-width:100%;width:max-content}
+/* build-46-layout F2：轨头列侧边栏化——sticky 列本就是绝对定位后代（含 sticky）的包含块，
+   #tlh-grip（右缘拖宽 96–240，wuzhen:trkHeadW）与 #tlh-collapse（收起=16px 细条，
+   wuzhen:trkHeadClosed）绝对定位于其上。列宽变化经 headWidth()→laneVisibleW 既有读数链路
+   生效（收起态 offsetWidth=16，laneVisibleW 自动吃余量，zoomAt/zoomCenter 锚定公式不变）。
+   仅音乐模式呈示（syncAudioDom hidden 门控），编舞模式零变化（E-12）。 */
 #tl-tracks-head{position:sticky;left:0;z-index:5;width:148px;flex:none;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;font-size:11px;overflow:hidden}
+#tlh-grip{position:absolute;right:0;top:0;bottom:0;width:6px;cursor:col-resize;touch-action:none;z-index:7}
+#tlh-collapse{position:absolute;right:0;top:0;width:16px;height:20px;padding:0;line-height:16px;font-size:10px;background:var(--bg2);border:0;border-bottom:1px solid var(--line);color:var(--dim);z-index:7}
+#tlh-collapse:hover{color:var(--acc)}
+/* height 塌缩根治：收起态内容行全部 display:none 后，列高（auto=内容高）归 0——细条不可见
+   不可点（验收反馈「收起后找不到打开通道」的最终根因）。作为 .tl-grid flex 行的交叉项
+   stretch 到 lane 区同高；sticky 列随纵滚同滚不变 */
+#tl-tracks-head.tlh-collapsed{width:18px;height:auto;align-self:stretch;cursor:pointer}
+/* 收起态重开通道（验收反馈「收起后找不到打开」根治）：收起钮拉成全高细条按钮，
+   竖排「音轨」标签提示身份；整条点击兜底重开在 wireTracksHeadChrome 的 box 级监听 */
+#tl-tracks-head.tlh-collapsed #tlh-collapse{position:absolute;top:0;bottom:0;left:0;right:0;width:auto;height:auto;
+  display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 0;
+  border-bottom:none;border-right:1px solid var(--line)}
+#tl-tracks-head.tlh-collapsed #tlh-collapse::after{content:'音轨';writing-mode:vertical-rl;letter-spacing:3px;font-size:10px}
+#tl-tracks-head.tlh-collapsed .tlh-corner,
+#tl-tracks-head.tlh-collapsed .tlh-corner2,
+#tl-tracks-head.tlh-collapsed .tlh-track,
+#tl-tracks-head.tlh-collapsed .tlh-ops{display:none}
+#tl-tracks-head.tlh-collapsed #tlh-grip{display:none}
 #tl-tracks-head .tlh-corner{height:22px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 6px;color:var(--dim);font-size:10px}
-#tl-tracks-head .tlh-corner2{height:28px;flex:none;border-bottom:1px solid var(--line)}
+/* corner2 = tag 层区（build-48-tagui F4）：高=28px×显式层数（行内样式写入），与画布划分轨
+   逐行对齐；每行=层号·tag数 + 删层钮，末行附「＋层」。音频行 1:1 对齐不变式不破（区高=画布
+   划分轨高按构造成立）。基高 28px=单层缺省（层数 1 时与旧版逐值一致） */
+#tl-tracks-head .tlh-corner2{height:28px;flex:none;border-bottom:1px solid var(--line);display:flex;flex-direction:column}
+#tl-tracks-head .tlh-lvl{flex:none;height:28px;display:flex;align-items:center;gap:3px;padding:0 4px;min-width:0}
+#tl-tracks-head .tlh-lvl + .tlh-lvl{border-top:1px solid var(--line)}
+#tl-tracks-head .tlh-lvl-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:10px}
+#tl-tracks-head .tlh-lvl .btn{padding:0 4px;line-height:16px;font-size:10px;flex:none}
+#tl-tracks-head .btn[aria-disabled="true"]{opacity:.35}
 #tl-tracks-head .tlh-track{flex:none;border-bottom:1px solid var(--line);padding:2px 6px;display:flex;flex-direction:column;justify-content:flex-start;gap:2px;overflow:hidden}
 #tl-tracks-head .tlh-track + .tlh-track{margin-top:12px}
 #tl-tracks-head .tlt-row{display:flex;align-items:center;gap:3px;min-width:0}
@@ -314,22 +470,53 @@ textarea.note{width:100%;min-height:54px;resize:vertical;background:var(--bg3);b
 #tl-tracks-head .btn:disabled{opacity:.35}
 #tl-tracks-head .tlt-mut.toggled-on{color:var(--acc)}
 #tl-tracks-head .tlh-ops{flex:none;height:26px;display:flex;align-items:center;gap:4px;padding:0 6px;border-top:1px solid var(--line)}
-/* 移动端 375：轨头列收窄（仅轨名+静音——音量/信息/删轨/加轨文字收纳） */
+/* 移动端 375：轨头列收窄（仅轨名+静音——音量/信息/删轨/加轨文字收纳）；拖宽 grip 收纳
+   （宽度记忆仅桌面形态生效，移动恒 96px 防横溢）；tag 层区小字紧凑不横溢（C-09a） */
 @media (max-width:1023.5px){
   #tl-tracks-head{width:96px}
   #tl-tracks-head .tlt-del,#tl-tracks-head .tlt-vol,#tl-tracks-head .tlt-info{display:none}
   #tl-tracks-head .tlh-ops .btn{font-size:10px;padding:0 3px}
+  #tl-tracks-head .tlh-lvl{padding:0 2px;gap:2px}
+  #tl-tracks-head .tlh-lvl-name{font-size:9px}
+  #tl-tracks-head .tlh-lvl .btn{padding:0 2px;font-size:9px;line-height:14px}
+  #tlh-grip{display:none}
 }
 /* 音频剪辑右键菜单（与 .unit-menu 同风格，固定定位跟光标） */
 #clip-ctx-menu .um-btn{display:block;width:100%;text-align:left}
 #clip-ctx-menu .ctx-swatches{display:flex;gap:4px;padding:4px 6px}
 #clip-ctx-menu .ctx-sw{width:18px;height:18px;border-radius:4px;border:1px solid var(--line)}
 /* F-02（UX-02）：时间轴画布禁浏览器手势接管——pan-x 会让块边缘横向拖拽仍被滚动接管
-   （横拖主导轴判定），none 才能让 scrub/块拖在触摸端可用；容器横滚改由滚轮/按钮/缩放承担 */
-#tl-canvas{touch-action:none}
+   （横拖主导轴判定），none 才能让 scrub/块拖在触摸端可用；容器横滚改由滚轮/按钮/缩放承担。
+   build-44 D2：补禁长按系统级选择/放大镜（touch-callout）——长按弹剪辑菜单为自实现，
+   iOS 原生 callout 不参与也不得抢按。画布本无可选文本，编舞模式观感零变化（红线 E-12）。 */
+#tl-canvas{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #tl-overlay{pointer-events:none}
+/* build-44 D1-b：#tl-scroll 细横滚条常显——双指平移（JS 驱动）之外给横滚能力以可见可拖的
+   实体。build-81 起放开到全模式（原仅 [data-uimode="music"]）：编舞模式同为 overlay 滚动条
+   环境，闲置时完全隐形（用户实测「滚动条不见了」），常驻细条是两模式一致的可见滚动面。 */
+#tl-scroll{scrollbar-width:thin;scrollbar-color:var(--dim) transparent}
+#tl-scroll::-webkit-scrollbar{width:12px;height:12px} /* build-83：加高 8→12（移动端底部手势区避让+易拖） */
+#tl-scroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+#tl-scroll::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+#tl-scroll::-webkit-scrollbar-corner{background:transparent}
 /* 时间轴 tag 道内联命名输入（打点/重命名）：钉在 tag 道（尺规 22px 之下），随 #tl-inner 横向滚动 */
 .tl-tag-input{position:absolute;top:23px;left:0;z-index:6;width:110px;font-size:12px;line-height:1.4;padding:1px 5px;border-radius:5px;background:var(--bg2)}
+/* build-47 标记编辑 popover（_openTagInput 升级，复用 .unit-menu 骨架 + fixed 定位）：
+   名称/拍值/小节数一行一组，定位由 JS 钳制在视口内（移动端可达）；旧 .tl-tag-input 保留不拆（可回） */
+.tl-tag-pop{position:fixed;z-index:150;min-width:200px;max-width:min(280px,calc(100vw - 16px))}
+.tl-tag-pop .um-row{align-items:center}
+.tl-tag-pop input,.tl-tag-pop select{background:var(--bg3);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:4px 6px;font-size:12px;min-width:0}
+.tl-tag-pop input[type="text"]{flex:1;width:110px}
+.tl-tag-pop input[type="number"]{width:64px}
+/* build-47 暂隐（BPM 识别类功能收口：节奏/标记全交 tag 手动标注），可回——
+   呈示层在 index.html 已带内联 display:none，此处按 id 再兜一道（防内联被误删后意外显形）；
+   回滚=删掉本规则与 index.html 两处内联样式/注释，DOM 与 JS 处理器均未拆 */
+#btn-tap-music,#auto-seg-dd{display:none}
+
+/* build-49-tagregion BPM 全面退场，可回——音乐模式工具条 BPM 输入/首拍输入/小节 select/
+   试听/拍刻度切换 仅藏呈示（index.html 内联 display:none + 本类兜底），DOM 与 JS 处理器
+   原样保留；当前以时间轴（秒）为唯一对齐规范。回滚=删掉内联样式与本规则 */
+#music-toolbar .b49-exit{display:none}
 
 /* ---- 移动端队形索引条 ---- */
 #formation-index{display:none}
@@ -367,7 +554,7 @@ body[data-mtab="formations"] #tl-scroll{display:none}
   #mobile-tabs{display:none}
   #left-panel,#right-panel{display:flex !important;position:static;width:180px}
   #right-panel{width:250px}
-  #left-panel{width:180px}
+  #left-panel{width:150px} /* build-56 F1：桌面左列 150（与基础规则一致；移动端 mtab 全屏层不受累） */
   #stage-tools{flex-wrap:nowrap;overflow-x:auto}
 }
 
@@ -392,19 +579,32 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .chip.chip-on{border-color:var(--acc);color:var(--acc);font-weight:600}
 .roster-groups{max-width:190px}
 .roster-groups .chip{margin:1px 2px 1px 0}
+/* build-75-rosterchip：编组列收敛——行内仅已加入芯片 + 「＋」弹层（挂 body 的 fixed 选单） */
+.roster-add{min-width:26px;text-align:center;padding:1px 7px}
+.roster-pop{position:fixed;z-index:110;background:var(--bg2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:6px;display:flex;flex-direction:column;gap:4px;min-width:150px}
+.roster-pop>button{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--fg);text-align:left;white-space:nowrap}
+.roster-pop>button:hover{border-color:var(--acc);color:var(--acc)}
+.roster-pop .rp-new{display:flex;gap:4px;margin-top:2px}
+.roster-pop .rp-new input[type=text]{flex:1;min-width:96px;font-size:12px;padding:3px 6px}
+.roster-pop .rp-new button{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--fg);white-space:nowrap}
+.roster-pop .rp-new button:hover{border-color:var(--acc);color:var(--acc)}
 
-/* ---- 说明书（manual 页签 + 移动端全屏覆盖层） ---- */
-/* 页签：独立 .mtab（不计入 .ptab——E2E 仪器断言既有四页签数量），视觉与 .ptab 平齐；
-   5 个页签挤 250px 面板：收窄横向内边距 + .mtab 缩字号防换行裁切 */
+/* ---- 说明书（顶栏「说明书」钮 → 全屏覆盖层；build-55-uiclean P2 起页签容器退役） ---- */
+/* 页签恰 4 个（队形/舞台/样式/编组）：收窄横向内边距保持四签 250px 面板不裁切 */
 .panel-tabs .ptab{padding:9px 0}
-.mtab{flex:1.35;background:none;border:0;padding:9px 0;color:var(--dim);border-bottom:2px solid transparent;font-size:11.5px;white-space:nowrap}
-.mtab.active{color:var(--fg);border-bottom-color:var(--acc)}
 .manual{display:flex;flex-direction:column;gap:12px;font-size:13px;line-height:1.55}
 .manual .man-head .man-ver{display:inline-block;font-size:11px;color:var(--acc);border:1px solid var(--acc);border-radius:999px;padding:1px 8px;margin-bottom:6px}
 .manual .man-head .man-intro{margin:0;color:var(--fg)}
 .manual .man-scene{border:1px solid var(--line);border-radius:var(--rad);padding:10px;display:flex;flex-direction:column;gap:6px}
 .manual h3{margin:0;font-size:13.5px;color:var(--acc)}
 .manual .man-role{margin:0;color:var(--dim);font-size:12px}
+/* build-57-manual2：五幕 user story 版式——story 引用块（斜体+左侧强调线）、
+   标注要点行（与截图红框同文案同序）、延伸一行（dim）。旧 man-role 随七场景退役保留兜底。 */
+.manual .man-story{margin:0;font-style:italic;color:var(--fg);border-left:3px solid var(--acc);padding:2px 0 2px 10px;font-size:12.5px}
+.manual .man-flow{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.manual .man-flow li::marker{color:var(--acc);font-weight:600}
+.manual .man-annots{font-size:11px;color:var(--danger);margin-top:2px}
+.manual .man-more{margin:0;color:var(--dim);font-size:11.5px}
 .manual .man-steps{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
 .manual .man-steps li::marker{color:var(--acc);font-weight:600}
 .manual .man-figs{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
@@ -419,15 +619,43 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .manual .man-note{margin:0;color:var(--dim);font-size:11.5px}
 .manual .man-limits{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
 .manual .man-limits li::marker{color:var(--danger)}
-/* 移动端「更多」入口 + 全屏覆盖层 */
-.manual-entry{display:none}
+/* build-58-manual3 F1：板块卡片（name+where+steps 编号+example 斜体）——build-59-manual4 起承载于
+   附录 A「功能模块详解」（按幕分组 details 默认收起，summary 即展开钮），不再幕内展开；
+   板块说明引用对应幕图号（man-board-figref），截图不重排 */
+.manual .man-boards{border:1px solid var(--line);border-radius:var(--rad);background:var(--bg2);padding:6px 10px}
+.manual .man-boards summary{cursor:pointer;color:var(--acc);font-weight:600;font-size:12.5px;user-select:none}
+.manual .man-boards summary:hover{color:var(--fg)}
+.manual .man-board{border-top:1px dashed var(--line);padding:6px 0 2px;margin-top:6px}
+.manual .man-board:first-of-type{border-top:0;margin-top:4px}
+.manual .man-board-head{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.manual .man-board-name{font-weight:700;font-size:12.5px}
+.manual .man-board-figref{color:var(--dim);font-size:11px;font-weight:400}
+.manual .man-board-where{color:var(--dim);font-size:11.5px;margin:2px 0}
+.manual .man-board-steps{font-size:12px;gap:3px}
+.manual .man-board-example{margin:4px 0 0;font-style:italic;color:var(--fg);font-size:11.5px}
+/* build-58-manual3 F2/F3：说明书入口显著化——首页大钮（accent 边框+底色，hover 强化）与
+   顶栏钮（双模式恒显图标+文字，accent 描边，hover/active 补底色）主题色随 --acc 联动 */
+.lib-actions{display:flex;align-items:center;gap:8px}
+.btn.lib-manual{border:1.5px solid var(--acc);color:var(--acc);font-weight:600;background:var(--bg2)}
+.btn.lib-manual:hover{background:var(--bg3);box-shadow:0 0 0 1px var(--acc)}
+.btn.lib-manual:active{transform:translateY(1px)}
+.btn.lib-manual.first-run{animation:man-hint 1.6s ease-in-out infinite}
+@keyframes man-hint{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 5px var(--bg3)}}
+#btn-manual-open{border-color:var(--acc);color:var(--acc)}
+/* 双文案呈示（build-58）：桌面「说明书」、≤1023.5 短字「说明」——span 双显实测缺陷修复 */
+#btn-manual-open .man-lbl-short{display:none}
+@media (max-width:1023.5px){
+  #btn-manual-open .man-lbl-full{display:none}
+  #btn-manual-open .man-lbl-short{display:inline}
+}
+#btn-manual-open:hover,#btn-manual-open:active{background:var(--bg3);box-shadow:0 0 0 1px var(--acc)}
+/* 移动端顶栏短字「说明」（桌面「说明书」）——两模式都保留图标+文字，不再收成纯图标 */
+.only-mobile{display:none}
+/* 全屏覆盖层（build-55-uiclean P2：入口迁顶栏「说明书」钮，原右面板入口显示规则退役） */
 #manual-overlay{position:fixed;inset:0;z-index:120;background:var(--bg);display:flex;flex-direction:column}
 .manual-ov-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--bg2)}
 .manual-ov-title{font-weight:700}
 .manual-ov-body{flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch}
-@media (max-width:1023.5px){
-  body[data-mtab="more"] .manual-entry{display:block;width:100%;padding:11px 12px;background:var(--bg2);border:0;border-bottom:1px solid var(--line);color:var(--acc);font-weight:600;text-align:left}
-}
 
 /* ---- Toast ---- */
 #toasts{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:200;align-items:center;pointer-events:none}
@@ -442,17 +670,41 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 /* ---- 移动端紧凑化 ---- */
 @media (max-width:1023.5px){
   .hide-mobile{display:none !important}
+  .only-mobile{display:inline} /* build-58-manual3 F3：顶栏说明书钮移动端保留短字「说明」 */
 }
 @media (max-width:1023.5px){
   #topbar{gap:4px;padding:0 6px}
+  #topbar-scroll{gap:4px} /* build-66-mobileux F2：滚动段内部间距沿用顶栏紧凑值 */
   /* DEFECT-L2-3：375px 顶栏放不下版本徽标（~90px），是页面级横向溢出的根源
      （#btn-export right=405>375）；移动端隐藏后其余控件可全部收入视口。
      桌面端（≥1024px）不受影响，G1 门禁的可见版本徽标断言在 1280 宽下照常通过。 */
   #build-tag{display:none}
   .title-input{flex:1 1 40px;min-width:0;width:0;text-align:center;font-size:13px}
   .btn.small{padding:6px 10px} /* 触摸目标 */
-  #playbar{gap:5px;padding:0 6px;overflow-x:auto} /* DEFECT-L2-3：375px 下播放条固定内容右缘超宽（节拍器已移出至音乐面板，规则保留防回归），收敛为内部滚动（同 #stage-tools 模式） */
-  #pb-formation{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* build-65-mobilepb F3：--pb-h 移动端改两行总高 96px（44 行 1 + 4 行距 + 44 行 2 + 4 余量）。
+     同一变量是播放条高度（「底部播放条/时间线」段基础规则）与移动抽屉 bottom 锚（音乐抽屉媒体查询内
+     position:fixed 规则）的共同来源——抽屉/锚点随实际播放条高度自适应，无需另测元素高度。桌面（≥1024px）仍 44px。 */
+  :root{--pb-h:96px}
+  /* build-65-mobilepb F2 双行布局：整体 overflow-x 退役（DEFECT-L2-3 旧兜底收敛）——
+     行 1=主控行（⏮▶⏹⏭+时间+队形名+撑杆+速度）flex-wrap 前段，不可滚不可压缩、375 全可见；
+     行 2=#pb-row2（flex-basis:100% 强制换行），仅行 2 允许内部横滚。 */
+  #playbar{gap:5px;padding:0 6px;flex-wrap:wrap;align-content:center;row-gap:4px;overflow:visible}
+  /* build-65-mobilepb F1 主按钮触屏热区：play/stop 44px 底线（.btn.round 34px 被 min-* 抬高，
+     圆形随 min 尺寸放大），prev/next ≥40px；flex:none 防 flex 收缩压回 18px（旧实测缺陷）。 */
+  #pb-play,#pb-stop{min-width:44px;min-height:44px;flex:none}
+  #pb-prev,#pb-next{min-width:40px;min-height:40px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+  /* build-65-mobilepb F2：行 2 容器——满幅强制换行、内部横滚、44px 行高（触控行高与行 1 对齐） */
+  #pb-row2{display:flex;flex:0 0 100%;min-width:0;min-height:44px;align-items:center;gap:18px;overflow-x:auto;padding:0 2px}
+  /* build-65-mobilepb F2：行 2/速度 label 文字隐藏（只留控件 + label title 提示）——
+     「速度」「循环」「节拍器」文字退役为 .pb-txt span，桌面渲染不变（见上方行 2 容器 display:contents 注） */
+  #playbar .pb-txt{display:none}
+  #pb-speed{min-width:0}
+  /* build-66-mobileux F1：行 2 toggle 钮触屏热区 40px（图标居中；原 checkbox 20px 规则退役） */
+  .pb-toggle{min-width:40px;min-height:40px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center}
+  /* build-65-mobilepb F3 联动：toast 底锚随两行播放条抬高（旧 70px 会被 96px 播放条盖住
+     导出/变速提示）；锚同一 --pb-h 变量，桌面（44px 恒定）不受影响 */
+  #toasts{bottom:calc(var(--pb-h) + 12px)}
+  #pb-formation{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
   #stage-tools{gap:4px;padding:4px 6px;flex-wrap:nowrap;overflow-x:auto}
   .rot-ctl input[type=range]{width:64px}
   .lc-del{padding:8px}
@@ -478,3 +730,112 @@ body[data-mtab="formations"] #tl-scroll{display:none}
 .unit-menu .um-btn.um-cancel{border-color:var(--line);color:var(--dim)}
 
 .build-tag{font-size:10px;color:var(--dim);opacity:.7;margin-left:8px;user-select:none}
+
+/* ---- build-51-stageux F3：编舞模式三侧折叠（左列表列/右属性列/底部时间轴区） ----
+   折叠态只存在于 stage 模式：生效规则全部挂 #editor-view[data-uimode="stage"] 作用域——
+   切音乐模式后音乐布局恒按自身状态呈现（#right-sidebar/#bottom-area 不受 stage 折叠记忆
+   影响），记忆键（wuzhen:stageLeft/stageRight/stageBottom）保留、切回编舞即恢复。
+   列细条=38px 竖排字（队形/属性，整条点击重开——与轨头细条同纪律）；底部细条=28px「时间轴」。 */
+.panel-head{position:relative}
+#right-panel{position:relative}
+.col-fold{position:absolute;width:18px;height:22px;padding:0;line-height:20px;font-size:12px;
+  background:var(--bg2);border:1px solid var(--line);border-radius:6px;color:var(--dim);display:none;z-index:8}
+.col-fold:hover{color:var(--acc);border-color:var(--acc)}
+#lp-collapse{right:6px;top:8px}
+#rp-collapse{right:6px;top:6px}
+.col-strip{display:none;flex-direction:column;align-items:center;gap:8px;padding:10px 0;min-height:0;flex:1;
+  background:none;border:0;border-top:1px solid var(--line);color:var(--dim);font-size:11px;
+  writing-mode:vertical-rl;letter-spacing:4px;cursor:pointer}
+.col-strip:hover{color:var(--acc)}
+@media (min-width:1024px){
+  #editor-view[data-uimode="stage"] .col-fold{display:block}
+  #editor-view[data-uimode="stage"] #left-panel.lp-collapsed,
+  #editor-view[data-uimode="stage"] #right-panel.rp-collapsed{width:38px;min-width:38px}
+  #editor-view[data-uimode="stage"] #left-panel.lp-collapsed .panel-head,
+  #editor-view[data-uimode="stage"] #left-panel.lp-collapsed #formation-list,
+  #editor-view[data-uimode="stage"] #left-panel.lp-collapsed .panel-foot,
+  #editor-view[data-uimode="stage"] #right-panel.rp-collapsed .panel-tabs,
+  #editor-view[data-uimode="stage"] #right-panel.rp-collapsed .props-page{display:none}
+  #editor-view[data-uimode="stage"] #left-panel.lp-collapsed #lp-strip,
+  #editor-view[data-uimode="stage"] #right-panel.rp-collapsed #rp-strip{display:flex}
+}
+/* 底部折叠（⇄ 28px 细条）：折叠类 stage 作用域——编舞折叠只藏播放条以外的行（build-76
+   pbcollapse，播放条保留可用）；音乐模式 #bottom-area 恒按自身状态呈现（折叠类不串场）。
+   细条与折叠类由同一 apply 函数成对切换（bs-on/ba-collapsed）。 */
+#bottom-strip{display:none;align-items:center;justify-content:center;gap:6px;height:28px;flex:none;width:100%;
+  border-top:1px solid var(--line);background:var(--bg2);color:var(--dim);font-size:12px;cursor:pointer}
+/* build-73-syncui F2 折叠引导强化：细条 chevron 图标 + hover 提亮（色+底），title「展开…」在
+   HTML；展开态折叠钮 hover 同步补底色。 */
+#bottom-strip:hover{color:var(--acc);background:var(--bg3)}
+.col-strip{transition:color .12s,background .12s}
+.col-strip .chev,#bottom-strip .chev{flex:none}
+.col-strip:hover{color:var(--acc);background:var(--bg3)}
+.col-fold:hover{background:var(--bg3)}
+/* build-76-pbcollapse：编舞折叠保留播放条——ba-collapsed 不再整区隐藏，只藏播放条以外
+   的行（#ba-grip/块时长条行/时间轴），播放/速度/循环/节拍器照常可用；#bottom-strip 细条
+   仍作时间轴展开入口，叠于播放条之下（同一 apply 函数成对切换，bs-on/ba-collapsed 不变）。 */
+#editor-view[data-uimode="stage"] #bottom-area.ba-collapsed > :not(#playbar){display:none}
+#editor-view[data-uimode="stage"] #bottom-strip.bs-on{display:flex}
+
+/* ---- build-73-syncui F2：编舞三区拖拽调宽/高 grip ----
+   左列内缘/右列内缘 7px 竖向命中带、底区顶缘 7px 横向命中带（热区 > 视觉线：常态隐形，
+   hover/拖拽中亮 accent 短线）。生效面=桌面 ≥1024 且编舞模式（与折叠钮呈示同口径）；
+   折叠态 grip 随细条呈示自然失效（宽度固定 38px）；touch-action:none 保触屏可拖。
+   尺寸记忆键 wuzhen:stageLeftW/stageRightW/stageBottomH（与折叠键 stageLeft/Right/Bottom
+   独立存储）；双击 grip=清记忆复位。 */
+#left-panel,#bottom-area{position:relative}
+.stage-grip{position:absolute;display:none;z-index:30;touch-action:none}
+.stage-grip.grip-v{top:0;bottom:0;width:7px;cursor:col-resize}
+.stage-grip.grip-v::after{content:'';position:absolute;top:25%;bottom:25%;left:2px;right:2px;border-radius:3px;background:transparent;transition:background .12s}
+.stage-grip.grip-h{left:0;right:0;height:7px;cursor:row-resize}
+.stage-grip.grip-h::after{content:'';position:absolute;left:25%;right:25%;top:2px;bottom:2px;border-radius:3px;background:transparent;transition:background .12s}
+.stage-grip:hover::after,.stage-grip.dragging::after{background:var(--acc)}
+#lp-grip{right:-3px}
+#rp-grip{left:-3px}
+#ba-grip{top:-3px}
+@media (min-width:1024px){
+  #editor-view[data-uimode="stage"] .stage-grip{display:block}
+  /* 折叠态 grip 隐藏：折叠宽度固定 38px 不可拖（拖宽仅对展开列生效，wireStageGrips 同口径守卫） */
+  #editor-view[data-uimode="stage"] #left-panel.lp-collapsed #lp-grip,
+  #editor-view[data-uimode="stage"] #right-panel.rp-collapsed #rp-grip{display:none}
+  /* 底区自定义高（.ba-sized）：#timeline-area 放开纵向 flex，#tl-scroll 吃余高——
+     timeline.render 在 stage 模式写的行内高只作 flex-basis 基数，grow/shrink 照常接管
+     （音乐模式同款机制，渲染链零改动）。无 .ba-sized=完全既有布局。 */
+  #editor-view[data-uimode="stage"] #bottom-area.ba-sized{display:flex;flex-direction:column}
+  /* build-82-lanefix：编舞 ba-sized 的 flex 链补全——旧规则只把 #timeline-area 声明为 flex 项，
+     但 #bottom-area 自身是 block，flex 从未成立：area 高度=内容驱动（戳出用户拖定盒高 45px、
+     双指放大随内容振荡）。补 ba 的 flex 容器身份 + #tl-body flex 项 + overflow hidden，
+     #tl-scroll 盒高从此由用户拖定值经 flex 链派生（与内容写入零耦合）。 */
+  #editor-view[data-uimode="stage"] #bottom-area.ba-sized #timeline-area{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+  #editor-view[data-uimode="stage"] #bottom-area.ba-sized #tl-body{flex:1 1 auto;min-height:0;overflow:hidden}
+  #editor-view[data-uimode="stage"] #bottom-area.ba-sized #music-strip{flex:1 1 auto;min-height:0}
+  /* build-83：非折叠编舞底区排版收口——
+     ① 操作栈钉底：justify-content:flex-end 让余白落在画布与播放条之间（轨道/滚动条不向下
+        收缩，恒在底部固定区域）；ba-grip 绝对定位不受 flex-end 影响（仍钉顶缘）。
+     ② #tl-scroll 抬离底缘 6px：横滚条（12px 常显）随之上移，避开移动端底部手势区；
+        16px #tl-nav 仍居其下。 */
+  #editor-view[data-uimode="stage"] #bottom-area:not(.ba-collapsed){display:flex;flex-direction:column;justify-content:flex-end}
+  #editor-view[data-uimode="stage"] #tl-scroll{margin-bottom:6px}
+  #editor-view[data-uimode="stage"] #bottom-area.ba-sized #tl-scroll{flex:1 1 auto;min-height:0}
+}
+
+/* ---- build-51-stageux F4：时间轴底部导航滑块（视口概览条，两模式恒显） ----
+   #tl-scroll 之下 16px 概览条：拇指=当前可视窗口占全时域比例（≥24px 下限），拖动=平移，
+   点空白=视口中心跳转；内容不溢出=满宽禁用态（tlnav-off 减淡呈示）。原生细滚条保留不删
+   （概览导航不替代滚动能力）；触屏 touch-action:none（拖拇指不被浏览器滚动接管）。 */
+#tl-nav{position:relative;height:16px;flex:none;background:var(--bg);border-top:1px solid var(--bg3);
+  touch-action:none;user-select:none;-webkit-user-select:none;overflow:hidden}
+#tl-nav-thumb{position:absolute;top:2px;bottom:2px;left:0;width:100%;min-width:24px;border-radius:4px;
+  background:var(--line);cursor:grab;touch-action:none}
+#tl-nav-thumb:active{cursor:grabbing;background:var(--dim)}
+#tl-nav.tlnav-off{opacity:.5}
+#tl-nav.tlnav-off #tl-nav-thumb{background:var(--bg3);cursor:default}
+
+/* ---- build-60-videoexport：视频导出进度条（设置/进度/完成弹窗复用 .modal 既有骨架） ---- */
+.vexp-bar{height:10px;border-radius:6px;background:var(--bg3);overflow:hidden;margin-top:12px}
+.vexp-fill{height:100%;width:0%;border-radius:6px;background:#38bdf8;transition:width .15s linear}
+.vexp-meta{margin-top:8px;font-size:12px;color:var(--dim)}
+.vexp-preset{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.vexp-preset label{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.vexp-done-video{width:100%;max-height:46vh;background:#000;border-radius:8px;margin-top:4px}
+.vexp-note{margin-top:8px;font-size:12px;color:var(--dim)}

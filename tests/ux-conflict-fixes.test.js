@@ -72,17 +72,18 @@ function makeWorld() {
   return w;
 }
 
-// ---------- F-01：cancel 清 pointers 表与 pinch（UX-01 IR：cancel→新单指=PAN，无缩放跳变） ----------
-test('F01-1 平移中 pointercancel：pointers 表清空；新单指按下=PAN 而非 PINCH，零缩放', () => {
+// ---------- F-01：cancel 清 pointers 表与 pinch（UX-01 IR：cancel→新单指状态干净、无缩放跳变）
+// build-70 M4 注：单指空白=框选（原 PAN 路径退役）——cancel 后新单指按下=BOX 即新基线状态。 ----------
+test('F01-1 框选中 pointercancel：pointers 表清空；新单指按下=BOX 而非 PINCH，零缩放', () => {
   const w = makeWorld();
   w.down(0.2, 0.2, { touch: true, pointerId: 8 });
-  w.move(0.6, 0.2, { touch: true, pointerId: 8 }); // 晋升平移
-  assert.equal(w.machine.state(), 'PAN');
+  w.move(0.6, 0.2, { touch: true, pointerId: 8 }); // 拖框（M4：单指空白=框选）
+  assert.equal(w.machine.state(), 'BOX');
   assert.equal(w.machine.cancel(), true);
   assert.deepEqual(w.machine.debugPointers(), []); // 修复前残留 [8]
   // 同一根手指的「新触摸」：
   w.down(0.2, 0.2, { touch: true, pointerId: 9 });
-  assert.equal(w.machine.state(), 'PAN'); // 修复前=PINCH（脏指针凑成双指）
+  assert.equal(w.machine.state(), 'BOX'); // 修复前=PINCH（脏指针凑成双指）
   assert.deepEqual(w.machine.debugPointers(), [9]);
   w.move(2.2, 1.2, { touch: true, pointerId: 9 });
   w.up(2.2, 1.2, { touch: true, pointerId: 9 });
@@ -100,21 +101,22 @@ test('F01-2 PINCH 进行中 cancel：pointers 与 pinch 一并作废；残指抬
   assert.deepEqual(w.machine.debugPointers(), []); // 修复前残留 [7,8]
   w.up(2.4, 1, { touch: true, pointerId: 8 }); // 迟到的抬起（cancel 后本不应到来）
   assert.equal(w.machine.state(), 'IDLE');
-  // 后续新单指：正常 PAN，零缩放（无脏坐标跳变）
+  // 后续新单指：正常框选（M4），零缩放（无脏坐标跳变）
   const n = w.log.zooms.length;
   w.down(0.2, 0.2, { touch: true, pointerId: 9 });
   w.move(1.2, 0.2, { touch: true, pointerId: 9 });
-  assert.equal(w.machine.state(), 'PAN');
+  assert.equal(w.machine.state(), 'BOX');
   w.move(1.3, 0.2, { touch: true, pointerId: 9 });
   w.up(1.3, 0.2, { touch: true, pointerId: 9 });
   assert.equal(w.log.zooms.length, n);
 });
-test('F01-3 长按等待中 cancel：定时器解除（不再转 BOX/菜单）、pointers 清空、返回消费', () => {
+test('F01-3 舞者长按等待中 cancel：定时器解除（不再转菜单）、pointers 清空、返回消费', () => {
   const w = makeWorld();
-  w.down(0.2, 0.2, { touch: true, pointerId: 9 });
+  w.down(8, 2, { touch: true, pointerId: 9 }); // 命中舞者 E：PENDING + 长按布防
+  assert.equal(w.machine.state(), 'PENDING');
   assert.equal(w.machine.cancel(), true);
   assert.deepEqual(w.machine.debugPointers(), []);
-  w.advance(600); // 越过 lpMs=500：若定时器未解除将进 BOX（修复前后均应解除，防回归）
+  w.advance(600); // 越过 lpMs=500：若定时器未解除将弹菜单（修复前后均应解除，防回归）
   assert.equal(w.machine.state(), 'IDLE');
   assert.deepEqual(w.log.boxes, []);
   assert.deepEqual(w.log.menus, []);
@@ -163,14 +165,12 @@ function makeTL() {
     meta: { title: 't' }, dancers: [], groups: [],
     stage: { widthM: 10, depthM: 6, backstageM: 0, gridM: 0.5, snap: false, audience: 'bottom' },
     audio: { bpm: 120, beatsPerBar: 4, firstBeatSec: 0, name: '', durationSec: 40 },
-    timeline: {
-      blocks: [{ holdBeats: 16, travelBeats: 8 }, { holdBeats: 16, travelBeats: 8 }, { holdBeats: 16, travelBeats: 0 }],
-      countInBeats: 8, metronome: false,
-    },
+    timeline: { metronome: false },
+    // build-70 夹具迁移：旧 blocks [hold16+travel8 ×2, hold16] → clip [0,16)/[24,40)/[48,64)
     formations: [
-      { id: 'f1', name: 'A', color: '#64748b', positions: { a: { x: 1, y: 1 } }, merges: [] },
-      { id: 'f2', name: 'B', color: '#64748b', positions: { a: { x: 2, y: 1 } }, merges: [] },
-      { id: 'f3', name: 'C', color: '#64748b', positions: { a: { x: 3, y: 1 } }, merges: [] },
+      { id: 'f1', name: 'A', color: '#64748b', positions: { a: { x: 1, y: 1 } }, merges: [], startBeat: 0, lenBeats: 16 },
+      { id: 'f2', name: 'B', color: '#64748b', positions: { a: { x: 2, y: 1 } }, merges: [], startBeat: 24, lenBeats: 16 },
+      { id: 'f3', name: 'C', color: '#64748b', positions: { a: { x: 3, y: 1 } }, merges: [], startBeat: 48, lenBeats: 16 },
     ],
   };
   const cv = fakeEl(), ov = fakeEl(), sc = fakeEl();
@@ -185,6 +185,8 @@ function makeTL() {
       ripple: () => true,
       onSelectFormation: () => {},
       mutate: fn => { fn(proj); rec.muts++; },
+      // build-70 M2：clip 拖拽高频预览走 mutateQuiet（无历史），松手 commitEdit 收口
+      mutateQuiet: fn => { fn(proj); rec.muts++; },
       commitEdit: () => { rec.commits++; },
       seekBeat: b => { rec.seeks.push(b); },
     },
@@ -192,6 +194,9 @@ function makeTL() {
   // 手工布局字段（render() 需要真实 canvas 2D，node 内直接设定等价状态）
   tl.rulerH = 22; tl.blocksTop = 76; tl.blocksH = 36; tl.W = 800; tl.H = 120;
   tl.hoverSeg = 0; // 预置悬停态：hover 路径不触发 render（无 2D 上下文）
+  // build-70 M2：clip 拖拽路径（fcMove/clipL/clipR）每帧无条件 render——node 假 DOM 无 2D 上下文，
+  // 与 tag-ui2/wavezoom 同口径打桩（重绘次数不在本套件断言域内）
+  tl.render = () => {};
   const pps = tl.ppsOf(proj);
   const holdEdgeX = tl.secToX(8 * 0.5 * 2); // beat 16 × spb(0.5s) = 8s
   return { tl, cv, sc, proj, rec, holdEdgeX, pps };
@@ -208,10 +213,10 @@ test('F02-1 尺规 scrub 拖拽中 pointercancel：drag 立即置空（不卡死
   cv._hs.pointermove[0]({ clientX: 100, clientY: 94, pointerId: 5, pointerType: 'mouse' });
   assert.equal(rec.seeks.length, n);
 });
-test('F02-2 hold 边缘拖拽中 pointercancel：drag 置空，随后无按键 hover 不再改写块时长（数据损坏链关闭）', () => {
+test('F02-2 clip 右缘拖拽中 pointercancel：drag 置空，随后无按键 hover 不再改写 clip 时长（数据损坏链关闭）', () => {
   const { tl, cv, rec, holdEdgeX } = makeTL();
   cv._hs.pointerdown[0]({ clientX: holdEdgeX, clientY: 94, pointerId: 5, pointerType: 'touch' });
-  assert.deepEqual(tl.drag && tl.drag.kind, 'hold');
+  assert.deepEqual(tl.drag && tl.drag.kind, 'clipR', 'build-70 M2：块右缘=clipR（旧 hold 把手退役）');
   cv._hs.pointermove[0]({ clientX: holdEdgeX + 30, clientY: 94, pointerId: 5, pointerType: 'touch' });
   assert.equal(rec.muts, 1); // 拖拽中已一次 live mutate（预期内）
   cv._hs.pointercancel[0]();
@@ -221,13 +226,13 @@ test('F02-2 hold 边缘拖拽中 pointercancel：drag 置空，随后无按键 h
   assert.equal(rec.muts, 1); // hover 路过零改写（修复前：持续改写）
   assert.equal(rec.commits, 0); // 被打断的拖拽不再补提交
 });
-test('F02-3 鼠标基线不受影响：down→move→up 正常 mutate+commit（T4 对照组防回归）', () => {
+test('F02-3 鼠标基线不受影响：down→move→up 正常 mutateQuiet+commit（T4 对照组防回归）', () => {
   const { tl, cv, rec, holdEdgeX } = makeTL();
   cv._hs.pointerdown[0]({ clientX: holdEdgeX, clientY: 94, pointerId: 1, pointerType: 'mouse' });
   cv._hs.pointermove[0]({ clientX: holdEdgeX + 24, clientY: 94, pointerId: 1, pointerType: 'mouse' });
-  assert.equal(rec.muts, 1);
+  assert.equal(rec.muts, 1, '高频预览 mutateQuiet 恰一次');
   tl._up();
-  assert.equal(rec.commits, 1);
+  assert.equal(rec.commits, 1, '松手提交恰一条「调整队形段时长」历史');
   assert.equal(tl.drag, null);
 });
 

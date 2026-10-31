@@ -1,196 +1,213 @@
-// 说明书模块：面向舞蹈老师/创作人的「典型使用动线」阅读页。
-// 内容蓝本：docs/user-guide-flows.md（入口文案均为实测原文），精编为说明书体。
-// 复用：桌面右面板「说明书」页签（#props-manual）与移动端「更多」全屏覆盖层
-// （#manual-overlay）都调用 renderManual() 生成同一份内容。
-// 截图：js/manual-assets.js（由 scripts/manual-assets.json 单一事实源生成，真实拍摄）。
-//       汇合轮（图标化落地）已按当前界面重拍九图：按钮呈线性 SVG 图标（js/icons.js）。
-// Node 单测直接 import manualOutline()（纯数据、无 DOM 依赖）；renderManual 需要 DOM。
+// 说明书模块：「开场 + 五幕 + 附录」阅读页（build-59-manual4）。
+// 沿革：五幕 user story（build-57）→ 正文瘦身 + 板块卡片迁「附录 A · 功能模块详解」
+//   （build-59-manual4：js/manual-boards.js 唯一数据源，正文回基线 13656B×1.2 预算内）。
+// build-73-syncui：正文同步 build-72（同步后面/移出队形≠删名册/观众上/下候场区/4:3 缺省/
+//   检查更新/三区拖宽高）；截图 manual-shots-v5.mjs 重拍（标注自适应，镜头清单沿用 v4）。
+// 渲染顺序：开场 → 五幕（纯 story）→ 附录 A（功能详解）→ 附录 B（手势快捷键）→ 数据与限制。
+// 复用：顶栏/首页「说明书」钮 → 全屏覆盖层（#manual-overlay）调 renderManual()。
+// Node 单测直接 import manualOutline()/manualBoardGroups()/manualImageKeys()（纯数据、无 DOM 依赖）。
 import { h, iconHtml } from './ui.js';
 import { MANUAL_IMAGES, MANUAL_META } from './manual-assets.js';
+import { BOARD_GROUPS } from './manual-boards.js';
 
-// 正文内联图标：图标化改造（决策⑤）后，入口引用一律「SVG 图标 + 文字」，不再嵌 emoji 字符。
-// （LEGACY-CITE 历史原文引用区已随 W4 重拍收口退役：互锁的 manual.test.js/icons.test.js
-//   原文断言同轮移除，全文件 A 组 emoji 字符为零——历史原文可查 git 历史。）
+// 正文内联图标：入口引用一律「SVG 图标 + 文字」，不嵌 emoji 字符（icons.test.js A 组零回流钉住）。
 const ic = (name, size = 16) => iconHtml(name, size);
 
-// ---------- 内容骨架（纯数据，node 可测；渲染与内容分离） ----------
-// 每个场景：title=标题、role=适用角色一句话、steps=步骤清单（保留实测入口文案与手势）、
-// figs=对应截图（key 对应 manual-assets 与实拍状态）。
-const SCENES = [
+// ---------- 开场（一分钟看懂） ----------
+const INTRO = {
+  flow: [
+    `① 音乐导入 —— ${ic('music')} 「＋ 载入音乐」或媒体库导入演出曲`,
+    '② 音乐编辑 —— 裁剪、拼接多段，衔接处交叉淡化',
+    `③ 节奏划分 —— ${ic('flag')} 打点标段落与节奏（主歌/副歌/拍值）`,
+    `④ 队形编排 —— 排队形并对齐音乐，最后${ic('book')} 导出分发`,
+  ],
+  fig: {
+    key: 'overview',
+    annots: ['① 左栏 · 队形列表', '② 舞台画布', '③ 右面板 / 音乐侧栏', '④ 底部时间轴 + 导航滑块'],
+  },
+};
+
+// ---------- 五幕（每幕 = 一条 user story） ----------
+// figs[].annots 与截图红框标注一一对应（镜头脚本 manual-shots-v3.mjs 同源同文案）。
+const ACTS = [
   {
-    id: 'create',
-    title: '从零编创',
-    role: '编舞老师：从空白到第一份可排练的项目。',
+    id: 'import', no: 1, title: '音乐导入',
+    story: '作为编舞者，我要把演出音乐载入项目，以便按音乐排队形。',
     steps: [
-      '项目库点「＋ 新建项目」→ 填「项目名称」、选「初始方案」（标准 · 6 对（独立）/ 6 对 · 已组合 / 8 对 · 已组合 / 自定义）→「创建」进入编辑器，自动生成开场队形。',
-      '「生成队形…」选一种（多横排/一字横排/纵列/圆形/弧形/V 形/斜线/菱形），「编队粒度」可切「单人/仅男士/仅女士」；生成会整体替换当前队形。',
-      `微调：空白拖动框选 → 拖动移动（自动吸附网格）；「${ic('flip-h')} / ${ic('flip-v')}」镜像、「${ic('rotate')}」旋转滑杆、「均布」（框选 ≥3 人）、「朝向…」统一面向观众/面向圆心。`,
-      `合并单元：选恰好 2 人 →「合并为单元」；或把一人拖到另一人身上停住（约 1.5s）→ 浮窗选「胶囊 / 单编号」。双击单元 →「${ic('razor')} 拆开」随时还原。`,
-      '「＋ 新队形」（或按 D 键）复制当前队形插到下一段，逐段排完整支舞；动线变化靠插入中间帧表达；左栏拖缩略图调顺序。',
-      '顶栏「名册」改姓名/简称/角色/颜色、「重编号码」一键按序编；右面板「舞台」页「显示字段」切 编号序号/简称/姓名。',
+      '顶栏切「音乐」模式（或按 M）→ 工具条「＋ 载入音乐」选本地文件。',
+      '支持 mp3 / wav / m4a / aac / flac / ogg；载入即出波形并生成全长剪辑。',
+      '多首音乐走「媒体库」侧栏：＋ 导入音频、改名、拖到音轨落点生成剪辑。',
+      '「配乐」chip 标记当前播放用的资产；删除配乐会连同其剪辑一并移除。',
+      '音乐存在哪：只存本机浏览器，不跨设备——换设备需重载，或用「含音乐导出」带走。',
     ],
     figs: [
-      { key: 'editor' },
-      { key: 'roster' },
-      { key: 'groups' },
+      { key: 'music-import', annots: ['＋ 载入音乐', '媒体库页签', '资产行（拖入音轨）'] },
     ],
+    more: '延伸：离线单文件版重开浏览器后音乐需重选一次；重要节点建议导出含乐项目备份。本幕板块逐步详解见附录 A。',
   },
   {
-    id: 'edit',
-    title: '编辑修改 / 接手他人作品',
-    role: '编舞老师 / 接手老师：改既有项目的某一帧、换合并、调时长，或打开别人给的项目文件。',
+    id: 'music-edit', no: 2, title: '音乐编辑',
+    story: '作为编舞者，我要裁剪、拼接多段音乐，以便衔接处平滑过渡。',
     steps: [
-      '项目库点卡片打开（卡片右键菜单：打开 / 复制 / 删除）。',
-      '左栏或索引条选中目标队形帧——所有编辑只影响当前帧，其余帧不动。',
-      `改队形：拖动 / 生成器 / 镜像；换合并：双击（触屏长按）单元 → 浮窗「${ic('razor')} 拆开 / 胶囊 / 单编号 / 删除」。`,
-      `调时长：块时长栏「保持 −/＋」「过渡 −/＋」，或右面板「时间轴时长（拍）」直接输数，或时间轴拖块边缘（自动吸附整拍）。`,
-      `任何误操作：「${ic('undo')}」撤销（最多 60 步，松手即一条），「${ic('redo')}」重做。`,
-      '导入他人文件：「导出 ▾」→「导入项目文件…」→ 自动新建「原名（副本）」，不覆盖本地任何项目。',
-    ],
-    figs: [{ key: 'unit' }],
-  },
-  {
-    id: 'rehearsal',
-    title: '排练现场演示',
-    role: '排练助手：现场只播放、不改编，防误触。',
-    steps: [
-      `关「${ic('pencil')} 编辑」进入查看模式：舞台只读、随播放头对位，怎么点都改不了队形（再按一次或 E 键恢复编辑）。`,
-      `「${ic('play')}」（空格）播放：有音乐按音乐时钟，无音乐按虚拟时钟，都播完整条时间轴（数拍入场期间再按 ${ic('play')}/空格或按 Esc=取消倒计）；设了「数拍入场」则全屏倒数后起播。`,
-      `「${ic('skip-back')} / ${ic('skip-fwd')}」、索引条、时间轴切块；勾「循环」在当前队形段内打转；「节拍器」（播放条上）每拍一声；「速度」0.5–2×。`,
-      '时间轴尺规上点击/拖动 = 快速跳到任意时间点。',
-      '手机演示：底部「队形 / 舞台 / 更多」三 Tab；索引条直接切帧，条尾「＋ / －」直达加/删队形。',
+      'clip 区域块 = 一段剪辑：拖体移动，拖两缘修剪（Shift = 只移一边界）。',
+      '衔接：同轨两 clip 交叠自动配对交叉淡化，拖淡化把手调过渡时长；拖增益线调音量。',
+      `剃刀（${ic('razor')}）以播放线剪切选中的 clip；磁吸（S）吸附 clip 缘 / 播放头 / 零交叉。`,
+      '底部导航滑块拖动平移长曲；＋ / － 缩放、⤢ 整曲入画。',
+      '多轨铺排：轨头「＋ 加轨」；同一资产可拆多段跨轨使用，音量静音在轨头调。',
     ],
     figs: [
-      { key: 'playing' },
-      { key: 'mobile' },
-      { key: 'mobile-index' },
+      { key: 'music-edit', annots: ['clip 区域块', '工具条（磁吸/剃刀）', '导航滑块'] },
+      { key: 'music-clip-detail', annots: ['修剪缘', '淡化把手', '增益线', '波形'] },
     ],
+    more: '延伸：双击 clip 循环预览；右键 clip 出菜单（分割 / 删除 / Alt+Delete 波纹删除）。本幕板块逐步详解见附录 A。',
   },
   {
-    id: 'music',
-    title: '音乐适配',
-    role: '编舞老师：把队形时间轴对齐到真实比赛音乐。',
+    id: 'rhythm', no: 3, title: '节奏划分',
+    story: '作为编舞者，我要标记音乐段落与节奏，以便队形切换踩在音乐结构上。',
     steps: [
-      '音乐编辑在「音乐模式」做：顶栏「编舞 | 音乐」分段开关或按 M 切换——多轨时间轴占满主区，右栏「队形预览」小窗随播放头同步（可 ±1 拍步进、对齐到播放头；头部 ▾ 可折叠并记住状态）；按 M 或「编辑音乐 →」切回编舞。',
-      '载入音乐：「＋ 载入音乐」或「媒体库」（可管理多首、多 clip 自由拼接）——原单行面板的「载入音乐…」等入口已并入音乐工具条；剪辑手势：拖移/分割/修剪/淡化/磁吸（clip 两缘把手常驻，悬停显「拖动=修剪 · Shift=只移边界」提示），轨头可调音量与静音（详见时间轴手势速查）。',
-      '标 BPM（30–300）：直接输或「点拍」（连点 3 次起算，取最近 8 次平均）；「首拍」填音乐第一拍秒数，「试听」（从首拍前 2 秒播 4.5 秒）核对鼓点与小节线。BPM/首拍是音频对齐的校准参数，播放中也可改（音乐模式秒制走带，播放头秒位不跳）；仅「点拍」播放中锁定。',
-      '节奏划分：「打点」落段起点，「自动划分 ▾」可均分 N 段/按小节规则/导入段落表；段边界可拖、段可拆分合并换色；「索引」（⌘⇧L）开乐段索引面板，点段行/小节格直达该位置。',
-      `段落对齐：音乐模式或编舞模式选中目标队形 →「${ic('align-left')} 对齐到播放头」自动改前一段过渡；编舞模式底部摘要条呈示 BPM/tag 索引，点「编辑音乐 →」直达音乐模式。`,
-      '变速曲（非恒定 BPM）：音乐模式缺省即秒刻度（拍刻度可一键切回，选择按编舞/音乐模式分别记忆）；Alt+←/→ 播放头 ±0.5s 秒步进微调（有选中 clip 时改义为 clip 微移 ±0.1s）。',
-      `注意：BPM/首拍标错 = 整条时间轴错位，应用不做自动检测——务必用「试听」校对。播放条「${ic('skip-back')} / ${ic('skip-fwd')}」在音乐模式=跳上一个/下一个 clip 边缘（编舞模式=上一/下一队形）。手机/平板：音乐模式同样整屏多轨（底部横条预览当前队形），编舞模式摘要条不变。`,
+      `${ic('flag')} 「打点」在播放头落一个节奏区域；划分轨双击空白也可新建。`,
+      '区域块拖移、拖缘调界；同层不交叠（自动贴齐相邻区域）。',
+      '分层：轨头「＋ 加层」最多 3 层——L1 标大结构（主歌/副歌），L2 标细分乐句。',
+      '双击区域开编辑器：名称、拍值（3/4）、小节数（2小节）随手标注。',
+      '「索引」面板（侧栏页签 / ⌘⇧L）：按名称列段、显示节奏与秒区间，点行跳播放头。',
+      `编舞模式底部摘要条显示 tag；舞台 tag 道呈示最深层区域（${ic('flag')} 旗点可跳转）。`,
     ],
-    figs: [{ key: 'music' }],
+    figs: [
+      { key: 'rhythm-lane', annots: ['L1 结构层', 'L2 乐句层', '节奏标注', '区域接缝'] },
+      { key: 'index-music', annots: ['名称优先', '节奏 · 秒区间', '… 菜单', '▸ 层级折叠'] },
+    ],
+    more: '延伸：自动划分（均分 N 段 / 按小节规则 / 导入段落表）入口在音乐工具条，整表替换可撤销。本幕板块逐步详解见附录 A。',
   },
   {
-    id: 'share',
-    title: '分发与迁移',
-    role: '老师 ↔ 老师：交付编舞给别人或换设备。没有云同步——文件就是迁移介质。',
+    id: 'choreo', no: 4, title: '队形编排',
+    story: '作为编舞者，我要编排队形并对齐到音乐段落，以便整支舞段段踩着音乐走。',
     steps: [
-      '「导出 ▾」→「导出项目文件（含音乐）」（编舞+音乐一个文件）或「导出项目文件（不含音乐）」（轻量版，导入后可稍后重新载入音乐）；移动端优先弹系统分享面板。',
-      '接收方：「导出 ▾」→「导入项目文件…」→ 自动进入副本（含乐版音乐一并恢复），与本地项目互不干扰。',
-      '深链分享（在线渠道）：把项目 JSON 放到可公开访问的 https 地址，发「…/apps/wuzhen/index.html?import=<文件URL>」链接，点开即自动导入，刷新不会重复导入。',
-      '「当前队形 PNG」/「打印 / PDF（全部队形）」可出纸质走位图。',
-      '建议：定稿、赛前等重要节点都「导出 ▾」一份含乐 JSON 离机备份。',
+      '切回「编舞」模式：左栏队形列表逐段排队形，「＋ 新队形」复制当前帧。',
+      `舞台排点：拖动 / 框选 / 生成器 / ${ic('flip-h')} 镜像 / 旋转 / 均布 / 换位 / 朝向；「观众在下/在上」一键换视角，舞者可拖到候场区待场。`,
+      '长按 / 右键舞者菜单：「移出队形」只清当前帧（名册保留）；「同步后面/前面位置」把当前摆位带到前方/后方的队形（可限 N）。',
+      '底部块时长条：「保持 −/＋」「过渡 −/＋」调每段时长（±0.1 秒步进）；左/右栏与底区边缘可拖宽高。',
+      `「${ic('align-left')} 对齐到播放头」：把当前队形起点钉到音乐该段落起点（自动改前段过渡）。`,
+      '「显示…」下拉：幽灵（前后虚影）/ 路径 / 切帧预览按需开关。空格播放全检，直达曲尾逐段核对。',
     ],
-    figs: [{ key: 'export' }],
+    figs: [
+      { key: 'formation-stage', annots: ['队形列表', '排点工具', '块时长条', '属性细条'] },
+      { key: 'align', annots: ['对齐到播放头', '保持 / 过渡'] },
+    ],
+    more: '延伸：名册与编组、合并单元、AI 辅助编创（dancesport-choreo skill）见对应面板与文档。本幕板块逐步详解见附录 A。',
   },
   {
-    id: 'offline',
-    title: '离线 / 弱网赛场',
-    role: '任何人：赛场没网、弱网时照常工作。',
+    id: 'export', no: 5, title: '导出',
+    story: '作为编舞者，我要导出项目文件，以便备份、换设备或交给别人。',
     steps: [
-      '提前在有网时下载单文件版（FormationStudio-*.html），双击本地打开即可，全部功能同在线；首次会提示「离线版：项目数据保存在本浏览器（配乐不保留）」。',
-      '离线版例外：音乐只在当前会话有效，重开浏览器需重选一次（音频面板显示「（重新选择文件）」）；要音乐跟项目走，用「含音乐导出」。',
-      '弱网不用怕：已打开的页面纯本地计算，改动 400ms 内自动落盘，页面隐藏/关闭前强制落盘。',
-      '断网直接打开应用本体需要 HTTPS 托管（离线缓存机制）；当前在线入口若为 HTTP，断网即打不开——赛场请备下载版。',
+      '「导出 ▾」→「导出项目文件（含音乐）」：编舞 + 音乐一个文件，迁移即走。',
+      '「导出项目文件（不含音乐）」：轻量版；「导入项目文件…」自动进副本不覆盖本地，重载音乐即可。',
+      '「当前队形 PNG / 打印 PDF（全部队形）」可出纸质走位图。',
+      '应用更新：顶栏 / 项目库「检查更新」一键拉取最新版本；离线单文件版需重新下载。',
     ],
-    figs: [],
-  },
-  {
-    id: 'skill',
-    title: 'AI 辅助编创',
-    role: '编舞老师 × AI（dancesport-choreo skill）：AI 出候选，你拍板。',
-    steps: [
-      '「导出 ▾」→「导出项目文件（不含音乐）」把项目交给装了该 skill 的 AI 助手。',
-      'AI 出 2–4 个队形候选（带 SVG 图与分散度/对称度/移动量）和变换方案（带速度可行性分）；每次写入前自动存版本快照。',
-      '你挑候选、挑变体，AI 才写回项目文件；再「导入项目文件…」或点深链载入回本应用。',
-      '回 app 播放核对（见场景 3），不满意导出再来一轮，或直接手动改。',
-      '原则：人在回路——app 是唯一事实源；AI 只出候选，不一次性生成整支舞，艺术决策永远由你拍板。',
+    figs: [
+      { key: 'export', annots: ['含音乐 = 全量备份', '不含音乐 = 轻量'] },
     ],
-    figs: [],
+    more: '延伸：无云同步——文件就是迁移介质；赛场前务必带一份含乐 JSON 离机备份。本幕板块逐步详解见附录 A。',
   },
 ];
 
+// ---------- 附录：速查与限制（压缩版，只留表） ----------
 // 手势速查（桌面 vs 触摸/笔，最终语义）：[意图, 桌面, 触摸/笔]
 const GESTURE_ROWS = [
-  ['选中舞者', '左键单击（合并单元整单元入选）', `点按；「${ic('menu')} 多选」开启后点按=追加选择`],
-  ['追加/移出选择', 'Shift+单击', '多选模式点按（Shift 无效）'],
-  ['框选', '空白左键拖动', '笔/触屏长按空白 0.5s（起点出圆点标记）后拖动'],
-  ['移动舞者', '按住拖动（网格吸附；拖到他人身上松手或驻留 1.5s 弹合并浮窗）', '同左'],
-  ['单元浮窗（拆开/样式/删除）', '双击合并单元，或右键单元', '长按单元 0.5s'],
-  ['上下文菜单', '右键舞者（未合并=删除）', '长按舞者'],
-  ['平移视图', '中键拖动，或空格+左键拖动；横向滚轮/触控板横滑', '空白处拖动（未移动抬起=点按清空选择）'],
-  ['缩放', '滚轮 / 触控板捏合（以指针为中心）', '双指捏合'],
-  ['取消当前手势', 'Escape（拖动中=回滚到按下前，不产生历史）', '同左（系统接管时同样安全回滚）'],
-  ['队形列表重排', '拖拽缩略图', '长按缩略图 0.3s 拿起拖到目标位'],
-  ['时间轴', '点击/拖尺规=播放头；拖块边缘=调时长（吸附整拍）；Ctrl+滚轮=缩放', '同左'],
-  ['音频 clip（音乐模式）', '拖体=移动；两缘把手=修剪（Shift=只移边界；把手悬停显提示）；双击=循环预览；右键=clip 菜单', '同左（修剪缘命中放宽至 14px）'],
+  ['选中 / 框选', '左键单击；空白拖动=框选', `点按；「${ic('menu')} 多选」开启后点按=追加；长按空白 0.5s=框选`],
+  ['移动 / 合并', '按住拖动（网格吸附；拖到他人身上停 1.5s 弹合并浮窗）', '同左'],
+  ['单元浮窗 / 菜单', '双击合并单元，或右键', '长按单元 / 舞者 0.5s'],
+  ['平移 / 缩放', '中键或空格+拖动；滚轮（触控板捏合）', '空白拖动平移；双指捏合'],
+  ['队形列表重排', '拖拽缩略图', '长按缩略图 0.3s 拿起拖'],
+  ['时间轴', '点尺规=播放头；拖块边=调时长；Ctrl+滚轮=缩放', '同左'],
+  ['音频 clip（音乐模式）', '拖体=移动；缘把手=修剪；双击=循环预览；右键=菜单', '同左（修剪缘命中放宽 14px）'],
 ];
 // 键盘快捷键：[键, 作用]
 const KEY_ROWS = [
-  ['空格', '播放 / 暂停（按住期间若参与空格+拖动平移，则不触发）'],
-  ['E', `编辑锁开关（${ic('pencil')} 编辑）`],
-  ['D', '新队形（复制当前）'],
-  ['G', '切换网格吸附'],
-  ['F', '面向观众（全体或所选）'],
-  ['Delete / Backspace', '把所选移出当前队形（不删名册）；音乐模式选中 clip=删除剪辑（Alt+=波纹删除）'],
-  ['方向键', '微调位置 0.1m（吸附时=网格距）；Shift+方向键=1m；音乐模式选中 clip=微移 10ms（Shift=按拍网格）'],
-  ['1..9 / Shift+1..9', '选中编组 N / 追加选择编组 N'],
-  ['Ctrl/Cmd+1..9', '把当前选择存为编组 N（覆盖）。Safari 例外：Cmd+1..9 被浏览器保留切标签页——请用「编组」选项卡「选择」按钮'],
-  ['Ctrl/Cmd+Z / +Shift+Z / +Y', '撤销 / 重做'],
-  ['Ctrl/Cmd+K', '音乐模式：在播放头处分割选中 clip（无选中=切所有跨播放头的 clip）'],
-  ['Ctrl/Cmd+Shift+L', '乐段索引面板开/关（段名/拍位/秒位目录 + 段内小节格，点击行跳转播放头）'],
-  ['Escape', '取消手势 / 关浮窗 / 清空选择 / 退出剃刀'],
-  ['M', '编舞模式/音乐模式互切（播放/数拍中禁止，暂停后可切）'],
-  ['Alt+←/→', '播放头 ±0.5s 秒步进（变速曲不依赖拍线的对齐微调；音乐模式配秒刻度使用）；音乐模式有选中 clip 时=clip 微移 ±0.1s'],
-  ['S / R', '磁吸开关 / 剃刀模式（鼠标悬停音频轨时生效；音乐工具条也有同款按钮）'],
+  ['空格', `播放 / 暂停；${ic('play')} 起播`],
+  ['E / D', `编辑锁开关（${ic('pencil')} 编辑）/ 新队形（复制当前）`],
+  ['M', '编舞 ↔ 音乐模式互切（播放中禁止，暂停后可切）'],
+  ['G / F', '网格吸附开关 / 面向观众（全体或所选）'],
+  ['S / R', `磁吸开关 / 剃刀单发剪切（音乐模式）`],
+  ['Ctrl/Cmd+K', '音乐模式：以播放线剪切选中的 clip'],
+  ['Ctrl/Cmd+Shift+L', '乐段索引面板开/关'],
+  ['Delete / 方向键', '移出所选（音乐模式选中 clip=删除剪辑）/ 微调 0.1m（clip=微移 10ms）'],
+  ['Ctrl/Cmd+Z / +Shift+Z', '撤销 / 重做（最多 60 步）'],
+  ['1..9（Cmd/Safari 例外）', '选中 / 存为编组 N——Safari 被浏览器保留，用右面板「编组」页按钮'],
 ];
-// 数据与限制（诚实清单）
+// 数据与限制（诚实清单，压缩）
 const LIMITS = [
-  '数据存本浏览器：不跨设备、无云同步；换设备靠导出项目文件迁移。iOS Safari 普通网页数据 7 天不访问可能被系统清理——重要项目定期导出备份。',
-  '离线版配乐不持久：下载单文件版（file://）的音乐只在当前会话有效，重开需重选一次；「含音乐导出」可把音乐跟项目一起带走。',
-  'Safari 编组走选项卡：Cmd+1..9 被浏览器保留用于切标签页，事件不到页面——一律用右面板「编组」页的「选择」按钮。',
-  '断网能力需 HTTPS 托管：离线缓存只在 https（或 localhost）下生效；HTTP 在线入口断网打不开，赛场请提前备下载版。',
-  'BPM 需手动标定：应用不做自动节拍检测，「点拍 + 首拍试听」是唯一校准手段。',
-  '切帧预览 ≠ 时间轴：切队形帧时约 0.7 秒的过渡动画是纯界面效果，真正快慢由「过渡」拍数决定。',
-  '编组 ≠ 合并：编组是快速选择辅助（删组不删人）；合并单元是帧级呈示/操作单元。两者可叠加使用。',
+  '数据存本浏览器：不跨设备、无云同步；换设备靠「含音乐导出」迁移。iOS Safari 数据 7 天不访问可能被清理——定期导出备份。',
+  '离线单文件版配乐不持久：重开浏览器需重选一次；要音乐跟项目走，用含音乐导出。',
+  '断网能力需 HTTPS 托管：HTTP 在线入口断网打不开，赛场请提前备下载版。',
+  '切帧预览是纯界面动画（约 0.7s）：真正快慢由「过渡」时长（秒）决定。',
+  '编组 ≠ 合并：编组是快速选择辅助；合并单元是帧级呈示/操作单元，可叠加使用。',
 ];
 
 // ---------- 导出：内容骨架（node 可测） ----------
+// build-59-manual4：outline 每幕不再含 boards（正文瘦身）；板块数据经 manualBoardGroups()
+// 从 js/manual-boards.js 暴露（附录 A 口径：按幕分组，与幕序一致）。
 export function manualOutline() {
-  return SCENES.map(s => ({
-    id: s.id, title: s.title, role: s.role,
-    steps: s.steps.length,
-    figs: s.figs.map(f => f.key),
+  return ACTS.map(a => ({
+    id: a.id, no: a.no, title: a.title, story: a.story,
+    steps: a.steps.length,
+    figs: a.figs.map(f => f.key),
+    annots: a.figs.flatMap(f => f.annots),
+    more: a.more || '',
   }));
 }
+// 附录 A · 功能模块详解：18 板块按幕分组（3/5/4/4/2），fig 引用对应幕截图键。
+export function manualBoardGroups() {
+  return BOARD_GROUPS.map(g => ({
+    act: g.act, no: g.no, title: g.title,
+    boards: g.boards.map(b => ({
+      name: b.name, where: b.where, steps: [...b.steps], example: b.example,
+      ...(b.fig ? { fig: b.fig } : {}),
+    })),
+  }));
+}
+export function manualIntro() {
+  return { flow: INTRO.flow.length, flowTexts: [...INTRO.flow], fig: INTRO.fig.key, annots: [...INTRO.fig.annots] };
+}
 export function manualImageKeys() {
-  return [...new Set(SCENES.flatMap(s => s.figs.map(f => f.key)))].sort();
+  const keys = [INTRO.fig.key, ...ACTS.flatMap(a => a.figs.map(f => f.key))];
+  return [...new Set(keys)].sort();
 }
 
 // ---------- 渲染（需要 DOM） ----------
-function fig(key) {
-  const src = MANUAL_IMAGES[key];
+function fig(f) {
+  const src = MANUAL_IMAGES[f.key];
   if (!src) return null; // 资产缺失时静默跳过（不产生裂图）
-  // W3：去掉 loading:'lazy'——图为内嵌 data URI（零网络成本），lazy 会把深处的图推迟解码，
-  // 页尾图（音乐/导出）在文档 4000px+ 处可能长时间 naturalWidth=0（TC-P6-B3 实测回归）；立即解码。
+  // 图为内嵌 data URI（零网络成本）：立即解码，不用 lazy（页尾图 naturalWidth=0 回归，见 git 历史）。
   return h('figure', { class: 'man-fig' },
-    h('img', { src, alt: MANUAL_META.captions?.[key] || key }),
-    h('figcaption', {}, MANUAL_META.captions?.[key] || ''));
+    h('img', { src, alt: MANUAL_META.captions?.[f.key] || f.key }),
+    h('figcaption', {},
+      MANUAL_META.captions?.[f.key] || '',
+      f.annots?.length ? h('div', { class: 'man-annots' },
+        '标注：' + f.annots.map((t, i) => `${i + 1} ${t}`).join(' · ')) : null));
 }
-function stepsList(steps) {
-  return h('ol', { class: 'man-steps' },
-    ...steps.map(s => h('li', { html: s })));
+function stepsList(steps, cls = 'man-steps') {
+  return h('ol', { class: cls }, ...steps.map(s => h('li', { html: s })));
+}
+// build-59-manual4：附录 A——18 板块按幕分组，<details> 默认收起（点击展开）；卡片结构沿用
+// build-58（板块已不在幕内，fig 引用从「见本幕图 N」改为「见第 N 幕图 M」，图不重排不重拍）。
+function appendixBoards() {
+  const figNoOf = (actId, key) => {
+    const a = ACTS.find(x => x.id === actId);
+    const i = a ? a.figs.findIndex(f => f.key === key) : -1;
+    return i < 0 ? 0 : i + 1; // 幕内第几张（0 → 无引用）
+  };
+  return h('section', { class: 'man-scene', id: 'man-appendix-a' },
+    h('h3', {}, '附录 A · 功能模块详解（按幕分组，点开逐步说明）'),
+    ...BOARD_GROUPS.map(g => h('details', { class: 'man-boards' },
+      h('summary', {}, `第 ${g.no} 幕 · ${g.title} · ${g.boards.length} 个板块`),
+      ...g.boards.map(b => h('div', { class: 'man-board' },
+        h('div', { class: 'man-board-head' },
+          h('span', { class: 'man-board-name' }, b.name),
+          b.fig && figNoOf(g.act, b.fig) ? h('span', { class: 'man-board-figref' }, `→ 见第 ${g.no} 幕图 ${figNoOf(g.act, b.fig)}`) : null),
+        h('div', { class: 'man-board-where' }, b.where),
+        stepsList(b.steps, 'man-steps man-board-steps'),
+        h('p', { class: 'man-board-example' }, b.example))))));
 }
 export function renderManual({ build } = {}) {
   const ver = build || (typeof window !== 'undefined' && window.__MAIN_BUILD) || 'dev';
@@ -198,18 +215,28 @@ export function renderManual({ build } = {}) {
     h('header', { class: 'man-head' },
       h('div', { class: 'man-ver' }, `适用版本 ${ver} · 本页随应用构建自动更新`),
       h('p', { class: 'man-intro' },
-        '舞阵 WuZhen 是网页版队列舞编排工具：建档排队形 → 对齐音乐 → 现场演示 → 导出分发。数据自动保存在本设备浏览器；「导出 ▾」出项目文件即备份与迁移。下面按七种典型场景给出动线，配合截图可照着做。')),
+        '舞阵 WuZhen 是网页版队列舞编排工具。工作流一条线：音乐导入 → 音乐编辑 → 节奏划分 → 队形编排 → 导出。数据自动保存在本设备浏览器；下面按这条线分五幕，照着做即可。')),
   );
-  SCENES.forEach((s, i) => {
-    root.append(h('section', { class: 'man-scene', id: 'man-' + s.id },
-      h('h3', {}, `场景 ${i + 1} · ${s.title}`),
-      h('p', { class: 'man-role' }, s.role),
-      stepsList(s.steps),
-      s.figs.length ? h('div', { class: 'man-figs' }, ...s.figs.map(f => fig(f.key)).filter(Boolean)) : null));
+  // 开场：一分钟看懂（四步主流程 + 界面导览）
+  root.append(h('section', { class: 'man-scene', id: 'man-intro' },
+    h('h3', {}, '开场 · 一分钟看懂舞阵'),
+    stepsList(INTRO.flow, 'man-flow'),
+    h('div', { class: 'man-figs' }, fig(INTRO.fig))));
+  // 五幕（build-59-manual4 正文瘦身：纯 story+steps+截图+延伸，板块卡片不再幕内展开）
+  ACTS.forEach(a => {
+    root.append(h('section', { class: 'man-scene', id: 'man-' + a.id },
+      h('h3', {}, `第 ${a.no} 幕 · ${a.title}`),
+      h('p', { class: 'man-story' }, a.story),
+      stepsList(a.steps),
+      h('div', { class: 'man-figs' }, ...a.figs.map(f => fig(f)).filter(Boolean)),
+      a.more ? h('p', { class: 'man-more' }, a.more) : null));
   });
+  // 附录 A：功能模块详解（18 板块按幕分组，details 默认收起——板块详解后置，正文只留主线）
+  root.append(appendixBoards());
+  // 附录 B：速查（手势 / 快捷键）+ 数据与限制
   root.append(
-    h('section', { class: 'man-scene' },
-      h('h3', {}, '手势与快捷键速查'),
+    h('section', { class: 'man-scene', id: 'man-appendix-b' },
+      h('h3', {}, '附录 B · 手势与快捷键速查'),
       h('table', { class: 'man-table' },
         h('thead', {}, h('tr', {}, h('th', {}, '意图'), h('th', {}, '桌面'), h('th', {}, '触摸 / 笔'))),
         // 单元格走 html（内容为本文档自有文案，含内联 SVG 图标）

@@ -450,6 +450,60 @@ test('ClipTransport：rate 换算（源消耗=时长×rate）、muted 不调度�
   } finally { t.stopInternal(); }
 });
 
+// ---------- 滑动变速（varispeed · clip.rate 磁带式，slot 域恒定） ----------
+test('ClipTransport per-clip rate：组合乘 clip.rate×transport、源消耗=durTl×组合速率、缺省=1 零变化', () => {
+  const clips = [
+    mkClip({ id: 'v125', timelineStartSec: 0, srcStartSec: 1, lengthSec: 4, rate: 1.25 }),
+    mkClip({ id: 'vdef', timelineStartSec: 10, srcStartSec: 0, lengthSec: 4 }), // 无 rate 键（旧数据形态）
+  ];
+  const { ctx, t } = setupTransport(clips);
+  try {
+    t.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 30 }) });
+    assert.equal(ctx.sources.length, 1, '前瞻内只调度第一个 clip');
+    const s1 = ctx.sources[0];
+    assert.equal(s1.playbackRate.value, 1.25, 'playbackRate = clip.rate × transport.rate');
+    assert.equal(s1.started.off, 1, 'srcOffset=srcStart（skip=0）');
+    assert.ok(Math.abs(s1.started.dur - 5) < 1e-6, `源消耗 = durTl×clipRate×transportRate（4×1.25）：${s1.started.dur}`);
+    // 时间轴 slot 恒定：clip 结束域不变（4s）——gain 自动化仍按时间轴相对时刻（slot 域）
+    assert.equal(clipEnd(clips[0]), 4, 'slot 长度不受 rate 影响');
+    // 推进时钟 → 无 rate 键的 clip 照常调度（行为不变）
+    ctx.currentTime += 10.5;
+    t.tick();
+    assert.equal(ctx.sources.length, 2);
+    const s2 = ctx.sources[1];
+    assert.equal(s2.playbackRate.value, 1, '无 rate 键 → playbackRate 不写（缺省 1，逐字节旧行为）');
+    assert.equal(s2.started.off, 0.5, '中途入点：srcOffset = srcStart + skip×rate');
+    assert.ok(Math.abs(s2.started.dur - 3.5) < 1e-6, '源消耗 = 剩余 slot 时长×1');
+  } finally { t.stopInternal(); }
+  // 组合乘：clip 1.5 × transport 2 = 3
+  const clips2 = [mkClip({ id: 'vx', timelineStartSec: 0, srcStartSec: 0, lengthSec: 2, rate: 1.5 })];
+  const st2 = setupTransport(clips2);
+  try {
+    st2.t.play(clips2, { from: 0, rate: 2, resolveBuffer: () => ({ duration: 30 }) });
+    const sx = st2.ctx.sources[0];
+    assert.equal(sx.playbackRate.value, 3, '组合乘 clip1.5×transport2=3');
+    assert.ok(Math.abs(sx.started.dur - 6) < 1e-6, '源消耗 = 2×1.5×2=6');
+  } finally { st2.t.stopInternal(); }
+});
+
+test('ClipTransport per-clip rate：源提前耗尽=调度面不截断（WebAudio 自然停）+ 中途入点越源尾不调度（静音）', () => {
+  // 3s 源、rate 2、4s slot：起播调度 dur=8（>源余量）→ 真机 WebAudio 到源尾自然停止（slot 剩余静音）
+  const clips = [mkClip({ id: 'tape', timelineStartSec: 0, srcStartSec: 0, lengthSec: 4, rate: 2 })];
+  const a = setupTransport(clips);
+  try {
+    a.t.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 3 }) });
+    assert.equal(a.ctx.sources.length, 1);
+    assert.equal(a.ctx.sources[0].started.dur, 8, '调度面传 durTl×clipRate（不按源长截断，自然停止语义）');
+  } finally { a.t.stopInternal(); }
+  // 播放头从 slot 中途进入、源读取位已越源尾（skip=2 → 0+2×2=4 > 3s 源）→ 不调度（磁带放完）
+  const b = setupTransport(clips);
+  try {
+    b.ctx.currentTime += 2; // 从时间轴 2s 起播
+    b.t.play(clips, { from: 2, rate: 1, resolveBuffer: () => ({ duration: 3 }) });
+    assert.equal(b.ctx.sources.length, 0, '源耗尽段不调度 → slot 剩余=静音');
+  } finally { b.t.stopInternal(); }
+});
+
 // ---------- 9) Player clip 通道终态（ended=min(末 clip 终点, totalBeats)） ----------
 function makeClipAudioStub() {
   return {
@@ -475,7 +529,6 @@ function makeClipPlayer(project, audio) {
 }
 test('Player clip 通道：起播走 playClips；末 clip 终点 < totalBeats → _audioEnded 虚拟接管（#7 混合语义）', () => {
   const project = createProject({ pairs: 1 });
-  project.timeline.countInBeats = 0;
   project.audio.name = 'a.wav';
   project.audio.durationSec = 6;
   project.media = { assets: [{ id: 'a1', name: 'a.wav', durationSec: 6, size: 1 }], activeAssetId: 'a1' };
@@ -485,43 +538,41 @@ test('Player clip 通道：起播走 playClips；末 clip 终点 < totalBeats �
   p.play(0);
   assert.equal(p.playing, true);
   assert.deepEqual(audio.calls.playClips[0], { from: 0, rate: 1, n: 1 }, 'clip 调度通道起播');
-  audio._pos = 6; // 越过最后 clip 终点（6s < 时间轴 40 拍）
+  // build-51-stageux F1（用户指令改写）：stage 有音频资产 → clip/音频终点先到=播放整体终态
+  //（直达音乐尾、无虚拟接管）。原「_audioEnded 虚拟接管 + 续播至 totalBeats」断言随用户指令退役。
+  audio._pos = 6; // 越过最后 clip 终点（6s=音乐资产全长）
   p._tick();
-  assert.equal(p.playing, false);
-  assert.equal(p._audioEnded, true, '音频终态=末 clip 终点先到 → 虚拟接管标记');
+  assert.equal(p.playing, false, '音频终点=播放整体终点（两种模式一致）');
+  assert.equal(p._audioEnded, false, '无虚拟接管标记');
   assert.equal(Math.abs(p.beat - 12) < 1e-6, true, `播放头钳在末 clip 终点拍（6s@120bpm=12 拍）：${p.beat}`);
   const ended = events.states.find(s => s.ended);
   assert.ok(ended && ended.reason === 'audio');
-  // 续播：虚拟时钟接管到 totalBeats
-  p.play(null, { countIn: false });
-  assert.equal(p.playing, true);
-  assert.equal(audio.calls.playClips.length, 1, '接管后不再驱动 clip 通道');
-  for (let i = 0; i < 200 && p.playing; i++) { if (p._virtual) p._virtual.t0 -= 500; p._tick(); }
-  assert.equal(p.playing, false);
-  assert.equal(p.beat, 16, '虚拟时钟接管直至 totalBeats（单队形块=16 拍）');
   p.stop();
 });
-test('Player clip 通道：totalBeats 先到 → 统一终态（beat=totalBeats、ended 无 reason）；seek 走 seekClips', () => {
+test('Player clip 通道（stage+音频）：blocks 域不再终局——越 totalBeats 续走，音频终点才 ended；seek 走 seekClips', () => {
   const project = createProject({ pairs: 1 });
-  project.timeline.countInBeats = 0;
   project.audio.name = 'a.wav';
   project.media = { assets: [{ id: 'a1', name: 'a.wav', durationSec: 60, size: 1 }], activeAssetId: 'a1' };
   project.timeline.audioClips = [mkClip({ id: 'c1', assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 60 })];
   const audio = makeClipAudioStub();
   const { p, events } = makeClipPlayer(project, audio);
   p.play(0);
-  audio._pos = 20.5; // 41 拍 @120bpm > totalBeats 40（24 拍=12s…此处 totalBeats=24 拍=12s）
-  void audio._pos;
-  // 直接构造 beat 越过 totalBeats 的 tick（single formation: totalBeats=16 拍=8s）
+  // build-51-stageux F1（用户指令改写）：beat 越过 totalBeats（16 拍=8s）不再 ended——
+  // 播放直达音乐尾（60s 域），音频通道继续驱动
   audio._pos = 8.01;
   p._tick();
-  assert.equal(p.playing, false);
-  assert.equal(p.beat, p.segments().totalBeats, '时间轴先到 → 停在 totalBeats');
+  assert.equal(p.playing, true, '越 blocks 域继续走（用户指令：直达音乐尾）');
+  assert.equal(Math.abs(p.beat - 16.02) < 1e-6, true, `播放头跟音频秒位（8.01s=16.02 拍）：${p.beat}`);
+  // 音频将尽（进入 endSec−0.02 判定窗）→ _finish 音频终态：reason:audio、播放头钳音频末拍
+  audio._pos = 59.99;
+  p._tick();
+  assert.equal(p.playing, false, '音频终点=播放整体终点');
   const last = events.states.at(-1);
   assert.equal(last.ended, true);
-  assert.equal(last.reason, undefined, '时间轴自然终了无 reason');
+  assert.equal(last.reason, 'audio', '音频自然终了 reason:audio');
+  assert.equal(Math.abs(p.beat - 119.98) < 1e-6, true, `停在音频末拍（59.99s@120bpm=119.98 拍）：${p.beat}`);
   // seek 播放中 → seekClips 重调度
-  p.play(2, { countIn: false });
+  p.play(2);
   audio.calls.seekClips.length = 0;
   p.seekBeat(4);
   assert.deepEqual(audio.calls.seekClips, [2], 'seekBeat=4 拍 → 2s');
@@ -817,4 +868,116 @@ test('clipEdgeStepSec：前/后缘步进取严格近邻；恰在缘上跳过自�
   // 浮点噪声缘规约：8.100000000001 与 8.1 视为同缘（r6）
   const noisy = [{ timelineStartSec: 0, lengthSec: 8.1 }, { timelineStartSec: 8.100000000001, lengthSec: 2 }];
   assert.equal(clipEdgeStepSec(noisy, 8.1000000001, 64, 1), 10.1);
+});
+
+// ---------- 15) ClipTransport processed 消费（clip.speed/pitchSemi 变速变调 · 1:1 播放） ----------
+// 语义契约（clip-process.js · 并行交付）：needsProcess(clip)=speed≠1||semi≠0；processed buffer
+// 时长=源/speed（变速已烘焙）→ 1:1 消费（playbackRate 恒 1）、processed 域=源域÷speed
+//（入点=srcStartSec/speed）、slot 时长恒定；processed 比slot 短 → 截断调度，slot 剩余静音。
+test('ClipTransport processed：needsProcess+同步 buffer → 1:1 消费（playbackRate 恒 1、入点=srcStart/speed、processed 短于 slot 截断静音）', () => {
+  const pbuf1 = { duration: 1 };   // 1s processed（< slot 2s：磁带放完语义）
+  const pbuf4 = { duration: 4 };
+  const clips = [
+    mkClip({ id: 'pc1', assetId: 'a1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 2, speed: 2 }),
+    mkClip({ id: 'pc2', assetId: 'a2', timelineStartSec: 10, srcStartSec: 1, lengthSec: 2, speed: 2 }),
+    mkClip({ id: 'pc3', assetId: 'a3', timelineStartSec: 20, srcStartSec: 2, lengthSec: 2, pitchSemi: 3 }), // 仅变调
+  ];
+  const ctx = fakeCtx();
+  // processed=整资产 TSM 产物（同资产同参数共享一份）→ 桩按 assetId 供给，与传输侧缓存键口径一致
+  const t = new ClipTransport({ getContext: () => ctx, destination: () => ctx.destination,
+    resolveProcessed: c => ({ a1: pbuf1, a2: pbuf4, a3: pbuf4 }[c.assetId]) || null });
+  try {
+    t.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 30 }) });
+    assert.equal(ctx.sources.length, 1, '前瞻内只调度 pc1');
+    const s1 = ctx.sources[0];
+    assert.equal(s1.buffer, pbuf1, '用 processed buffer 播放（非 raw）');
+    assert.equal(s1.playbackRate.value, 1, 'playbackRate 恒 1（变速已烘焙，不再乘 speed）');
+    assert.equal(s1.started.off, 0, '入点=srcStart/speed=0');
+    assert.ok(Math.abs(s1.started.dur - 1) < 1e-6, `processed 1s < slot 2s → 截断调度 1s，slot 剩余静音：${s1.started.dur}`);
+    // 推进时钟 → pc2（10.5s 中途入点，skip=0.5）：非零源入点按 ÷speed 映射、skip 1:1 直映射
+    ctx.currentTime += 10.5;
+    t.tick();
+    const s2 = ctx.sources[1];
+    assert.equal(s2.buffer, pbuf4);
+    assert.equal(s2.started.off, 1, '入点 = srcStartSec/speed(0.5) + skip×1(0.5)');
+    assert.ok(Math.abs(s2.started.dur - 1.5) < 1e-6, 'processed 足量 → 剩余 slot 1:1（dur=1.5s）');
+    assert.equal(s2.playbackRate.value, 1);
+    // pc3（仅 pitchSemi、无 speed）：speed 缺省 1 → 入点=srcStart+skip（21s 入点 skip=1）
+    ctx.currentTime += 10.5;
+    t.tick();
+    const s3 = ctx.sources[2];
+    assert.equal(s3.started.off, 3, 'speed 缺省 1 → 入点=srcStart(2)+skip(1)');
+    assert.ok(Math.abs(s3.started.dur - 1) < 1e-6, '剩余 slot 1:1');
+    assert.equal(s3.playbackRate.value, 1);
+  } finally { t.stopInternal(); }
+});
+
+test('ClipTransport processed 缺失：resolveProcessed 返 null/构造未提供 → 既有 raw 路径原样（speed 不消费）', () => {
+  const clips = [mkClip({ id: 'rc1', timelineStartSec: 0, srcStartSec: 1, lengthSec: 2, speed: 2 })];
+  const ctx = fakeCtx();
+  let calls = 0;
+  const t = new ClipTransport({ getContext: () => ctx, destination: () => ctx.destination,
+    resolveProcessed: () => { calls++; return null; } });
+  try {
+    t.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 30 }) });
+    assert.ok(calls >= 1, 'provider 被询问');
+    const s = ctx.sources[0];
+    assert.equal(s.started.off, 1, 'raw 路径：off=srcStart');
+    assert.ok(Math.abs(s.started.dur - 2) < 1e-6, 'raw 路径：dur=slot（speed 不折叠，行为与无 processed 供给一致）');
+    assert.equal(s.playbackRate.value, 1);
+  } finally { t.stopInternal(); }
+  // 构造缺省（未传 resolveProcessed）同样 raw 原样（零变化承诺）
+  const t2 = new ClipTransport({ getContext: () => ctx, destination: () => ctx.destination });
+  try {
+    t2.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 30 }) });
+    const s2 = ctx.sources.at(-1);
+    assert.equal(s2.started.off, 1);
+    assert.equal(s2.started.dur, 2);
+    assert.equal(s2.playbackRate.value, 1);
+  } finally { t2.stopInternal(); }
+});
+
+test('ClipTransport processed 异步：Promise 未就绪先 raw@speed 应急起播，到位后 reschedule 一次换入（缓存防重复询问）', async () => {
+  const pbuf = { duration: 4 };
+  const clips = [mkClip({ id: 'ac1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 2, speed: 2 })];
+  const ctx = fakeCtx();
+  let calls = 0, fire = null;
+  const t = new ClipTransport({ getContext: () => ctx, destination: () => ctx.destination,
+    resolveProcessed: () => { calls++; return new Promise(r => { fire = r; }); } });
+  try {
+    t.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 30 }) });
+    assert.equal(calls, 1);
+    const gap = ctx.sources[0];
+    assert.notEqual(gap.buffer, pbuf, '应急路用 raw buffer');
+    assert.equal(gap.playbackRate.value, 2, '应急：raw 以 playbackRate=speed 磁带式先响（音高暂变，秒级切换）');
+    assert.ok(Math.abs(gap.started.dur - 4) < 1e-6, '应急源消耗=slot×speed=4');
+    assert.equal(gap.started.off, 0);
+    assert.ok(ctx.gains.length >= 2, '应急路增益链照常（静音/淡化作用于调度后节点，不变）');
+    // processed 到位 → 微任务内自动 reschedule 换入（_pendingProcessed 标记 + 缓存防循环）
+    fire(pbuf);
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(calls, 1, '缓存命中：provider 不被二次询问（无重复挂接/重调度循环）');
+    const ps = ctx.sources[1];
+    assert.equal(ps.buffer, pbuf, 'processed 到位后换入');
+    assert.equal(ps.playbackRate.value, 1, '换入后 playbackRate 恒 1');
+    assert.ok(Math.abs(ps.started.dur - 2) < 1e-6, '满槽 1:1（dur=slot 2s）');
+    assert.equal(ps.started.off, 0);
+    assert.ok(gap.stopped, '应急源已随重调度统一 stop()');
+  } finally { t.stopInternal(); }
+});
+
+test('ClipTransport 门控：无 speed/pitchSemi 的 clip 不询问 provider（raw 原样，行为零变化）', () => {
+  const clips = [mkClip({ id: 'gc1', timelineStartSec: 0, srcStartSec: 0, lengthSec: 2 })];
+  const ctx = fakeCtx();
+  let calls = 0;
+  const t = new ClipTransport({ getContext: () => ctx, destination: () => ctx.destination,
+    resolveProcessed: () => { calls++; return { duration: 5 }; } });
+  try {
+    t.play(clips, { from: 0, rate: 1, resolveBuffer: () => ({ duration: 30 }) });
+    assert.equal(calls, 0, 'needsProcess=false → provider 零询问');
+    const s = ctx.sources[0];
+    assert.equal(s.started.off, 0);
+    assert.equal(s.started.dur, 2);
+    assert.equal(s.playbackRate.value, 1);
+  } finally { t.stopInternal(); }
 });
